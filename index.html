@@ -82,7 +82,7 @@ const emptyPropInc = () => ({mieteinnahmen:0, airbnb:0, booking:0, sonstig:0});
 const emptyProp    = () => ({income:emptyPropInc(), expenses:[]});
 const emptyMonth   = () => ({
   props: {p1:emptyProp(), p2:emptyProp(), p3:emptyProp()},
-  unternehmen: {clients:[], items:mkItems(UNTER_EXP_DEF)},
+  unternehmen: {clients:[], items:[]},
   privat: {items:mkItems(PRIV_DEF)},
 });
 
@@ -465,6 +465,28 @@ function App({session}) {
     setNames(n=>({...n, cleanedDefaults:true}));
   },[ready]);
 
+  /* Einmalig: leere Standard-Vorlagenzeilen (Unternehmen) aus allen Monaten entfernen */
+  useEffect(()=>{
+    if(!ready || names.cleanedUnterDefaults) return;
+    const DEF = new Set(UNTER_EXP_DEF);
+    setData(prev=>{
+      const nd = JSON.parse(JSON.stringify(prev));
+      Object.keys(nd).forEach(y=>{
+        Object.keys(nd[y]||{}).forEach(m=>{
+          const md = nd[y][m];
+          if(md && md.unternehmen && Array.isArray(md.unternehmen.items)){
+            md.unternehmen.items = md.unternehmen.items.filter(it=>
+              !( DEF.has(it.name) && !num(it.amount) && !it.recurring
+                 && !(it.note && it.note.trim()) && !it.filePath && !it.fileData )
+            );
+          }
+        });
+      });
+      return nd;
+    });
+    setNames(n=>({...n, cleanedUnterDefaults:true}));
+  },[ready]);
+
   const getMD = (y,m) => data[y]?.[m] || emptyMonth();
   const upd = fn => setData(prev=>{const yd=prev[yr]||{};const md=yd[mo]||emptyMonth();return{...prev,[yr]:{...yd,[mo]:fn(md)}};});
   const updAll = fn => setData(prev=>{
@@ -714,7 +736,7 @@ function App({session}) {
     {id:'immo',   label:'Immobilien',   icon:P.house},
     {id:'unter',  label:names.unternehmen, icon:P.brief},
     {id:'privat', label:'Privat',       icon:P.prson},
-    {id:'kal',    label:'Belegung',     icon:P.bed},
+    {id:'kal',    label:'Termine',      icon:P.note},
     {id:'yr',     label:'Jahresübersicht', icon:P.cal},
     {id:'steuer', label:'Steuer',       icon:P.doc},
   ];
@@ -1166,110 +1188,48 @@ function App({session}) {
 
           {/* ══ BELEGUNG ══ */}
           {tab==='kal' && <>
-            <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:24,flexWrap:'wrap',gap:12}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20,flexWrap:'wrap',gap:12}}>
               <div>
-                <div style={{fontSize:26,fontWeight:700,letterSpacing:'-0.03em',marginBottom:3}}>Belegung</div>
-                <div style={{fontSize:13,color:C.sub}}>{MONTHS[mo]} {yr} · Ferienwohnung</div>
-                <div style={{fontSize:11,color:C.mut,marginTop:4,display:'flex',alignItems:'center',gap:5}}>
-                  <Ic p={P.repeat} sz={11} col={C.mut}/> Markt zuletzt gescannt: {fmtScan(scanMeta && scanMeta.last_scan)}
-                </div>
+                <div style={{fontSize:26,fontWeight:700,letterSpacing:'-0.03em',marginBottom:3}}>Termine {yr}</div>
+                <div style={{fontSize:13,color:C.sub}}>Mönchengladbach · Nachfrage-Treiber fürs ganze Jahr</div>
               </div>
-              <button onClick={()=>{loadBookings();loadEvents();loadScanMeta();}} style={BVm}>↻ Aktualisieren</button>
+              <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+                <span style={{fontSize:12,color:C.mut}}>Zuletzt gescannt: {fmtScan(scanMeta && scanMeta.last_scan)}</span>
+                <button onClick={()=>{loadEvents();loadScanMeta();setToast('Termine aktualisiert');}} style={BVm}>↻ Aktualisieren</button>
+              </div>
             </div>
 
-            {/* Kalendergitter */}
-            <div style={{...SC,marginBottom:14}}>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:6}}>
-                {['Mo','Di','Mi','Do','Fr','Sa','So'].map(d=>(
-                  <div key={d} style={{fontSize:11,fontWeight:600,color:C.mut,textAlign:'center',padding:'4px 0'}}>{d}</div>
-                ))}
-                {calCells.map((cell,i)=> cell==null
-                  ? <div key={'b'+i} />
-                  : (()=>{
-                      const st = dayStatus(cell);
-                      const evs = eventsForDay(cell);
-                      const hasEv = evs.length>0;
+            {/* Jahres-Überblick: Monate untereinander (notiz-mäßig) */}
+            <div style={SC}>
+              {MONTHS.map((mn,mi)=>{
+                const evs = events
+                  .filter(e=>{ const d=parseD(e.date); return d.getFullYear()===yr && d.getMonth()===mi; })
+                  .sort((a,b)=>parseD(a.date)-parseD(b.date));
+                return (
+                  <div key={mi} style={{padding:'14px 0',borderBottom: mi<11?'1px solid '+C.sep:'none'}}>
+                    <div style={{display:'flex',alignItems:'baseline',gap:10,marginBottom: evs.length?10:0}}>
+                      <span style={{fontSize:15,fontWeight:700,minWidth:96}}>{mn}</span>
+                      <span style={{fontSize:11,color:C.mut}}>{evs.length ? evs.length+(evs.length===1?' Termin':' Termine') : 'keine Termine'}</span>
+                    </div>
+                    {evs.map(e=>{
+                      const m=evMeta(e.category);
                       return (
-                        <div key={i}
-                          title={hasEv?evs.map(e=>evMeta(e.category).emoji+' '+e.title).join('\n'):undefined}
-                          style={{
-                            aspectRatio:'1 / 1',borderRadius:10,padding:'6px 7px',overflow:'hidden',
-                            background: st.occupied ? C.priL : (hasEv ? C.ambL : C.surf2),
-                            border:'1px solid '+(st.isToday?C.pri:(hasEv?'rgba(255,180,0,0.35)':'transparent')),
-                            display:'flex',flexDirection:'column',justifyContent:'space-between',
-                          }}>
-                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:2}}>
-                            <span style={{fontSize:12,fontWeight:st.occupied?700:500,color:st.occupied?C.pri:(hasEv?C.amb:C.sub)}}>{cell}</span>
-                            {hasEv && <span style={{fontSize:11,lineHeight:1}}>{evMeta(evs[0].category).emoji}</span>}
-                          </div>
-                          <div style={{display:'flex',gap:3,flexWrap:'wrap',alignItems:'center'}}>
-                            {st.channels.map((ch,j)=>(
-                              <span key={'c'+j} title={ch} style={{width:6,height:6,borderRadius:'50%',background:ch==='Booking'?'#3B82F6':C.red,display:'inline-block'}} />
-                            ))}
-                            {evs.slice(0,3).map((e,j)=>(
-                              <span key={'e'+j} style={{width:6,height:6,borderRadius:'50%',background:evMeta(e.category).col,display:'inline-block'}} />
-                            ))}
-                          </div>
+                        <div key={e.id} style={{display:'flex',alignItems:'center',gap:10,padding:'6px 0 6px 2px'}}>
+                          <span style={{fontSize:13,width:46,color:C.sub,...NUM,flexShrink:0}}>{fmtD(e.date)}</span>
+                          <span style={{fontSize:14,width:18,textAlign:'center',flexShrink:0}}>{m.emoji}</span>
+                          <span style={{flex:1,fontSize:14,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.title}</span>
+                          <span style={{fontSize:11,fontWeight:600,color:m.col,background:m.col+'22',borderRadius:6,padding:'2px 8px',flexShrink:0}}>{m.label}</span>
                         </div>
                       );
-                    })()
-                )}
-              </div>
-              <div style={{display:'flex',gap:16,marginTop:14,fontSize:11,color:C.sub,flexWrap:'wrap'}}>
-                <span style={{display:'flex',alignItems:'center',gap:5}}><span style={{width:8,height:8,borderRadius:'50%',background:C.red,display:'inline-block'}}/>Airbnb</span>
-                <span style={{display:'flex',alignItems:'center',gap:5}}><span style={{width:8,height:8,borderRadius:'50%',background:'#3B82F6',display:'inline-block'}}/>Booking</span>
-                <span style={{display:'flex',alignItems:'center',gap:5}}><span style={{width:11,height:11,borderRadius:3,background:C.priL,border:'1px solid '+C.bdr,display:'inline-block'}}/>belegt</span>
-                <span style={{display:'flex',alignItems:'center',gap:5}}><span style={{width:11,height:11,borderRadius:3,background:C.ambL,border:'1px solid rgba(255,180,0,0.35)',display:'inline-block'}}/>Termin/Event</span>
-              </div>
-            </div>
-
-            {/* Termine in Mönchengladbach */}
-            <div style={{...SC,marginBottom:14}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-                <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Termine in Mönchengladbach · {MONTHS[mo]} {yr}</div>
-                <span style={{fontSize:11,color:C.mut}}>Nachfrage-Treiber</span>
-              </div>
-              {monthEvents.length===0 ? (
-                <div style={{padding:'18px 0',textAlign:'center',color:C.mut,fontSize:13}}>Keine bekannten Termine in diesem Monat.</div>
-              ) : monthEvents.map(e=>{
-                const m=evMeta(e.category);
-                return (
-                  <div key={e.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:'1px solid '+C.sep}}>
-                    <span style={{fontSize:16,width:24,textAlign:'center',flexShrink:0}}>{m.emoji}</span>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:14,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.title}</div>
-                      <div style={{fontSize:12,color:C.sub}}>{fmtD(e.date)}{e.source?' · '+e.source:''}</div>
-                    </div>
-                    <span style={{fontSize:11,fontWeight:600,color:m.col,background:m.col+'22',borderRadius:6,padding:'3px 8px',flexShrink:0}}>{m.label}</span>
+                    })}
                   </div>
                 );
               })}
-            </div>
-
-            {/* Buchungsliste */}
-            <div style={SC}>
-              <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:12}}>Buchungen · {MONTHS[mo]} {yr}</div>
-              {monthBookings.length===0 ? (
-                <div style={{padding:'26px 0',textAlign:'center'}}>
-                  <div style={{color:C.sub,fontSize:14,marginBottom:6}}>Noch keine Buchungen für diesen Monat</div>
-                  <div style={{color:C.mut,fontSize:12,lineHeight:1.5}}>Sobald die automatische Synchronisierung eingerichtet ist,<br/>erscheinen deine Airbnb- und Booking-Aufenthalte hier automatisch.</div>
+              {events.filter(e=>parseD(e.date).getFullYear()===yr).length===0 && (
+                <div style={{padding:'14px 2px 0',color:C.mut,fontSize:12,lineHeight:1.6}}>
+                  Noch keine Termine gespeichert. Sobald der wöchentliche Scan läuft (oder du oben „Aktualisieren" drückst), erscheinen hier Fußball-Heimspiele, Konzerte und Feiertage für Mönchengladbach.
                 </div>
-              ) : monthBookings.map(b=>{
-                const nights=Math.max(1,Math.round((new Date(b.checkout)-new Date(b.checkin))/86400000));
-                return (
-                  <div key={b.id} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 0',borderBottom:'1px solid '+C.sep}}>
-                    <span style={{width:9,height:9,borderRadius:'50%',background:b.channel==='Booking'?'#3B82F6':C.red,flexShrink:0,display:'inline-block'}} />
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:14,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{b.guest_name||b.channel||'Buchung'}</div>
-                      <div style={{fontSize:12,color:C.sub}}>{fmtD(b.checkin)} → {fmtD(b.checkout)} · {nights} {nights===1?'Nacht':'Nächte'}</div>
-                    </div>
-                    <div style={{textAlign:'right',flexShrink:0}}>
-                      <div style={{fontSize:13,fontWeight:600,color:b.guests?C.pri:C.mut}}>{b.guests?b.guests+' Gäste':'—'}</div>
-                      <div style={{fontSize:11,color:C.mut}}>{b.channel||''}</div>
-                    </div>
-                  </div>
-                );
-              })}
+              )}
             </div>
           </>}
 
