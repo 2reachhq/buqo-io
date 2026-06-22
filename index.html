@@ -158,7 +158,7 @@ function KPI({label,val,color,sub}) {
 }
 
 /* ══ Item row ══ */
-function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, folderPath, onUploadFile, onOpenFile, onDeleteFile}) {
+function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, askConfirm}) {
   const [noteOpen, setNoteOpen] = useState(!!item.note);
   const fileRef = useRef();
   const hasNote = !!(item.note && item.note.trim());
@@ -198,10 +198,14 @@ function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLas
           }}><Ic p={P.down} sz={10}/></button>
         </div>
 
-        {/* Recurring badge */}
-        <span style={{width:16,fontSize:10,color:C.amb,flexShrink:0,textAlign:'center',lineHeight:1}}>
-          {item.recurring?'🔁':''}
-        </span>
+        {/* Recurring toggle */}
+        <button onClick={onToggleRecurring}
+          title={item.recurring?'Wird jeden Monat übernommen — klicken zum Ausschalten':'Nur dieser Monat — klicken, um jeden Monat zu übernehmen'}
+          style={{
+            width:24,height:26,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,
+            background:item.recurring?C.ambL:'transparent',opacity:item.recurring?1:0.32,
+            fontSize:11,lineHeight:1,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit',
+          }}>🔁</button>
 
         {/* Name */}
         <input
@@ -228,7 +232,10 @@ function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLas
           accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt" />
 
         {/* Delete */}
-        <button onClick={()=>onDelete(item.id)} title="Löschen" style={{
+        <button onClick={()=>{
+          const run=()=>{ if(item.filePath && onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id); };
+          askConfirm ? askConfirm('Zeile „'+(item.name||'ohne Bezeichnung')+'" wirklich löschen?'+(hasFile?' Die angehängte Datei wird ebenfalls aus dem Speicher entfernt.':''), run) : run();
+        }} title="Löschen" style={{
           background:'rgba(255,90,95,0.12)',border:'none',color:C.red,borderRadius:6,
           width:24,height:24,cursor:'pointer',fontSize:14,fontFamily:'inherit',
           flexShrink:0,lineHeight:'24px',textAlign:'center',display:'flex',alignItems:'center',justifyContent:'center',
@@ -263,7 +270,10 @@ function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLas
             <a href={item.fileData} download={item.fileName}
               style={{color:C.pri,fontSize:12,fontWeight:500}}>{item.fileName}</a>
           )}
-          <button onClick={()=>{ if(item.filePath && onDeleteFile) onDeleteFile(item.filePath); onUpdate(item.id,'__file__',{filePath:null,fileData:null,fileName:''}); }}
+          <button onClick={()=>{
+            const run=()=>{ if(item.filePath && onDeleteFile) onDeleteFile(item.filePath); onUpdate(item.id,'__file__',{filePath:null,fileData:null,fileName:''}); };
+            askConfirm ? askConfirm('Datei „'+item.fileName+'" wirklich entfernen? Sie wird auch aus dem Online-Speicher gelöscht.', run) : run();
+          }}
             style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:13,lineHeight:1}}>×</button>
         </div>
       )}
@@ -359,6 +369,8 @@ function App({session}) {
   const [saved,setSaved]= useState(true);
   const [toast,setToast]= useState('');
   const [bookings,setBookings]= useState([]);
+  const [confirmState,setConfirmState]= useState(null);
+  const askConfirm = (message, onConfirm, title) => setConfirmState({message, onConfirm, title: title||'Wirklich löschen?'});
   const savedRef  = useRef(true);
   const lastSigRef = useRef('');
 
@@ -435,23 +447,55 @@ function App({session}) {
   };
   const deleteFile = async (path) => { try{ await sb.storage.from('belege').remove([path]); }catch(e){} };
 
-  /* Property income */
-  const setPropInc=(pid,fld,val)=>upd(md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,income:{...p.income,[fld]:num(val)}}}};});
+  /* Property income (mit „jeden Monat"-Option) */
+  const setPropInc=(pid,fld,val)=>{
+    const recurring = !!(md.props?.[pid]?.income?.recur && md.props[pid].income.recur[fld]);
+    const fn=m=>{const p=m.props?.[pid]||emptyProp();return{...m,props:{...m.props,[pid]:{...p,income:{...p.income,[fld]:num(val)}}}};};
+    recurring?updAll(fn):upd(fn);
+  };
+  const toggleRecurIncome=(pid,fld)=>{
+    const inc=(md.props?.[pid]?.income)||{};
+    const on=!(inc.recur && inc.recur[fld]);
+    const val=num(inc[fld]);
+    updAll(m=>{
+      const p=m.props?.[pid]||emptyProp();
+      const recur={...(p.income?.recur||{}),[fld]:on};
+      const income={...p.income,recur};
+      if(on) income[fld]=val;
+      return{...m,props:{...m.props,[pid]:{...p,income}}};
+    });
+  };
 
   /* Property expenses */
-  const updPropExp=(pid,id,fld,val)=>upd(md=>{
-    const p=md.props?.[pid]||emptyProp();
-    const expenses=(p.expenses||[]).map(i=>{
-      if(i.id!==id)return i;
-      if(fld==='__file__')return{...i,...val};
-      return{...i,[fld]:fld==='amount'?num(val):val};
+  const updPropExp=(pid,id,fld,val)=>{
+    const cur=(md.props?.[pid]?.expenses||[]).find(i=>i.id===id);
+    const propagate = cur && cur.recurring && fld!=='__file__';
+    const fn=m=>{
+      const p=m.props?.[pid]||emptyProp();
+      const expenses=(p.expenses||[]).map(i=>{
+        if(i.id!==id)return i;
+        if(fld==='__file__')return{...i,...val};
+        return{...i,[fld]:fld==='amount'?num(val):val};
+      });
+      return{...m,props:{...m.props,[pid]:{...p,expenses}}};
+    };
+    propagate?updAll(fn):upd(fn);
+  };
+  const setRecurPropExp=(pid,item)=>{
+    const on=!item.recurring;
+    updAll(m=>{
+      const p=m.props?.[pid]||emptyProp();
+      const arr=[...(p.expenses||[])];
+      const idx=arr.findIndex(i=>i.id===item.id);
+      if(idx>=0) arr[idx]={...arr[idx],recurring:on};
+      else if(on) arr.push({...item,recurring:true,filePath:null,fileName:'',fileData:null});
+      return{...m,props:{...m.props,[pid]:{...p,expenses:arr}}};
     });
-    return{...md,props:{...md.props,[pid]:{...p,expenses}}};
-  });
+  };
   const delPropExp=(pid,id)=>upd(md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,expenses:(p.expenses||[]).filter(i=>i.id!==id)}}};});
   const addPropExp=(pid,name,amount,recur)=>{
-    const item={...newItem(name),amount:num(amount),recurring:recur};
-    const fn=md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,expenses:[...(p.expenses||[]),{...item,id:uid()}]}}};};
+    const item={...newItem(name),amount:num(amount),recurring:recur,id:uid()};
+    const fn=md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,expenses:[...(p.expenses||[]),{...item}]}}};};
     recur?updAll(fn):upd(fn);
   };
   const movePropExp=(pid,id,dir)=>upd(md=>{
@@ -468,19 +512,35 @@ function App({session}) {
   };
 
   /* Section items */
-  const updSec=(sec,sub,id,fld,val)=>upd(md=>{
-    const s=md[sec]||{};
-    return{...md,[sec]:{...s,[sub]:(s[sub]||[]).map(i=>{
-      if(i.id!==id)return i;
-      if(fld==='__file__')return{...i,...val};
-      return{...i,[fld]:fld==='amount'?num(val):val};
-    })}};
-  });
+  const updSec=(sec,sub,id,fld,val)=>{
+    const cur=(md[sec]?.[sub]||[]).find(i=>i.id===id);
+    const propagate = cur && cur.recurring && fld!=='__file__';
+    const fn=m=>{
+      const s=m[sec]||{};
+      return{...m,[sec]:{...s,[sub]:(s[sub]||[]).map(i=>{
+        if(i.id!==id)return i;
+        if(fld==='__file__')return{...i,...val};
+        return{...i,[fld]:fld==='amount'?num(val):val};
+      })}};
+    };
+    propagate?updAll(fn):upd(fn);
+  };
   const delSec=(sec,sub,id)=>upd(md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:(s[sub]||[]).filter(i=>i.id!==id)}};});
   const addSec=(sec,sub,name,amount,recur)=>{
-    const item={...newItem(name),amount:num(amount),recurring:recur};
-    const fn=md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:[...(s[sub]||[]),{...item,id:uid()}]}};};
+    const item={...newItem(name),amount:num(amount),recurring:recur,id:uid()};
+    const fn=md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:[...(s[sub]||[]),{...item}]}};};
     recur?updAll(fn):upd(fn);
+  };
+  const setRecurSec=(sec,sub,item)=>{
+    const on=!item.recurring;
+    updAll(m=>{
+      const s=m[sec]||{};
+      const arr=[...(s[sub]||[])];
+      const idx=arr.findIndex(i=>i.id===item.id);
+      if(idx>=0) arr[idx]={...arr[idx],recurring:on};
+      else if(on) arr.push({...item,recurring:true,filePath:null,fileName:'',fileData:null});
+      return{...m,[sec]:{...s,[sub]:arr}};
+    });
   };
   const moveSec=(sec,sub,id,dir)=>upd(md=>{
     const s=md[sec]||{};
@@ -603,7 +663,7 @@ function App({session}) {
   ];
 
   /* Reusable items renderer */
-  const renderItems = (items, updFn, delFn, moveFn, folderPath) =>
+  const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn) =>
     items.map((item,idx) => (
       <ItemRow key={item.id} item={item}
         onUpdate={updFn}
@@ -616,6 +676,8 @@ function App({session}) {
         onUploadFile={uploadFile}
         onOpenFile={openFile}
         onDeleteFile={deleteFile}
+        onToggleRecurring={()=>recurFn && recurFn(item)}
+        askConfirm={askConfirm}
       />
     ));
 
@@ -789,15 +851,23 @@ function App({session}) {
                     style={{background:'transparent',border:'none',padding:0,fontWeight:700,fontSize:17,color:C.txt,outline:'none',fontFamily:'inherit',flex:1,letterSpacing:'-0.02em'}} />
                 </div>
                 <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:12}}>Einnahmen</div>
-                {[['Mieteinnahmen','mieteinnahmen'],['Airbnb','airbnb'],['Booking','booking'],['Sonstige','sonstig']].map(([label,fld])=>(
-                  <div key={fld} style={{display:'flex',alignItems:'center',padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
+                {[['Mieteinnahmen','mieteinnahmen'],['Airbnb','airbnb'],['Booking','booking'],['Sonstige','sonstig']].map(([label,fld])=>{
+                  const rec = !!(pd.income?.recur && pd.income.recur[fld]);
+                  return (
+                  <div key={fld} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
                     <span style={{flex:1,fontSize:14,color:C.sub}}>{label}</span>
+                    <button onClick={()=>toggleRecurIncome(sp,fld)}
+                      title={rec?'Wird jeden Monat übernommen — klicken zum Ausschalten':'Nur dieser Monat — klicken, um jeden Monat zu übernehmen'}
+                      style={{width:24,height:24,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,
+                        background:rec?C.ambL:'transparent',opacity:rec?1:0.32,fontSize:11,lineHeight:1,
+                        display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}}>🔁</button>
                     <input type="number" min={0} value={pd.income?.[fld]||''} placeholder="0"
                       onChange={e=>setPropInc(sp,fld,e.target.value)}
-                      style={{...SI,width:100,...NUM}} />
+                      style={{...SI,width:96,...NUM}} />
                     <span style={{fontSize:12,color:C.mut,width:14}}>€</span>
                   </div>
-                ))}
+                  );
+                })}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:14}}>
                   <span style={{fontSize:12,color:C.sub}}>Gesamt</span>
                   <span style={{fontSize:22,fontWeight:700,color:C.grn,...NUM}}>{fmt(pc.netto)}</span>
@@ -813,7 +883,8 @@ function App({session}) {
                   (id,fld,val)=>updPropExp(sp,id,fld,val),
                   id=>delPropExp(sp,id),
                   (id,dir)=>movePropExp(sp,id,dir),
-                  ['Immobilien', names[sp]]
+                  ['Immobilien', names[sp]],
+                  item=>setRecurPropExp(sp,item)
                 )}
                 <AddForm onAdd={(n,a,r)=>addPropExp(sp,n,a,r)} />
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:14}}>
@@ -841,7 +912,8 @@ function App({session}) {
                   (id,fld,val)=>updSec('unternehmen','clients',id,fld,val),
                   id=>delSec('unternehmen','clients',id),
                   (id,dir)=>moveSec('unternehmen','clients',id,dir),
-                  ['Unternehmen','Kunden']
+                  ['Unternehmen','Kunden'],
+                  item=>setRecurSec('unternehmen','clients',item)
                 )}
                 <AddForm placeholder="Kundenname" onAdd={(n,a,r)=>addSec('unternehmen','clients',n,a,r)} />
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:14}}>
@@ -864,7 +936,8 @@ function App({session}) {
                   (id,fld,val)=>updSec('unternehmen','items',id,fld,val),
                   id=>delSec('unternehmen','items',id),
                   (id,dir)=>moveSec('unternehmen','items',id,dir),
-                  ['Unternehmen','Ausgaben']
+                  ['Unternehmen','Ausgaben'],
+                  item=>setRecurSec('unternehmen','items',item)
                 )}
                 <AddForm onAdd={(n,a,r)=>addSec('unternehmen','items',n,a,r)} />
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:14}}>
@@ -897,7 +970,8 @@ function App({session}) {
                 (id,fld,val)=>updSec('privat','items',id,fld,val),
                 id=>delSec('privat','items',id),
                 (id,dir)=>moveSec('privat','items',id,dir),
-                ['Privat']
+                ['Privat'],
+                item=>setRecurSec('privat','items',item)
               )}
               <AddForm onAdd={(n,a,r)=>addSec('privat','items',n,a,r)} />
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:16}}>
@@ -1109,6 +1183,19 @@ function App({session}) {
 
         </div>
       </div>
+
+      {confirmState && (
+        <div onClick={()=>setConfirmState(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'22px 24px',maxWidth:380,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>{confirmState.title}</div>
+            <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:22}}>{confirmState.message}</div>
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button onClick={()=>setConfirmState(null)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:10,padding:'8px 16px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+              <button onClick={()=>{ const a=confirmState.onConfirm; setConfirmState(null); if(a) a(); }} style={{background:C.red,border:'none',color:'#fff',borderRadius:10,padding:'8px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Löschen</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div style={{position:'fixed',bottom:20,right:20,maxWidth:340,zIndex:50,
