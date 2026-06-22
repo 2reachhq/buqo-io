@@ -11,7 +11,7 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
-    body { background: #000; overflow: hidden; }
+    body { background: #121212; overflow: hidden; }
     * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
     input[type=number]::-webkit-inner-spin-button,
     input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
@@ -23,10 +23,10 @@
     button:active:not(:disabled) { transform: scale(.97); }
     button:disabled { cursor: default; }
     a { text-decoration: none; }
-    select option { background: #1C1C1E; color: #fff; }
+    select option { background: #242424; color: #fff; }
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #3A3A3C; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb { background: #2E2E2E; border-radius: 3px; }
   </style>
 </head>
 <body>
@@ -50,14 +50,14 @@ const PRIV_PRESETS  = ['Kleidung','Urlaub','Sport & Fitness','Streaming & Abos',
 
 /* ══ Apple dark palette ══ */
 const C = {
-  bg:'#000000', surf:'#1C1C1E', surf2:'#2C2C2E', surf3:'#3A3A3C',
-  bdr:'rgba(255,255,255,0.07)', bdrM:'rgba(255,255,255,0.12)',
-  pri:'#0A84FF',  priL:'rgba(10,132,255,0.12)',
-  grn:'#30D158',  grnL:'rgba(48,209,88,0.09)',
-  red:'#FF453A',  redL:'rgba(255,69,58,0.09)',
-  amb:'#FF9F0A',  ambL:'rgba(255,159,10,0.10)',
-  txt:'#FFFFFF', sub:'rgba(235,235,245,0.60)', mut:'rgba(235,235,245,0.22)',
-  sep:'rgba(255,255,255,0.06)',
+  bg:'#121212', surf:'#1A1A1A', surf2:'#242424', surf3:'#2E2E2E',
+  bdr:'rgba(255,255,255,0.08)', bdrM:'rgba(255,255,255,0.14)',
+  pri:'#3ECF8E',  priL:'rgba(62,207,142,0.14)',  priTxt:'#06190F',
+  grn:'#3ECF8E',  grnL:'rgba(62,207,142,0.10)',
+  red:'#FF5A5F',  redL:'rgba(255,90,95,0.10)',
+  amb:'#FFB400',  ambL:'rgba(255,180,0,0.10)',
+  txt:'#FFFFFF', sub:'rgba(255,255,255,0.62)', mut:'rgba(255,255,255,0.40)',
+  sep:'rgba(255,255,255,0.07)',
 };
 
 /* ══ Helpers ══ */
@@ -115,7 +115,7 @@ const estESt = g => {
 const SI  = {background:C.surf3,border:'none',borderRadius:8,color:C.txt,padding:'6px 10px',fontSize:13,textAlign:'right',outline:'none',fontFamily:'inherit'};
 const SS  = {background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'7px 10px',fontSize:13,outline:'none',cursor:'pointer',fontFamily:'inherit',width:'100%'};
 const SHd = {background:C.surf2,border:'1px solid '+C.bdr,borderRadius:8,color:C.txt,padding:'6px 10px',fontSize:12,outline:'none',cursor:'pointer',fontFamily:'inherit'};
-const SC  = {background:C.surf,borderRadius:16,padding:20};
+const SC  = {background:C.surf,borderRadius:18,padding:20,border:'1px solid '+C.bdr};
 const BVm = {background:C.priL,border:'none',color:C.pri,borderRadius:8,padding:'5px 12px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'};
 const BPrs= {background:C.priL,border:'none',color:C.pri,borderRadius:7,padding:'4px 9px',fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit'};
 
@@ -228,7 +228,7 @@ function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLas
 
         {/* Delete */}
         <button onClick={()=>onDelete(item.id)} title="Löschen" style={{
-          background:'rgba(255,69,58,0.10)',border:'none',color:C.red,borderRadius:6,
+          background:'rgba(255,90,95,0.12)',border:'none',color:C.red,borderRadius:6,
           width:24,height:24,cursor:'pointer',fontSize:14,fontFamily:'inherit',
           flexShrink:0,lineHeight:'24px',textAlign:'center',display:'flex',alignItems:'center',justifyContent:'center',
         }}><Ic p={P.trash} sz={12} col={C.red}/></button>
@@ -296,8 +296,8 @@ function AddForm({onAdd, placeholder='Bezeichnung'}) {
           style={{...SI,width:78,...NUM}} />
         <span style={{fontSize:12,color:C.mut}}>€</span>
         <button onClick={commit} style={{
-          background:C.pri,color:'#fff',border:'none',borderRadius:8,
-          padding:'6px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
+          background:C.pri,color:C.priTxt,border:'none',borderRadius:10,
+          padding:'6px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit',
         }}>Hinzufügen</button>
         <button onClick={reset} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:18,lineHeight:1}}>×</button>
       </div>
@@ -337,7 +337,7 @@ function Login() {
         <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Passwort</label>
         <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required style={{...inp,marginBottom:err?10:18}} />
         {err && <div style={{fontSize:12,color:C.red,marginBottom:14}}>{err}</div>}
-        <button type="submit" disabled={busy} style={{width:'100%',background:C.pri,color:'#fff',border:'none',borderRadius:10,padding:'11px',fontSize:14,fontWeight:600,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.6:1}}>
+        <button type="submit" disabled={busy} style={{width:'100%',background:C.pri,color:C.priTxt,border:'none',borderRadius:12,padding:'12px',fontSize:14,fontWeight:700,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.6:1}}>
           {busy?'Wird eingeloggt…':'Einloggen'}
         </button>
       </form>
@@ -590,7 +590,7 @@ function App({session}) {
     return (
       <div style={{
         background:positive?C.grnL:C.redL,
-        border:'1px solid '+(positive?'rgba(48,209,88,0.22)':'rgba(255,69,58,0.22)'),
+        border:'1px solid '+(positive?'rgba(62,207,142,0.30)':'rgba(255,90,95,0.30)'),
         borderRadius:16,padding:'16px 22px',
         display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:14,
       }}>
@@ -624,7 +624,7 @@ function App({session}) {
               <button key={id} onClick={()=>setTab(id)} style={{
                 display:'flex',alignItems:'center',gap:7,
                 padding:'7px 12px',borderRadius:9,border:'none',
-                background:active?'rgba(10,132,255,0.14)':'transparent',
+                background:active?'rgba(62,207,142,0.16)':'transparent',
                 color:active?C.pri:C.sub,
                 fontFamily:'inherit',fontSize:13,fontWeight:active?600:500,
                 cursor:'pointer',whiteSpace:'nowrap',flexShrink:0,
@@ -741,8 +741,8 @@ function App({session}) {
             <div style={{display:'flex',gap:8,marginBottom:24,flexWrap:'wrap'}}>
               {PROPS.map(p=>(
                 <button key={p} onClick={()=>setSp(p)} style={{
-                  background:sp===p?'rgba(10,132,255,0.14)':C.surf,
-                  border:'1px solid '+(sp===p?'rgba(10,132,255,0.35)':'transparent'),
+                  background:sp===p?'rgba(62,207,142,0.16)':C.surf,
+                  border:'1px solid '+(sp===p?'rgba(62,207,142,0.45)':'transparent'),
                   color:sp===p?C.pri:C.sub,borderRadius:10,padding:'8px 22px',
                   fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
                 }}>{names[p]}</button>
@@ -891,7 +891,7 @@ function App({session}) {
                     const ur=s.unterInc-s.unterExp;const ok=s.totalInc>0||s.totalExp>0;
                     return (
                       <tr key={s.m} onClick={()=>{setMo(s.m);setTab('dash');}}
-                        style={{cursor:'pointer',background:s.m===mo?'rgba(10,132,255,0.09)':'transparent'}}>
+                        style={{cursor:'pointer',background:s.m===mo?'rgba(62,207,142,0.10)':'transparent'}}>
                         <td style={{padding:'10px',fontWeight:s.m===mo?600:400,color:s.m===mo?C.txt:C.sub}}>{MONTHS[s.m]}</td>
                         <td style={{padding:'10px',textAlign:'right',color:s.immoInc>0?C.grn:C.mut,...NUM}}>{s.immoInc>0?fmt(s.immoInc):'—'}</td>
                         <td style={{padding:'10px',textAlign:'right',color:s.immoExp>0?C.red:C.mut,...NUM}}>{s.immoExp>0?fmt(s.immoExp):'—'}</td>
@@ -921,9 +921,9 @@ function App({session}) {
             </div>
             <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
               {[
-                {label:'Jahreseinnahmen',val:fmt(yrTot.totalInc),col:C.grn,bg:C.grnL,bdr:'rgba(48,209,88,0.18)'},
-                {label:'Jahresausgaben', val:fmt(yrTot.totalExp),col:C.red,bg:C.redL,bdr:'rgba(255,69,58,0.18)'},
-                {label:'Jahresergebnis', val:(yrTot.net>=0?'+':'')+fmt(yrTot.net),col:yrTot.net>=0?C.grn:C.red,bg:yrTot.net>=0?C.grnL:C.redL,bdr:yrTot.net>=0?'rgba(48,209,88,0.18)':'rgba(255,69,58,0.18)'},
+                {label:'Jahreseinnahmen',val:fmt(yrTot.totalInc),col:C.grn,bg:C.grnL,bdr:'rgba(62,207,142,0.22)'},
+                {label:'Jahresausgaben', val:fmt(yrTot.totalExp),col:C.red,bg:C.redL,bdr:'rgba(255,90,95,0.22)'},
+                {label:'Jahresergebnis', val:(yrTot.net>=0?'+':'')+fmt(yrTot.net),col:yrTot.net>=0?C.grn:C.red,bg:yrTot.net>=0?C.grnL:C.redL,bdr:yrTot.net>=0?'rgba(62,207,142,0.22)':'rgba(255,90,95,0.22)'},
               ].map(({label,val,col,bg,bdr})=>(
                 <div key={label} style={{flex:1,minWidth:155,background:bg,border:'1px solid '+bdr,borderRadius:16,padding:'18px 22px'}}>
                   <div style={{fontSize:12,color:col,opacity:.8,marginBottom:8,fontWeight:500}}>{label}</div>
@@ -950,7 +950,7 @@ function App({session}) {
                 <div style={{fontSize:12,color:C.mut,marginBottom:10}}>Basis: Jahresgewinn {fmt(Math.max(0,yrTot.net))}</div>
                 <div style={{fontSize:26,fontWeight:700,color:C.txt,...NUM,marginBottom:8}}>{fmt(taxESt)}</div>
                 {taxESt>0 ? <div style={{fontSize:12,color:C.sub,marginBottom:10}}>Effektivsteuersatz {((taxESt/Math.max(1,yrTot.net))*100).toFixed(1)} %</div> : null}
-                <div style={{background:'rgba(255,159,10,0.08)',borderRadius:8,padding:'7px 10px',fontSize:11,color:C.amb}}>
+                <div style={{background:'rgba(255,180,0,0.10)',borderRadius:8,padding:'7px 10px',fontSize:11,color:C.amb}}>
                   Vorauszahlungen: Mrz · Jun · Sep · Dez
                 </div>
               </div>
@@ -966,7 +966,7 @@ function App({session}) {
                 </div>
               </div>
             </div>
-            <div style={{background:C.ambL,border:'1px solid rgba(255,159,10,0.18)',borderRadius:16,padding:'20px 24px',marginBottom:20}}>
+            <div style={{background:C.ambL,border:'1px solid rgba(255,180,0,0.22)',borderRadius:16,padding:'20px 24px',marginBottom:20}}>
               <div style={{fontSize:12,fontWeight:600,color:C.amb,marginBottom:14}}>Empfohlene Steuerrücklage</div>
               <div style={{display:'flex',gap:32,flexWrap:'wrap',alignItems:'flex-end'}}>
                 <div>
