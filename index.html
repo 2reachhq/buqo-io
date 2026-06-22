@@ -78,7 +78,7 @@ const safeName = s => {
 const stripBlobs = obj => JSON.parse(JSON.stringify(obj, (k,v)=> k==='fileData'? null : v));
 
 /* ══ Data factories ══ */
-const emptyPropInc = () => ({mieteinnahmen:0, sonstig:0});
+const emptyPropInc = () => ({mieteinnahmen:0, airbnb:0, booking:0, sonstig:0});
 const emptyProp    = () => ({income:emptyPropInc(), expenses:mkItems(PROP_EXP_DEF)});
 const emptyMonth   = () => ({
   props: {p1:emptyProp(), p2:emptyProp(), p3:emptyProp()},
@@ -89,7 +89,7 @@ const emptyMonth   = () => ({
 /* ══ Calculations ══ */
 const calcProp = prop => {
   const inc = prop?.income || emptyPropInc();
-  const netto = num(inc.mieteinnahmen)+num(inc.sonstig);
+  const netto = num(inc.mieteinnahmen)+num(inc.airbnb)+num(inc.booking)+num(inc.sonstig);
   const exp   = (prop?.expenses||[]).reduce((s,i)=>s+num(i.amount),0);
   return {netto,exp,gewinn:netto-exp};
 };
@@ -789,7 +789,7 @@ function App({session}) {
                     style={{background:'transparent',border:'none',padding:0,fontWeight:700,fontSize:17,color:C.txt,outline:'none',fontFamily:'inherit',flex:1,letterSpacing:'-0.02em'}} />
                 </div>
                 <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:12}}>Einnahmen</div>
-                {[['Mieteinnahmen','mieteinnahmen'],['Sonstige','sonstig']].map(([label,fld])=>(
+                {[['Mieteinnahmen','mieteinnahmen'],['Airbnb','airbnb'],['Booking','booking'],['Sonstige','sonstig']].map(([label,fld])=>(
                   <div key={fld} style={{display:'flex',alignItems:'center',padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
                     <span style={{flex:1,fontSize:14,color:C.sub}}>{label}</span>
                     <input type="number" min={0} value={pd.income?.[fld]||''} placeholder="0"
