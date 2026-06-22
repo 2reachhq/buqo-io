@@ -371,6 +371,7 @@ function App({session}) {
   const [toast,setToast]= useState('');
   const [bookings,setBookings]= useState([]);
   const [events,setEvents]= useState([]);
+  const [scanMeta,setScanMeta]= useState(null);
   const [confirmState,setConfirmState]= useState(null);
   const askConfirm = (message, onConfirm, title) => setConfirmState({message, onConfirm, title: title||'Wirklich löschen?'});
   const savedRef  = useRef(true);
@@ -430,6 +431,14 @@ function App({session}) {
   };
   useEffect(()=>{ if(ready) loadEvents(); },[ready]);
   useEffect(()=>{ if(ready && tab==='kal') loadEvents(); },[tab]);
+
+  /* Scan-Status laden (wann zuletzt gescannt) */
+  const loadScanMeta = async () => {
+    const {data:row}=await sb.from('scan_meta').select('last_scan,last_count').eq('id',1).single();
+    if(row) setScanMeta(row);
+  };
+  useEffect(()=>{ if(ready) loadScanMeta(); },[ready]);
+  useEffect(()=>{ if(ready && tab==='kal') loadScanMeta(); },[tab]);
 
   /* Einmalig: leere Standard-Vorlagenzeilen (Immobilien) aus allen Monaten entfernen */
   useEffect(()=>{
@@ -605,6 +614,7 @@ function App({session}) {
 
   /* Belegungskalender — abgeleitet */
   const fmtD = s => new Date(s).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'});
+  const fmtScan = ts => { if(!ts) return 'noch nie'; const d=new Date(ts); return d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'})+', '+d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})+' Uhr'; };
   const monthBookings = bookings.filter(b=>{
     const ci=new Date(b.checkin), co=new Date(b.checkout);
     return ci < new Date(yr,mo+1,1) && co > new Date(yr,mo,1);
@@ -1160,8 +1170,11 @@ function App({session}) {
               <div>
                 <div style={{fontSize:26,fontWeight:700,letterSpacing:'-0.03em',marginBottom:3}}>Belegung</div>
                 <div style={{fontSize:13,color:C.sub}}>{MONTHS[mo]} {yr} · Ferienwohnung</div>
+                <div style={{fontSize:11,color:C.mut,marginTop:4,display:'flex',alignItems:'center',gap:5}}>
+                  <Ic p={P.repeat} sz={11} col={C.mut}/> Markt zuletzt gescannt: {fmtScan(scanMeta && scanMeta.last_scan)}
+                </div>
               </div>
-              <button onClick={()=>{loadBookings();loadEvents();}} style={BVm}>↻ Aktualisieren</button>
+              <button onClick={()=>{loadBookings();loadEvents();loadScanMeta();}} style={BVm}>↻ Aktualisieren</button>
             </div>
 
             {/* Kalendergitter */}
