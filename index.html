@@ -439,6 +439,8 @@ function App({session}) {
   const [confirmState,setConfirmState]= useState(null);
   const [unterTab,setUnterTab]= useState('einnahmen');
   const [editClient,setEditClient]= useState(null);
+  const [storageInfo,setStorageInfo]= useState(null);
+  const [storageLoading,setStorageLoading]= useState(false);
   const askConfirm = (message, onConfirm, title) => setConfirmState({message, onConfirm, title: title||'Wirklich löschen?'});
   const savedRef  = useRef(true);
   const lastSigRef = useRef('');
@@ -505,6 +507,24 @@ function App({session}) {
   };
   useEffect(()=>{ if(ready) loadScanMeta(); },[ready]);
   useEffect(()=>{ if(ready && tab==='kal') loadScanMeta(); },[tab]);
+
+  /* Speicher-Nutzung berechnen (rekursiv über den Storage-Bucket) */
+  const sumStorage = async (prefix='') => {
+    let total=0, files=0;
+    const {data:rows,error}=await sb.storage.from('belege').list(prefix,{limit:1000});
+    if(error||!rows) return {total,files};
+    for(const it of rows){
+      if(it.id===null){ const sub=await sumStorage(prefix?prefix+'/'+it.name:it.name); total+=sub.total; files+=sub.files; }
+      else { total += (it.metadata && it.metadata.size) || 0; files+=1; }
+    }
+    return {total,files};
+  };
+  const loadStorage = async () => {
+    setStorageLoading(true);
+    try { setStorageInfo(await sumStorage('')); } catch(e){}
+    setStorageLoading(false);
+  };
+  useEffect(()=>{ if(ready && tab==='dash' && !storageInfo && !storageLoading) loadStorage(); },[ready,tab]);
 
   /* Einmalig: leere Standard-Vorlagenzeilen (Immobilien) aus allen Monaten entfernen */
   useEffect(()=>{
@@ -976,6 +996,25 @@ function App({session}) {
                   </div>
                 </div>
               </div>
+            </div>
+
+            {/* Online-Speicher */}
+            <div style={{...SC,marginTop:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Online-Speicher · Belege & Verträge</div>
+                <button onClick={loadStorage} title="Neu berechnen" style={BVm}>↻</button>
+              </div>
+              {storageInfo ? (()=>{
+                const mb=storageInfo.total/1048576, limit=1024, pct=Math.min(100,mb/limit*100);
+                return (<>
+                  <div style={{height:8,background:C.surf3,borderRadius:99,overflow:'hidden',marginBottom:8}}>
+                    <div style={{height:'100%',width:pct+'%',background:pct>85?C.red:C.pri,borderRadius:99,transition:'width .3s'}} />
+                  </div>
+                  <div style={{fontSize:12,color:C.sub}}>{mb.toFixed(mb<10?2:1)} MB von 1.024 MB belegt · {storageInfo.files} {storageInfo.files===1?'Datei':'Dateien'}</div>
+                </>);
+              })() : (
+                <div style={{fontSize:12,color:C.mut}}>{storageLoading?'Wird berechnet…':'—'}</div>
+              )}
             </div>
           </>}
 
