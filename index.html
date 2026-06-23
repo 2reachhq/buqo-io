@@ -65,6 +65,13 @@ const FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue'
 const NUM  = {fontVariantNumeric:'tabular-nums', letterSpacing:'-0.02em'};
 const fmt  = v => new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v||0);
 const num  = v => parseFloat(v)||0;
+const evalAmount = s => {
+  if(s===''||s==null) return 0;
+  if(typeof s==='number') return isFinite(s)?s:0;
+  const cleaned = String(s).replace(/,/g,'.').replace(/[^0-9+\-*/().]/g,'');
+  if(!cleaned) return 0;
+  try { const r = Function('"use strict"; return ('+cleaned+')')(); return (typeof r==='number'&&isFinite(r)) ? Math.round(r*100)/100 : NaN; } catch(e) { return NaN; }
+};
 const uid  = () => Math.random().toString(36).slice(2,9);
 const newItem = (name='') => ({id:uid(), name, amount:0, recurring:false, note:'', filePath:null, fileName:'', fileData:null});
 const mkItems  = names => names.map(n=>newItem(n));
@@ -215,13 +222,8 @@ function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLas
           style={{...SI,flex:1,width:'auto',textAlign:'left',fontSize:14}}
         />
 
-        {/* Amount */}
-        <input
-          type="number" min={0}
-          value={item.amount||''} placeholder="0"
-          onChange={e=>onUpdate(item.id,'amount',e.target.value)}
-          style={{...SI,width:80,...NUM}}
-        />
+        {/* Amount (Excel-artig rechenbar, z. B. 100+50) */}
+        <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...SI,width:80,...NUM}} />
         <span style={{fontSize:12,color:C.mut,width:14,flexShrink:0}}>€</span>
 
         {onEditDetails ? (
@@ -293,7 +295,7 @@ function AddForm({onAdd, placeholder='Bezeichnung'}) {
   const [amount,setAmount]=useState('');
   const [recur,setRecur]=useState(false);
   const reset=()=>{setOpen(false);setName('');setAmount('');setRecur(false);};
-  const commit=()=>{if(name||amount){onAdd(name,amount,recur);reset();}};
+  const commit=()=>{if(name||amount){onAdd(name,evalAmount(amount),recur);reset();}};
   if(!open) return (
     <button onClick={()=>setOpen(true)} style={{
       background:'none',border:'1px dashed '+C.surf3,color:C.mut,
@@ -307,7 +309,7 @@ function AddForm({onAdd, placeholder='Bezeichnung'}) {
         <input autoFocus value={name} onChange={e=>setName(e.target.value)}
           placeholder={placeholder+'…'} onKeyDown={e=>e.key==='Enter'&&commit()}
           style={{...SI,flex:1,minWidth:100,textAlign:'left',fontSize:14}} />
-        <input type="number" min={0} value={amount} onChange={e=>setAmount(e.target.value)}
+        <input type="text" inputMode="text" value={amount} onChange={e=>setAmount(e.target.value)}
           placeholder="0" onKeyDown={e=>e.key==='Enter'&&commit()}
           style={{...SI,width:78,...NUM}} />
         <span style={{fontSize:12,color:C.mut}}>€</span>
@@ -323,6 +325,21 @@ function AddForm({onAdd, placeholder='Bezeichnung'}) {
         padding:'5px 11px',fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit',
       }}>{recur?'🔁 Für alle Monate dieses Jahres':'📅 Nur dieser Monat'}</button>
     </div>
+  );
+}
+
+/* ══ Rechen-Feld (Excel-artig: 100+50 → 150) ══ */
+function CalcField({value, onCommit, style, placeholder='0'}) {
+  const [raw,setRaw]=useState(null);
+  const editing = raw!==null;
+  const shown = editing ? raw : (value ? String(value) : '');
+  return (
+    <input type="text" inputMode="text" value={shown} placeholder={placeholder}
+      onFocus={()=>setRaw(value?String(value):'')}
+      onChange={e=>setRaw(e.target.value)}
+      onBlur={()=>{ const r=evalAmount(raw); setRaw(null); if(!isNaN(r)) onCommit(r); }}
+      onKeyDown={e=>{ if(e.key==='Enter') e.currentTarget.blur(); }}
+      style={style} />
   );
 }
 
@@ -1047,9 +1064,7 @@ function App({session}) {
                       style={{width:24,height:24,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,
                         background:rec?C.ambL:'transparent',
                         display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.repeat} sz={12} col={rec?C.amb:C.mut}/></button>
-                    <input type="number" min={0} value={pd.income?.[fld]||''} placeholder="0"
-                      onChange={e=>setPropInc(sp,fld,e.target.value)}
-                      style={{...SI,width:96,...NUM}} />
+                    <CalcField value={pd.income?.[fld]} onCommit={v=>setPropInc(sp,fld,v)} style={{...SI,width:96,...NUM}} />
                     <span style={{fontSize:12,color:C.mut,width:14}}>€</span>
                   </div>
                   );
