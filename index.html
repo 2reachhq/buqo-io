@@ -99,19 +99,27 @@ const incomeVal = (inc, fld) => {
   if(Array.isArray(d) && d.length) return d.reduce((s,i)=>s+num(i.amount),0);
   return num(inc && inc[fld]);
 };
-const calcProp = prop => {
+/* Zeile gilt nur bis "until" (Monat/Jahr); ab dem Folgemonat wird sie nicht mehr gezählt */
+const activeInMonth = (it, y, m) => {
+  const u = it && it.until;
+  if(!u || u.y==null || u.m==null) return true;
+  if(y==null || m==null) return true;
+  return (y < u.y) || (y===u.y && m <= u.m);
+};
+const sumItems = (arr, y, m) => (arr||[]).filter(i=>activeInMonth(i,y,m)).reduce((s,i)=>s+num(i.amount),0);
+const calcProp = (prop, y, m) => {
   const inc = prop?.income || emptyPropInc();
   const netto = incomeVal(inc,'mieteinnahmen')+incomeVal(inc,'airbnb')+incomeVal(inc,'booking')+incomeVal(inc,'sonstig');
-  const exp   = (prop?.expenses||[]).reduce((s,i)=>s+num(i.amount),0);
+  const exp   = sumItems(prop?.expenses, y, m);
   return {netto,exp,gewinn:netto-exp};
 };
-const calcTotals = md => {
+const calcTotals = (md, y, m) => {
   if(!md) return {immoInc:0,immoExp:0,unterInc:0,unterExp:0,privatExp:0,totalInc:0,totalExp:0,net:0};
   let immoInc=0, immoExp=0;
-  PROPS.forEach(p=>{const r=calcProp(md.props?.[p]);immoInc+=r.netto;immoExp+=r.exp;});
-  const unterInc  = (md.unternehmen?.clients||[]).reduce((s,c)=>s+num(c.amount),0);
-  const unterExp  = (md.unternehmen?.items||[]).reduce((s,i)=>s+num(i.amount),0);
-  const privatExp = (md.privat?.items||[]).reduce((s,i)=>s+num(i.amount),0);
+  PROPS.forEach(p=>{const r=calcProp(md.props?.[p], y, m);immoInc+=r.netto;immoExp+=r.exp;});
+  const unterInc  = sumItems(md.unternehmen?.clients, y, m);
+  const unterExp  = sumItems(md.unternehmen?.items, y, m);
+  const privatExp = sumItems(md.privat?.items, y, m);
   const totalInc=immoInc+unterInc, totalExp=immoExp+unterExp+privatExp;
   return {immoInc,immoExp,unterInc,unterExp,privatExp,totalInc,totalExp,net:totalInc-totalExp};
 };
@@ -170,123 +178,108 @@ function KPI({label,val,color,sub}) {
   );
 }
 
-/* ══ Item row ══ */
+/* ══ Item row (aufgeräumt: Name + Betrag + ⋮-Menü) ══ */
 function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, askConfirm, onEditDetails}) {
-  const [noteOpen, setNoteOpen] = useState(!!item.note);
-  const fileRef = useRef();
-  const hasNote = !!(item.note && item.note.trim());
-  const hasFile = !!(item.filePath || item.fileData);
+  const [menuOpen,setMenuOpen]=useState(false);
+  const fileRef=useRef();
+  const hasNote=!!(item.note&&item.note.trim());
+  const hasFile=!!(item.filePath||item.fileData);
+  const hasUntil=!!(item.until&&item.until.y!=null);
+  const thisYear=new Date().getFullYear();
+  const years=[]; for(let y=thisYear-1;y<=thisYear+6;y++) years.push(y);
 
-  const handleFile = e => {
-    const f = e.target.files[0];
-    if(!f) return;
-    if(f.size > 10*1024*1024) { alert('Max. 10 MB pro Datei.'); return; }
-    if(onUploadFile && folderPath) onUploadFile(f, folderPath, filePath => onUpdate(item.id,'__file__',{filePath, fileName:f.name, fileData:null}));
+  const handleFile=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    if(f.size>10*1024*1024){ alert('Max. 10 MB pro Datei.'); return; }
+    if(onUploadFile&&folderPath) onUploadFile(f, folderPath, filePath=>onUpdate(item.id,'__file__',{filePath,fileName:f.name,fileData:null}));
     e.target.value='';
   };
-
-  const iconBtn = (active,icon,title,onClick) => (
-    <button onClick={onClick} title={title} style={{
-      background:active?C.priL:'none',border:'none',borderRadius:6,
-      color:active?C.pri:C.mut,padding:'4px',cursor:'pointer',
-      display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,
-    }}><Ic p={icon} sz={13}/></button>
-  );
+  const badge=(icon,col,title)=>(<span title={title} style={{display:'flex',alignItems:'center'}}><Ic p={icon} sz={11} col={col}/></span>);
+  const menuBtn={display:'flex',alignItems:'center',gap:8,width:'100%',background:C.surf2,border:'none',borderRadius:10,padding:'10px 12px',fontSize:13,color:C.txt,cursor:'pointer',fontFamily:'inherit',marginTop:8,textAlign:'left'};
 
   return (
     <div style={{borderBottom:'1px solid '+C.sep}}>
-      <div style={{display:'flex',gap:5,alignItems:'center',padding:'8px 0',minHeight:42}}>
-
-        {/* Move up/down */}
-        <div style={{display:'flex',flexDirection:'column',gap:1,flexShrink:0}}>
-          <button onClick={onMoveUp} disabled={isFirst} title="Nach oben" style={{
-            background:'none',border:'none',color:isFirst?C.sep:C.mut,
-            cursor:isFirst?'default':'pointer',padding:'2px 3px',borderRadius:3,
-            display:'flex',alignItems:'center',
-          }}><Ic p={P.up} sz={10}/></button>
-          <button onClick={onMoveDown} disabled={isLast} title="Nach unten" style={{
-            background:'none',border:'none',color:isLast?C.sep:C.mut,
-            cursor:isLast?'default':'pointer',padding:'2px 3px',borderRadius:3,
-            display:'flex',alignItems:'center',
-          }}><Ic p={P.down} sz={10}/></button>
-        </div>
-
-        {/* Recurring toggle */}
-        <button onClick={onToggleRecurring}
-          title={item.recurring?'Wird jeden Monat übernommen — klicken zum Ausschalten':'Nur dieser Monat — klicken, um jeden Monat zu übernehmen'}
-          style={{
-            width:24,height:26,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,
-            background:item.recurring?C.ambL:'transparent',
-            display:'flex',alignItems:'center',justifyContent:'center',
-          }}><Ic p={P.repeat} sz={13} col={item.recurring?C.amb:C.mut}/></button>
-
-        {/* Name */}
-        <input
-          value={item.name} placeholder="Bezeichnung…"
-          onChange={e=>onUpdate(item.id,'name',e.target.value)}
-          style={{...SI,flex:1,width:'auto',textAlign:'left',fontSize:14}}
-        />
-
-        {/* Amount (Excel-artig rechenbar, z. B. 100+50) */}
-        <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...SI,width:80,...NUM}} />
-        <span style={{fontSize:12,color:C.mut,width:14,flexShrink:0}}>€</span>
-
-        {onEditDetails ? (
-          /* Kunden: „Bearbeiten / Details"-Knopf statt Notiz + Datei */
-          iconBtn(false, P.note, 'Bearbeiten / Details', ()=>onEditDetails(item.id))
-        ) : (<>
-          {/* Note toggle */}
-          {iconBtn(noteOpen||hasNote, P.note, 'Notiz', ()=>setNoteOpen(o=>!o))}
-          {/* File attach */}
-          {iconBtn(hasFile, P.clip, hasFile?item.fileName:'Datei anhängen', ()=>fileRef.current.click())}
-          <input type="file" ref={fileRef} onChange={handleFile} style={{display:'none'}}
-            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt" />
-        </>)}
-
-        {/* Delete */}
-        <button onClick={()=>{
-          const run=()=>{ if(item.filePath && onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id); };
-          askConfirm ? askConfirm('Zeile „'+(item.name||'ohne Bezeichnung')+'" wirklich löschen?'+(hasFile?' Die angehängte Datei wird ebenfalls aus dem Speicher entfernt.':''), run) : run();
-        }} title="Löschen" style={{
-          background:'rgba(255,90,95,0.12)',border:'none',color:C.red,borderRadius:6,
-          width:24,height:24,cursor:'pointer',fontSize:14,fontFamily:'inherit',
-          flexShrink:0,lineHeight:'24px',textAlign:'center',display:'flex',alignItems:'center',justifyContent:'center',
-        }}><Ic p={P.trash} sz={12} col={C.red}/></button>
+      <div style={{display:'flex',gap:8,alignItems:'center',padding:'9px 0',minHeight:42}}>
+        <input value={item.name} placeholder="Bezeichnung…" onChange={e=>onUpdate(item.id,'name',e.target.value)}
+          style={{...SI,flex:1,width:'auto',textAlign:'left',fontSize:14}} />
+        <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...SI,width:84,...NUM}} />
+        <span style={{fontSize:12,color:C.mut,width:12,flexShrink:0}}>€</span>
+        {(item.recurring||hasNote||hasFile||hasUntil) && (
+          <div style={{display:'flex',gap:4,alignItems:'center',flexShrink:0}}>
+            {item.recurring && badge(P.repeat,C.amb,'Jeden Monat')}
+            {hasUntil && badge(P.cal,C.sub,'Gültig bis '+MONTHS[item.until.m]+' '+item.until.y)}
+            {hasNote && badge(P.note,C.mut,'Notiz')}
+            {hasFile && badge(P.clip,C.mut,'Datei')}
+          </div>
+        )}
+        <button onClick={()=>setMenuOpen(true)} title="Optionen" style={{
+          background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,
+          width:26,height:26,borderRadius:6,fontSize:18,lineHeight:1,fontFamily:'inherit',
+          display:'flex',alignItems:'center',justifyContent:'center',
+        }}>⋮</button>
+        <input type="file" ref={fileRef} onChange={handleFile} style={{display:'none'}} accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt" />
       </div>
 
-      {/* Note field */}
-      {!onEditDetails && noteOpen && (
-        <div style={{paddingBottom:8,paddingLeft:30}}>
-          <textarea
-            value={item.note||''}
-            onChange={e=>onUpdate(item.id,'note',e.target.value)}
-            placeholder="Notiz hinzufügen…"
-            rows={2}
-            style={{
-              width:'100%',background:C.surf2,border:'none',borderRadius:8,
-              color:C.sub,padding:'8px 10px',fontSize:12,
-              outline:'none',fontFamily:'inherit',
-            }}
-          />
-        </div>
-      )}
+      {menuOpen && (
+        <div onClick={()=>setMenuOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'20px 22px',maxWidth:400,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{fontSize:16,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.name||'Zeile'}</div>
+              <button onClick={()=>setMenuOpen(false)} title="Schließen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:22,lineHeight:1,padding:'0 2px'}}>×</button>
+            </div>
 
-      {/* File attachment display */}
-      {!onEditDetails && hasFile && (
-        <div style={{paddingBottom:8,paddingLeft:30,display:'flex',alignItems:'center',gap:8}}>
-          <Ic p={P.clip} sz={12} col={C.pri}/>
-          {item.filePath ? (
-            <button onClick={()=>onOpenFile && onOpenFile(item.filePath, item.fileName)}
-              style={{background:'none',border:'none',color:C.pri,fontSize:12,fontWeight:500,cursor:'pointer',fontFamily:'inherit',padding:0}}>{item.fileName}</button>
-          ) : (
-            <a href={item.fileData} download={item.fileName}
-              style={{color:C.pri,fontSize:12,fontWeight:500}}>{item.fileName}</a>
-          )}
-          <button onClick={()=>{
-            const run=()=>{ if(item.filePath && onDeleteFile) onDeleteFile(item.filePath); onUpdate(item.id,'__file__',{filePath:null,fileData:null,fileName:''}); };
-            askConfirm ? askConfirm('Datei „'+item.fileName+'" wirklich entfernen? Sie wird auch aus dem Online-Speicher gelöscht.', run) : run();
-          }}
-            style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:13,lineHeight:1}}>×</button>
+            {onEditDetails && (
+              <button onClick={()=>{setMenuOpen(false); onEditDetails(item.id);}} style={{...menuBtn,background:C.priL,color:C.pri,fontWeight:600}}>
+                <Ic p={P.brief} sz={15} col={C.pri}/> <span>Kundendetails (Vertrag, Kontakt)…</span>
+              </button>
+            )}
+
+            <button onClick={()=>onToggleRecurring&&onToggleRecurring()} style={{...menuBtn,background:item.recurring?C.ambL:C.surf2,color:item.recurring?C.amb:C.txt}}>
+              <Ic p={P.repeat} sz={15} col={item.recurring?C.amb:C.sub}/> <span>{item.recurring?'Jeden Monat (aktiv) — klicken zum Ausschalten':'Für jeden Monat übernehmen'}</span>
+            </button>
+
+            <div style={{background:C.surf2,borderRadius:10,padding:'10px 12px',marginTop:8}}>
+              <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:13}}>
+                <input type="checkbox" checked={hasUntil} onChange={e=>{ if(e.target.checked){const d=new Date();onUpdate(item.id,'until',{y:d.getFullYear(),m:d.getMonth()});} else onUpdate(item.id,'until',null); }} />
+                <Ic p={P.cal} sz={14} col={C.sub}/> Nur bis bestimmtem Monat berechnen
+              </label>
+              {hasUntil && (
+                <div style={{display:'flex',gap:8,marginTop:10}}>
+                  <select value={item.until.m} onChange={e=>onUpdate(item.id,'until',{...item.until,m:+e.target.value})} style={{...SHd,flex:1}}>
+                    {MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
+                  </select>
+                  <select value={item.until.y} onChange={e=>onUpdate(item.id,'until',{...item.until,y:+e.target.value})} style={{...SHd,width:92}}>
+                    {years.map(y=><option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div style={{fontSize:12,fontWeight:600,color:C.sub,margin:'14px 0 6px',display:'flex',alignItems:'center',gap:6}}><Ic p={P.note} sz={13} col={C.sub}/> Notiz</div>
+            <textarea value={item.note||''} onChange={e=>onUpdate(item.id,'note',e.target.value)} placeholder="Notiz…" rows={2}
+              style={{width:'100%',background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',resize:'vertical'}} />
+
+            <div style={{fontSize:12,fontWeight:600,color:C.sub,margin:'14px 0 6px',display:'flex',alignItems:'center',gap:6}}><Ic p={P.clip} sz={13} col={C.sub}/> Datei</div>
+            {hasFile ? (
+              <div style={{display:'flex',alignItems:'center',gap:8,background:C.surf2,borderRadius:8,padding:'8px 10px'}}>
+                {item.filePath ? <button onClick={()=>onOpenFile&&onOpenFile(item.filePath,item.fileName)} style={{background:'none',border:'none',color:C.pri,fontSize:13,cursor:'pointer',fontFamily:'inherit',padding:0,flex:1,textAlign:'left',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.fileName}</button>
+                  : <a href={item.fileData} download={item.fileName} style={{color:C.pri,fontSize:13,flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.fileName}</a>}
+                <button onClick={()=>{ const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onUpdate(item.id,'__file__',{filePath:null,fileData:null,fileName:''}); }; askConfirm?askConfirm('Datei „'+item.fileName+'" entfernen? Sie wird auch aus dem Online-Speicher gelöscht.',run):run(); }} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:15,lineHeight:1}}>×</button>
+              </div>
+            ) : (
+              <button onClick={()=>fileRef.current.click()} style={{...menuBtn,marginTop:0,justifyContent:'center',color:C.sub}}>+ Datei anhängen</button>
+            )}
+
+            <div style={{display:'flex',gap:8,marginTop:14}}>
+              <button onClick={()=>onMoveUp&&onMoveUp()} disabled={isFirst} style={{...menuBtn,marginTop:0,flex:1,justifyContent:'center',opacity:isFirst?0.4:1,cursor:isFirst?'default':'pointer'}}><Ic p={P.up} sz={13} col={C.sub}/> Hoch</button>
+              <button onClick={()=>onMoveDown&&onMoveDown()} disabled={isLast} style={{...menuBtn,marginTop:0,flex:1,justifyContent:'center',opacity:isLast?0.4:1,cursor:isLast?'default':'pointer'}}><Ic p={P.down} sz={13} col={C.sub}/> Runter</button>
+            </div>
+
+            <button onClick={()=>{ const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id); setMenuOpen(false); }; askConfirm?askConfirm('Zeile „'+(item.name||'ohne Bezeichnung')+'" wirklich löschen?'+(hasFile?' Die angehängte Datei wird ebenfalls entfernt.':''),run):run(); }}
+              style={{...menuBtn,marginTop:14,background:'rgba(255,90,95,0.12)',color:C.red,justifyContent:'center',fontWeight:600}}>
+              <Ic p={P.trash} sz={14} col={C.red}/> Zeile löschen
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -737,11 +730,11 @@ function App({session}) {
 
   /* Derived */
   const md    = getMD(yr,mo);
-  const tot   = calcTotals(md);
+  const tot   = calcTotals(md, yr, mo);
   const editClientObj = editClient ? ((md.unternehmen?.clients)||[]).find(c=>c.id===editClient) : null;
   const pd    = md.props?.[sp]||emptyProp();
-  const pc    = calcProp(pd);
-  const yrSum = Array.from({length:12},(_,i)=>({m:i,...calcTotals(getMD(yr,i))}));
+  const pc    = calcProp(pd, yr, mo);
+  const yrSum = Array.from({length:12},(_,i)=>({m:i,...calcTotals(getMD(yr,i), yr, i)}));
   const yrTot = yrSum.reduce((a,s)=>({totalInc:a.totalInc+s.totalInc,totalExp:a.totalExp+s.totalExp,net:a.net+s.net,unterInc:a.unterInc+s.unterInc,unterExp:a.unterExp+s.unterExp}),{totalInc:0,totalExp:0,net:0,unterInc:0,unterExp:0});
   const taxESt   = estESt(Math.max(0,yrTot.net));
   const taxUGwn  = yrTot.unterInc-yrTot.unterExp;
@@ -986,7 +979,7 @@ function App({session}) {
               <div style={{...SC,flex:2,minWidth:280}}>
                 <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:14}}>Immobilien</div>
                 {PROPS.map(p=>{
-                  const r=calcProp(md.props?.[p]);
+                  const r=calcProp(md.props?.[p], yr, mo);
                   return (
                     <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
                       <span style={{fontWeight:600}}>{names[p]}</span>
@@ -1036,7 +1029,7 @@ function App({session}) {
                 const mb=storageInfo.total/1048576, limit=1024, pct=Math.min(100,mb/limit*100);
                 return (<>
                   <div style={{height:8,background:C.surf3,borderRadius:99,overflow:'hidden',marginBottom:8}}>
-                    <div style={{height:'100%',width:pct+'%',background:pct>85?C.red:C.pri,borderRadius:99,transition:'width .3s'}} />
+                    <div style={{height:'100%',width:pct+'%',background:pct>85?C.red:C.pri,borderRadius:99}} />
                   </div>
                   <div style={{fontSize:12,color:C.sub}}>{mb.toFixed(mb<10?2:1)} MB von 1.024 MB belegt · {storageInfo.files} {storageInfo.files===1?'Datei':'Dateien'}</div>
                 </>);
