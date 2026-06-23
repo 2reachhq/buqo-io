@@ -105,10 +105,11 @@ const incomeVal = (inc, fld) => {
 };
 /* Zeile gilt nur bis "until" (Monat/Jahr); ab dem Folgemonat wird sie nicht mehr gezählt */
 const activeInMonth = (it, y, m) => {
-  const u = it && it.until;
-  if(!u || u.y==null || u.m==null) return true;
   if(y==null || m==null) return true;
-  return (y < u.y) || (y===u.y && m <= u.m);
+  const f = it && it.from, u = it && it.until;
+  const afterFrom   = (!f || f.y==null || f.m==null) ? true : (y > f.y) || (y===f.y && m >= f.m);
+  const beforeUntil = (!u || u.y==null || u.m==null) ? true : (y < u.y) || (y===u.y && m <= u.m);
+  return afterFrom && beforeUntil;
 };
 const sumItems = (arr, y, m) => (arr||[]).filter(i=>activeInMonth(i,y,m)).reduce((s,i)=>s+num(i.amount),0);
 const calcProp = (prop, y, m) => {
@@ -183,14 +184,17 @@ function KPI({label,val,color,sub}) {
 }
 
 /* ══ Item row (aufgeräumt: Name + Betrag + ⋮-Menü) ══ */
-function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, askConfirm, onEditDetails}) {
+function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails}) {
   const [menuOpen,setMenuOpen]=useState(false);
   const fileRef=useRef();
   const hasNote=!!(item.note&&item.note.trim());
   const hasFile=!!(item.filePath||item.fileData);
+  const hasFrom=!!(item.from&&item.from.y!=null);
   const hasUntil=!!(item.until&&item.until.y!=null);
   const thisYear=new Date().getFullYear();
   const years=[]; for(let y=thisYear-1;y<=thisYear+6;y++) years.push(y);
+  const M3=(o)=>MONTHS[o.m].slice(0,3)+' '+o.y;
+  const rangeLabel = (hasFrom&&hasUntil) ? (M3(item.from)+' – '+M3(item.until)) : hasFrom ? ('ab '+M3(item.from)) : hasUntil ? ('bis '+M3(item.until)) : '';
 
   const handleFile=e=>{
     const f=e.target.files[0]; if(!f) return;
@@ -223,9 +227,9 @@ function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLas
         }}>⋮</button>
         <input type="file" ref={fileRef} onChange={handleFile} style={{display:'none'}} accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt" />
       </div>
-      {(hasUntil||hasNote||hasFile) && (
+      {(hasFrom||hasUntil||hasNote||hasFile) && (
         <div style={{display:'flex',flexWrap:'wrap',gap:5,padding:'0 0 9px 2px',marginTop:-3}}>
-          {hasUntil && chip(P.cal,C.sub,'bis '+MONTHS[item.until.m]+' '+item.until.y, ()=>setMenuOpen(true))}
+          {(hasFrom||hasUntil) && chip(P.cal,C.sub,rangeLabel, ()=>setMenuOpen(true))}
           {hasNote && chip(P.note,C.mut,'Notiz', ()=>setMenuOpen(true))}
           {hasFile && chip(P.clip,C.mut,'Datei', ()=>setMenuOpen(true))}
         </div>
@@ -246,17 +250,33 @@ function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLas
             )}
 
 
-            <div style={{background:C.surf2,borderRadius:10,padding:'10px 12px',marginTop:8}}>
+            <div style={{background:C.surf2,borderRadius:10,padding:'12px',marginTop:8}}>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:6,display:'flex',alignItems:'center',gap:6}}><Ic p={P.cal} sz={14} col={C.sub}/> Zeitraum (von – bis)</div>
+              <div style={{fontSize:11,color:C.mut,marginBottom:10,lineHeight:1.5}}>„von" trägt diesen Posten rückwirkend in alle Monate ab dem Startmonat ein (gleicher Betrag je Monat). „bis" begrenzt das Ende. Außerhalb wird er weder angezeigt noch gezählt.</div>
               <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:13}}>
-                <input type="checkbox" checked={hasUntil} onChange={e=>{ if(e.target.checked){const d=new Date();onUpdate(item.id,'until',{y:d.getFullYear(),m:d.getMonth()});} else onUpdate(item.id,'until',null); }} />
-                <Ic p={P.cal} sz={14} col={C.sub}/> Nur bis bestimmtem Monat berechnen
+                <input type="checkbox" checked={hasFrom} onChange={e=>onSetRange&&onSetRange({from:e.target.checked?{y:curY,m:curM}:null,until:item.until||null})} />
+                von Monat
               </label>
-              {hasUntil && (
-                <div style={{display:'flex',gap:8,marginTop:10}}>
-                  <select value={item.until.m} onChange={e=>onUpdate(item.id,'until',{...item.until,m:+e.target.value})} style={{...SHd,flex:1}}>
+              {hasFrom && (
+                <div style={{display:'flex',gap:8,margin:'8px 0 12px'}}>
+                  <select value={item.from.m} onChange={e=>onSetRange&&onSetRange({from:{...item.from,m:+e.target.value},until:item.until||null})} style={{...SHd,flex:1}}>
                     {MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
                   </select>
-                  <select value={item.until.y} onChange={e=>onUpdate(item.id,'until',{...item.until,y:+e.target.value})} style={{...SHd,width:92}}>
+                  <select value={item.from.y} onChange={e=>onSetRange&&onSetRange({from:{...item.from,y:+e.target.value},until:item.until||null})} style={{...SHd,width:92}}>
+                    {years.map(y=><option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+              )}
+              <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:13}}>
+                <input type="checkbox" checked={hasUntil} onChange={e=>onSetRange&&onSetRange({from:item.from||null,until:e.target.checked?{y:curY,m:curM}:null})} />
+                bis Monat
+              </label>
+              {hasUntil && (
+                <div style={{display:'flex',gap:8,marginTop:8}}>
+                  <select value={item.until.m} onChange={e=>onSetRange&&onSetRange({from:item.from||null,until:{...item.until,m:+e.target.value}})} style={{...SHd,flex:1}}>
+                    {MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
+                  </select>
+                  <select value={item.until.y} onChange={e=>onSetRange&&onSetRange({from:item.from||null,until:{...item.until,y:+e.target.value}})} style={{...SHd,width:92}}>
                     {years.map(y=><option key={y} value={y}>{y}</option>)}
                   </select>
                 </div>
@@ -743,6 +763,19 @@ function App({session}) {
       return{...m,props:{...m.props,[pid]:{...p,expenses:arr}}};
     });
   };
+  const setPropExpRange=(pid,item,range)=>{
+    const hasRange=!!((range.from&&range.from.y!=null)||(range.until&&range.until.y!=null));
+    const recur=hasRange||!!item.recurring;
+    updAll(m=>{
+      const p=m.props?.[pid]||emptyProp();
+      const arr=[...(p.expenses||[])];
+      const idx=arr.findIndex(i=>i.id===item.id);
+      const patch=base=>({...base,from:range.from||null,until:range.until||null,recurring:recur});
+      if(idx>=0) arr[idx]=patch(arr[idx]);
+      else if(recur) arr.push(patch({...item,filePath:null,fileName:'',fileData:null}));
+      return{...m,props:{...m.props,[pid]:{...p,expenses:arr}}};
+    });
+  };
   const delPropExp=(pid,id)=>upd(md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,expenses:(p.expenses||[]).filter(i=>i.id!==id)}}};});
   const addPropExp=(pid,name,amount,recur)=>{
     const item={...newItem(name),amount:num(amount),recurring:recur,id:uid()};
@@ -791,6 +824,19 @@ function App({session}) {
       const idx=arr.findIndex(i=>i.id===item.id);
       if(idx>=0) arr[idx]={...arr[idx],recurring:on};
       else if(on) arr.push({...item,recurring:true,filePath:null,fileName:'',fileData:null});
+      return{...m,[sec]:{...s,[sub]:arr}};
+    });
+  };
+  const setSecRange=(sec,sub,item,range)=>{
+    const hasRange=!!((range.from&&range.from.y!=null)||(range.until&&range.until.y!=null));
+    const recur=hasRange||!!item.recurring;
+    updAll(m=>{
+      const s=m[sec]||{};
+      const arr=[...(s[sub]||[])];
+      const idx=arr.findIndex(i=>i.id===item.id);
+      const patch=base=>({...base,from:range.from||null,until:range.until||null,recurring:recur});
+      if(idx>=0) arr[idx]=patch(arr[idx]);
+      else if(recur) arr.push(patch({...item,filePath:null,fileName:'',fileData:null}));
       return{...m,[sec]:{...s,[sub]:arr}};
     });
   };
@@ -963,24 +1009,28 @@ function App({session}) {
   ];
 
   /* Reusable items renderer */
-  const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn) =>
-    items.map((item,idx) => (
+  const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn, rangeFn) => {
+    const shown = (items||[]).filter(it=>activeInMonth(it, yr, mo));
+    return shown.map((item,idx) => (
       <ItemRow key={item.id} item={item}
         onUpdate={updFn}
         onDelete={delFn}
         onMoveUp={()=>moveFn(item.id,-1)}
         onMoveDown={()=>moveFn(item.id,1)}
         isFirst={idx===0}
-        isLast={idx===items.length-1}
+        isLast={idx===shown.length-1}
         folderPath={folderPath}
         onUploadFile={uploadFile}
         onOpenFile={openFile}
         onDeleteFile={deleteFile}
         onToggleRecurring={()=>recurFn && recurFn(item)}
+        onSetRange={rangeFn?(range)=>rangeFn(item,range):null}
+        curY={yr} curM={mo}
         askConfirm={askConfirm}
         onEditDetails={editFn}
       />
     ));
+  };
 
   const ResultBanner = ({label, sublabel, value}) => {
     const positive = value >= 0;
@@ -1216,7 +1266,9 @@ function App({session}) {
                   id=>delPropExp(sp,id),
                   (id,dir)=>movePropExp(sp,id,dir),
                   ['Immobilien', names[sp]],
-                  item=>setRecurPropExp(sp,item)
+                  item=>setRecurPropExp(sp,item),
+                  undefined,
+                  (it,range)=>setPropExpRange(sp,it,range)
                 )}
                 <AddForm onAdd={(n,a,r)=>addPropExp(sp,n,a,r)} />
                 <BulkAddButton onAdd={(n,a,r)=>addPropExp(sp,n,a,r)} />
@@ -1262,7 +1314,8 @@ function App({session}) {
                     (id,dir)=>moveSec('unternehmen','clients',id,dir),
                     ['Unternehmen','Kunden'],
                     item=>setRecurSec('unternehmen','clients',item),
-                    id=>setEditClient(id)
+                    id=>setEditClient(id),
+                    (it,range)=>setSecRange('unternehmen','clients',it,range)
                   )}
                   <AddForm placeholder="Kundenname" onAdd={(n,a,r)=>addSec('unternehmen','clients',n,a,r)} />
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:14}}>
@@ -1296,7 +1349,9 @@ function App({session}) {
                   id=>delSec('unternehmen','items',id),
                   (id,dir)=>moveSec('unternehmen','items',id,dir),
                   ['Unternehmen','Ausgaben'],
-                  item=>setRecurSec('unternehmen','items',item)
+                  item=>setRecurSec('unternehmen','items',item),
+                  undefined,
+                  (it,range)=>setSecRange('unternehmen','items',it,range)
                 )}
                 <AddForm onAdd={(n,a,r)=>addSec('unternehmen','items',n,a,r)} />
                 <BulkAddButton onAdd={(n,a,r)=>addSec('unternehmen','items',n,a,r)} />
@@ -1331,7 +1386,9 @@ function App({session}) {
                 id=>delSec('privat','items',id),
                 (id,dir)=>moveSec('privat','items',id,dir),
                 ['Privat'],
-                item=>setRecurSec('privat','items',item)
+                item=>setRecurSec('privat','items',item),
+                undefined,
+                (it,range)=>setSecRange('privat','items',it,range)
               )}
               <AddForm onAdd={(n,a,r)=>addSec('privat','items',n,a,r)} />
               <BulkAddButton onAdd={(n,a,r)=>addSec('privat','items',n,a,r)} />
