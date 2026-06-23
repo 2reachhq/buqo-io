@@ -466,6 +466,7 @@ function App({session}) {
   const [unterTab,setUnterTab]= useState('einnahmen');
   const [editClient,setEditClient]= useState(null);
   const [editIncome,setEditIncome]= useState(null);
+  const [yrFilter,setYrFilter]= useState({immo:true,unter:true,privat:true});
   const [storageInfo,setStorageInfo]= useState(null);
   const [storageLoading,setStorageLoading]= useState(false);
   const askConfirm = (message, onConfirm, title) => setConfirmState({message, onConfirm, title: title||'Wirklich löschen?'});
@@ -798,6 +799,10 @@ function App({session}) {
   const pc    = calcProp(pd, yr, mo);
   const yrSum = Array.from({length:12},(_,i)=>({m:i,fut:isFuture(yr,i),...calcTotals(getMD(yr,i), yr, i)}));
   const yrTot = yrSum.reduce((a,s)=> s.fut?a:({totalInc:a.totalInc+s.totalInc,totalExp:a.totalExp+s.totalExp,net:a.net+s.net,unterInc:a.unterInc+s.unterInc,unterExp:a.unterExp+s.unterExp}),{totalInc:0,totalExp:0,net:0,unterInc:0,unterExp:0});
+  /* Gefilterte Summen NUR für die Jahresübersicht-Anzeige (Steuer nutzt weiter yrTot) */
+  const fInc = s => (yrFilter.immo?s.immoInc:0)+(yrFilter.unter?s.unterInc:0);
+  const fExp = s => (yrFilter.immo?s.immoExp:0)+(yrFilter.unter?s.unterExp:0)+(yrFilter.privat?s.privatExp:0);
+  const yrTotF = yrSum.reduce((a,s)=> s.fut?a:{totalInc:a.totalInc+fInc(s),totalExp:a.totalExp+fExp(s),net:a.net+(fInc(s)-fExp(s))},{totalInc:0,totalExp:0,net:0});
   const taxESt   = estESt(Math.max(0,yrTot.net));
   const taxUGwn  = yrTot.unterInc-yrTot.unterExp;
   const taxGewSt = Math.max(0,taxUGwn-24500)*0.035*4.35;
@@ -1158,10 +1163,6 @@ function App({session}) {
               <div style={{...SC,flex:2,minWidth:280}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                   <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Ausgaben</div>
-                  <div style={{display:'flex',gap:6}}>
-                    <button onClick={()=>copyPrevPropExp(sp)} style={BVm} title="Einträge aus dem Vormonat hierher kopieren (ersetzt diesen Monat)">⧉ aus Vormonat</button>
-                    <button onClick={()=>copyNextPropExp(sp)} style={BVm} title="Einträge dieses Monats in den Folgemonat kopieren">⧉ in Folgemonat</button>
-                  </div>
                 </div>
                 {renderItems(
                   pd.expenses||[],
@@ -1205,10 +1206,6 @@ function App({session}) {
                 <div style={{...SC,flex:1,minWidth:280}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
                     <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Kunden / Einnahmen</div>
-                    <div style={{display:'flex',gap:6}}>
-                      <button onClick={()=>copyPrevSec('unternehmen','clients')} style={BVm} title="Einträge aus dem Vormonat hierher kopieren (ersetzt diesen Monat)">⧉ aus Vormonat</button>
-                      <button onClick={()=>copyNextSec('unternehmen','clients')} style={BVm} title="Einträge dieses Monats in den Folgemonat kopieren">⧉ in Folgemonat</button>
-                    </div>
                   </div>
                   <div style={{fontSize:12,color:C.mut,marginBottom:14}}>Monatliche Kundenzahlungen · ✏️ für Vertrag, Kontakt & Notizen</div>
                   {renderItems(
@@ -1240,10 +1237,6 @@ function App({session}) {
               <div style={SC}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
                   <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Ausgaben</div>
-                  <div style={{display:'flex',gap:6}}>
-                    <button onClick={()=>copyPrevSec('unternehmen','items')} style={BVm} title="Einträge aus dem Vormonat hierher kopieren (ersetzt diesen Monat)">⧉ aus Vormonat</button>
-                    <button onClick={()=>copyNextSec('unternehmen','items')} style={BVm} title="Einträge dieses Monats in den Folgemonat kopieren">⧉ in Folgemonat</button>
-                  </div>
                 </div>
                 <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:12,marginTop:8}}>
                   {UNTER_PRESETS.map(name=>(
@@ -1276,10 +1269,6 @@ function App({session}) {
                 <div style={{fontSize:26,fontWeight:700,letterSpacing:'-0.03em',marginBottom:3}}>Privat</div>
                 <div style={{fontSize:13,color:C.sub}}>{MONTHS[mo]} {yr}</div>
               </div>
-              <div style={{display:'flex',gap:6,marginTop:4}}>
-                <button onClick={()=>copyPrevSec('privat','items')} style={BVm} title="Einträge aus dem Vormonat hierher kopieren (ersetzt diesen Monat)">⧉ aus Vormonat</button>
-                <button onClick={()=>copyNextSec('privat','items')} style={BVm} title="Einträge dieses Monats in den Folgemonat kopieren">⧉ in Folgemonat</button>
-              </div>
             </div>
             <div style={SC}>
               <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:4}}>Ausgaben</div>
@@ -1310,6 +1299,18 @@ function App({session}) {
               <div style={{fontSize:26,fontWeight:700,letterSpacing:'-0.03em',marginBottom:3}}>Jahresübersicht</div>
               <div style={{fontSize:13,color:C.sub}}>{yr}</div>
             </div>
+            <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+              <span style={{fontSize:12,color:C.mut,marginRight:2}}>Anzeigen:</span>
+              {[['immo','Immobilien'],['unter','Unternehmen'],['privat','Privat']].map(([k,label])=>{
+                const on=yrFilter[k];
+                return (
+                  <button key={k} onClick={()=>setYrFilter(f=>({...f,[k]:!f[k]}))} title={on?'Ausblenden':'Einblenden'}
+                    style={{display:'flex',alignItems:'center',gap:7,background:on?C.grnL:C.surf2,border:'1px solid '+(on?'rgba(62,207,142,0.30)':C.bdr),color:on?C.grn:C.mut,borderRadius:9,padding:'7px 13px',fontSize:13,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
+                    <span style={{width:9,height:9,borderRadius:'50%',background:on?C.grn:C.surf3,display:'inline-block',flexShrink:0}}/>{label}
+                  </button>
+                );
+              })}
+            </div>
             <div style={{...SC,marginBottom:14,overflowX:'auto'}}>
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead><tr>
@@ -1320,23 +1321,26 @@ function App({session}) {
                 <tbody>
                   {yrSum.map(s=>{
                     const fut=s.fut;
-                    const ur=s.unterInc-s.unterExp;const ok=!fut && (s.totalInc>0||s.totalExp>0);
+                    const ur=s.unterInc-s.unterExp;
+                    const inc=fInc(s), exp=fExp(s), net=inc-exp;
+                    const ok=!fut && (inc>0||exp>0);
                     const cell=(cond,txt)=> (fut||!cond)?'—':txt;
+                    const dim=(k)=> yrFilter[k]?1:0.28;
                     return (
                       <tr key={s.m} onClick={fut?undefined:()=>{setMo(s.m);setTab('dash');}}
                         style={{cursor:fut?'default':'pointer',opacity:fut?0.4:1,background:s.m===mo?'rgba(62,207,142,0.10)':'transparent'}}
                         title={fut?'Monat hat noch nicht begonnen':''}>
                         <td style={{padding:'10px',fontWeight:s.m===mo?600:400,color:s.m===mo?C.txt:C.sub}}>{MONTHS[s.m]}</td>
-                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&s.immoInc>0)?C.grn:C.mut,...NUM}}>{cell(s.immoInc>0,fmt(s.immoInc))}</td>
-                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&s.immoExp>0)?C.red:C.mut,...NUM}}>{cell(s.immoExp>0,fmt(s.immoExp))}</td>
-                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&(s.unterInc>0||s.unterExp>0))?(ur>=0?C.grn:C.red):C.mut,...NUM}}>
+                        <td style={{padding:'10px',textAlign:'right',opacity:dim('immo'),color:(!fut&&s.immoInc>0)?C.grn:C.mut,...NUM}}>{cell(s.immoInc>0,fmt(s.immoInc))}</td>
+                        <td style={{padding:'10px',textAlign:'right',opacity:dim('immo'),color:(!fut&&s.immoExp>0)?C.red:C.mut,...NUM}}>{cell(s.immoExp>0,fmt(s.immoExp))}</td>
+                        <td style={{padding:'10px',textAlign:'right',opacity:dim('unter'),color:(!fut&&(s.unterInc>0||s.unterExp>0))?(ur>=0?C.grn:C.red):C.mut,...NUM}}>
                           {cell(s.unterInc>0||s.unterExp>0,(ur>=0?'+':'')+fmt(ur))}
                         </td>
-                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&s.privatExp>0)?C.red:C.mut,...NUM}}>{cell(s.privatExp>0,fmt(s.privatExp))}</td>
-                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&s.totalInc>0)?C.grn:C.mut,...NUM}}>{cell(s.totalInc>0,fmt(s.totalInc))}</td>
-                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&s.totalExp>0)?C.red:C.mut,...NUM}}>{cell(s.totalExp>0,fmt(s.totalExp))}</td>
-                        <td style={{padding:'10px',textAlign:'right',fontWeight:600,color:ok?(s.net>=0?C.grn:C.red):C.mut,...NUM}}>
-                          {cell(s.totalInc>0||s.totalExp>0,(s.net>=0?'+':'')+fmt(s.net))}
+                        <td style={{padding:'10px',textAlign:'right',opacity:dim('privat'),color:(!fut&&s.privatExp>0)?C.red:C.mut,...NUM}}>{cell(s.privatExp>0,fmt(s.privatExp))}</td>
+                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&inc>0)?C.grn:C.mut,...NUM}}>{cell(inc>0,fmt(inc))}</td>
+                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&exp>0)?C.red:C.mut,...NUM}}>{cell(exp>0,fmt(exp))}</td>
+                        <td style={{padding:'10px',textAlign:'right',fontWeight:600,color:ok?(net>=0?C.grn:C.red):C.mut,...NUM}}>
+                          {cell(inc>0||exp>0,(net>=0?'+':'')+fmt(net))}
                         </td>
                       </tr>
                     );
@@ -1346,18 +1350,18 @@ function App({session}) {
                   <tr style={{borderTop:'1px solid '+C.bdrM}}>
                     <td style={{padding:'12px',fontWeight:600,color:C.sub}}>Jahresgesamt</td>
                     <td colSpan={4}></td>
-                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:C.grn,...NUM}}>{fmt(yrTot.totalInc)}</td>
-                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:C.red,...NUM}}>{fmt(yrTot.totalExp)}</td>
-                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:yrTot.net>=0?C.grn:C.red,...NUM}}>{yrTot.net>=0?'+':''}{fmt(yrTot.net)}</td>
+                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:C.grn,...NUM}}>{fmt(yrTotF.totalInc)}</td>
+                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:C.red,...NUM}}>{fmt(yrTotF.totalExp)}</td>
+                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:yrTotF.net>=0?C.grn:C.red,...NUM}}>{yrTotF.net>=0?'+':''}{fmt(yrTotF.net)}</td>
                   </tr>
                 </tfoot>
               </table>
             </div>
             <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
               {[
-                {label:'Jahreseinnahmen',val:fmt(yrTot.totalInc),col:C.grn,bg:C.grnL,bdr:'rgba(62,207,142,0.22)'},
-                {label:'Jahresausgaben', val:fmt(yrTot.totalExp),col:C.red,bg:C.redL,bdr:'rgba(255,90,95,0.22)'},
-                {label:'Jahresergebnis', val:(yrTot.net>=0?'+':'')+fmt(yrTot.net),col:yrTot.net>=0?C.grn:C.red,bg:yrTot.net>=0?C.grnL:C.redL,bdr:yrTot.net>=0?'rgba(62,207,142,0.22)':'rgba(255,90,95,0.22)'},
+                {label:'Jahreseinnahmen',val:fmt(yrTotF.totalInc),col:C.grn,bg:C.grnL,bdr:'rgba(62,207,142,0.22)'},
+                {label:'Jahresausgaben', val:fmt(yrTotF.totalExp),col:C.red,bg:C.redL,bdr:'rgba(255,90,95,0.22)'},
+                {label:'Jahresergebnis', val:(yrTotF.net>=0?'+':'')+fmt(yrTotF.net),col:yrTotF.net>=0?C.grn:C.red,bg:yrTotF.net>=0?C.grnL:C.redL,bdr:yrTotF.net>=0?'rgba(62,207,142,0.22)':'rgba(255,90,95,0.22)'},
               ].map(({label,val,col,bg,bdr})=>(
                 <div key={label} style={{flex:1,minWidth:155,background:bg,border:'1px solid '+bdr,borderRadius:16,padding:'18px 22px'}}>
                   <div style={{fontSize:12,color:col,opacity:.8,marginBottom:8,fontWeight:500}}>{label}</div>
