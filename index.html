@@ -1163,27 +1163,34 @@ function App({session}) {
       const block = isPdf
         ? { type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } }
         : { type:'image', source:{ type:'base64', media_type:(file.type||'image/jpeg'), data:b64 } };
-      const prompt = "Dies ist ein Bankauszug oder ein Beleg/eine Rechnung (Deutschland). Lies ALLE einzelnen Umsätze bzw. Belegpositionen aus. "
-        + "Antworte AUSSCHLIESSLICH mit reinem JSON, ohne Text drumherum, ohne Markdown, genau in diesem Format:\n"
-        + '{"posten":[{"beschreibung":"Kurzbezeichnung/Händler","betrag":12.34,"art":"einnahme","datum":"TT.MM.JJJJ","rechnungsnummer":""}]}\n'
-        + "Regeln: betrag immer als positive Zahl (Punkt als Dezimaltrennzeichen). art = \"einnahme\" bei Geldeingang/Gutschrift, sonst \"ausgabe\". "
-        + "datum und rechnungsnummer leer lassen, wenn nicht vorhanden. Erfinde nichts.";
+      const prompt = "Dies ist ein Bankauszug oder ein Beleg/eine Rechnung (Deutschland). Lies ALLE einzelnen Umsätze bzw. Belegpositionen aus (keine Saldo-/Summen-/Kontostandzeilen). "
+        + "Antworte AUSSCHLIESSLICH mit minifiziertem JSON (keine Leerzeichen, keine Zeilenumbrüche, kein Markdown) im Format:\n"
+        + '{"p":[{"b":"Händler/Beschreibung","a":12.34,"k":"a","d":"TT.MM.JJJJ","r":""}]}\n'
+        + "Felder: b=Kurzbeschreibung (max 60 Zeichen), a=Betrag positiv mit Punkt als Dezimaltrennzeichen, k=\"e\" bei Einnahme/Gutschrift sonst \"a\", d=Datum (leer wenn keins), r=Rechnungsnummer (leer wenn keine). "
+        + "Halte b kurz. Erfinde nichts.";
       const { data:resp, error } = await sb.functions.invoke('ai', { body:{ model:'claude-haiku-4-5', max_tokens:8000, messages:[{ role:'user', content:[block, { type:'text', text:prompt }] }] } });
       if(error) throw error;
       if(resp && resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
       let txt = (resp && resp.content && resp.content[0] && resp.content[0].text) || '';
       txt = txt.replace(/```json|```/g,'').trim();
       const mm = txt.match(/\{[\s\S]*\}/); if(mm) txt = mm[0];
-      const parsed = JSON.parse(txt);
-      const list = (parsed.posten||[]).map(p=>({
+      let parsed, truncated=false;
+      try { parsed = JSON.parse(txt); }
+      catch(_){
+        // Antwort wurde abgeschnitten → bis zum letzten vollständigen Posten retten
+        const lastObj = txt.lastIndexOf('}');
+        if(lastObj>0){ try { parsed = JSON.parse(txt.slice(0,lastObj+1)+']}'); truncated=true; } catch(__){ throw new Error('Antwort unlesbar (zu lang). Versuch eine kürzere Datei / pro Monat eine Seite.'); } }
+        else throw new Error('Antwort unlesbar.');
+      }
+      const list = (parsed.p||parsed.posten||[]).map(p=>({
         id:uid(),
-        name:String(p.beschreibung||'Posten').slice(0,70),
-        amount:Math.abs(parseFloat(String(p.betrag).replace(',','.'))||0),
-        kind:(p.art==='einnahme'?'ein':'aus'),
-        info:[p.rechnungsnummer&&('Nr. '+p.rechnungsnummer), p.datum].filter(Boolean).join(' · '),
+        name:String(p.b||p.beschreibung||'Posten').slice(0,70),
+        amount:Math.abs(parseFloat(String(p.a!=null?p.a:p.betrag).replace(',','.'))||0),
+        kind:((p.k||p.art)==='e'||(p.k||p.art)==='einnahme'?'ein':'aus'),
+        info:[(p.r||p.rechnungsnummer)&&('Nr. '+(p.r||p.rechnungsnummer)), (p.d||p.datum)].filter(Boolean).join(' · '),
       })).filter(p=>p.amount>0);
       if(!list.length) setToast('Keine Posten erkannt.');
-      else { setDrafts(ds=>[...list,...ds]); setToast(list.length+' Posten erkannt'); }
+      else { setDrafts(ds=>[...list,...ds]); setToast(list.length+' Posten erkannt'+(truncated?' (Auszug sehr lang – evtl. nicht alle; ggf. seitenweise hochladen)':'')); }
     }catch(e){ setToast('Konnte „'+file.name+'" nicht auslesen: '+(e.message||e)); }
     setImportBusy(false);
   };
