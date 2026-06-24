@@ -8,6 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -69,6 +70,51 @@ const FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', syst
 const NUM  = {fontVariantNumeric:'tabular-nums', letterSpacing:'-0.02em'};
 const fmt  = v => new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v||0);
 const fmtN = v => ((v||0)>0 ? '-' : '')+fmt(v||0);
+
+/* ── Bankauszug (Text-PDF) auslesen ── */
+async function pdfToLines(file){
+  const lib = window.pdfjsLib;
+  if(!lib) throw new Error('PDF-Bibliothek nicht geladen');
+  lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const pdf = await lib.getDocument({data:buf}).promise;
+  let lines=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    const rowsByY={};
+    tc.items.forEach(it=>{ if(!it.str) return; const y=Math.round(it.transform[5]); (rowsByY[y]=rowsByY[y]||[]).push(it); });
+    Object.keys(rowsByY).sort((a,b)=>b-a).forEach(y=>{
+      const ln=rowsByY[y].sort((a,b)=>a.transform[4]-b.transform[4]).map(i=>i.str).join(' ').replace(/\s{2,}/g,' ').trim();
+      if(ln) lines.push(ln);
+    });
+  }
+  return lines;
+}
+function parseStatement(lines){
+  const out=[];
+  const numRe=/-?\d{1,3}(?:\.\d{3})*,\d{2}/g;
+  const skipRe=/(kontostand|saldo|zwischensumme|übertrag|uebertrag|summe|gesamtbetrag|alter\s|neuer\s|\bIBAN\b|\bBIC\b|blz|kontonummer|seite\s|auszug)/i;
+  lines.forEach(line=>{
+    const L=line.trim();
+    if(L.length<4) return;
+    if(skipRe.test(L)) return;
+    const nums=L.match(numRe);
+    if(!nums) return;
+    const raw=nums[nums.length-1];
+    const val=parseFloat(raw.replace(/\./g,'').replace(',','.'));
+    if(!val) return;
+    let kind='aus';
+    if(raw.includes('-')) kind='aus';
+    else if(/(\+|\bH\b|Haben|Gutschr|Gehalt|Lohn|Eingang|Erstattung|Zahlungseingang|Rückzahlung|Miete)/i.test(L)) kind='ein';
+    else if(/(\bS\b|Lastschr|Abbuch|Kartenzahl|Dauerauftrag|Überweisung|SEPA|Entgelt|Gebühr)/i.test(L)) kind='aus';
+    let desc=L.replace(/-?\d{1,3}(?:\.\d{3})*,\d{2}\s*[+-]?\s*[HS]?\s*€?$/,'').trim();
+    desc=desc.replace(/\b\d{2}[.\/]\d{2}[.\/]?(?:\d{2,4})?\b/g,'').replace(/\s{2,}/g,' ').trim();
+    if(!desc||desc.length<2) desc='Umsatz';
+    out.push({id:uid(), name:desc.slice(0,70), amount:Math.abs(val), kind});
+  });
+  return out;
+}
 const num  = v => parseFloat(v)||0;
 const evalAmount = s => {
   if(s===''||s==null) return 0;
@@ -179,6 +225,11 @@ const P = {
   repeat:'M17 1l4 4-4 4 M3 11V9a4 4 0 014-4h14 M7 23l-4-4 4-4 M21 13v2a4 4 0 01-4 4H3',
   menu:  'M3 6h18 M3 12h18 M3 18h18',
   close: 'M18 6L6 18 M6 6l12 12',
+  grip:  'M5 9h14 M5 15h14',
+  check: 'M20 6L9 17l-5-5',
+  upload:'M12 3v13 M7 8l5-5 5 5 M5 21h14',
+  plus:  'M12 5v14 M5 12h14',
+  swap:  'M7 16V4 M3 8l4-4 4 4 M17 8v12 M21 16l-4 4-4-4',
 };
 
 /* ══ Icon component ══ */
@@ -202,9 +253,49 @@ function KPI({label,val,color,sub}) {
   );
 }
 
-/* ══ Item row (aufgeräumt: Name + Betrag + ⋮-Menü) ══ */
-function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails, moveTargets, onMoveItem}) {
-  const [menuOpen,setMenuOpen]=useState(false);
+/* ══ Kleines Dialog-Fenster (Sheet) ══ */
+function Sheet({title, onClose, children, maxWidth=380}) {
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:120,padding:18}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'18px 20px',maxWidth,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <div style={{fontSize:16,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{title}</div>
+          <button onClick={onClose} title="Schließen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:22,lineHeight:1,padding:'0 2px'}}>×</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ══ Ziel wählen (Bereich + Monat) — für Mehrfach-Verschieben & Import-Zuordnung ══ */
+function TargetPicker({title, moveTargets, curY, curM, confirmLabel, onClose, onConfirm}) {
+  const [dest,setDest]=useState((moveTargets[0]&&moveTargets[0].key)||'');
+  const [y,setY]=useState(curY);
+  const [m,setM]=useState(curM);
+  const thisYear=new Date().getFullYear();
+  const years=[]; for(let yy=thisYear-1;yy<=thisYear+6;yy++) years.push(yy);
+  const menuBtn={display:'flex',alignItems:'center',gap:8,width:'100%',justifyContent:'center',background:C.priL,color:C.pri,border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'};
+  return (
+    <Sheet title={title} onClose={onClose}>
+      <div style={{fontSize:11,color:C.sub,marginBottom:4}}>Bereich / Konto</div>
+      <select value={dest} onChange={e=>setDest(e.target.value)} style={{...SS,marginBottom:12}}>{moveTargets.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
+      <div style={{fontSize:11,color:C.sub,marginBottom:4}}>Monat</div>
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        <button onClick={()=>{let mm=m-1,yy=y;if(mm<0){mm=11;yy--;}setM(mm);setY(yy);}} style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'0 12px',cursor:'pointer',fontFamily:'inherit',fontSize:16}}>‹</button>
+        <select value={m} onChange={e=>setM(+e.target.value)} style={{...SS,flex:1}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
+        <select value={y} onChange={e=>setY(+e.target.value)} style={{...SS,width:100}}>{years.map(yy=><option key={yy} value={yy}>{yy}</option>)}</select>
+        <button onClick={()=>{let mm=m+1,yy=y;if(mm>11){mm=0;yy++;}setM(mm);setY(yy);}} style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'0 12px',cursor:'pointer',fontFamily:'inherit',fontSize:16}}>›</button>
+      </div>
+      <button onClick={()=>onConfirm(dest,y,m)} style={menuBtn}><Ic p={P.out} sz={15} col={C.pri}/> {confirmLabel} → „{(moveTargets.find(t=>t.key===dest)||{}).label}" · {MONTHS[m]} {y}</button>
+    </Sheet>
+  );
+}
+
+/* ══ Item row (Name + Betrag + kompaktes ⋮-Dropdown) ══ */
+function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, dragHandleProps, dragging, dragOver}) {
+  const [menu,setMenu]=useState(null);   // {top,bottom,right}
+  const [dlg,setDlg]=useState(null);     // 'note'|'file'|'range'|'move'
   const [mvDest,setMvDest]=useState((moveTargets&&moveTargets[0]&&moveTargets[0].key)||'');
   const [mvY,setMvY]=useState(curY);
   const [mvM,setMvM]=useState(curM);
@@ -226,138 +317,182 @@ function ItemRow({item, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLas
   };
   const chip=(icon,col,label,onClick)=>(<span onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:4,background:C.surf2,color:col,borderRadius:6,padding:'3px 8px',fontSize:11,fontWeight:500,whiteSpace:'nowrap',cursor:onClick?'pointer':'default'}}><Ic p={icon} sz={11} col={col}/>{label}</span>);
   const menuBtn={display:'flex',alignItems:'center',gap:8,width:'100%',background:C.surf2,border:'none',borderRadius:10,padding:'10px 12px',fontSize:13,color:C.txt,cursor:'pointer',fontFamily:'inherit',marginTop:8,textAlign:'left'};
+  const mItem=(icon,label,onClick,col)=>(<button onClick={onClick} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:col||C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={icon} sz={16} col={col||C.sub}/> <span>{label}</span></button>);
+
+  const openMenu=(e)=>{
+    const r=e.currentTarget.getBoundingClientRect();
+    const up=(r.bottom+300)>window.innerHeight;
+    setMenu({ right:Math.max(8, window.innerWidth-r.right), top:up?null:(r.bottom+6), bottom:up?(window.innerHeight-r.top+6):null });
+  };
 
   return (
-    <div style={{borderBottom:'1px solid '+C.sep}}>
+    <div style={{borderBottom:'1px solid '+C.sep, borderTop:dragOver?('2px solid '+C.pri):'2px solid transparent', opacity:dragging?0.4:1, background:dragging?C.surf2:'transparent'}}>
       <div style={{display:'flex',gap:8,alignItems:'center',padding:'9px 0',minHeight:42}}>
+        {selMode ? (
+          <button onClick={()=>onToggleSelect&&onToggleSelect()} title="Auswählen" style={{width:24,height:24,flexShrink:0,borderRadius:6,border:'1.5px solid '+(selected?C.pri:C.bdrM),background:selected?C.pri:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>
+            {selected && <Ic p={P.check} sz={14} col={C.priTxt}/>}
+          </button>
+        ) : (
+          <span {...(dragHandleProps||{})} title="Zum Sortieren ziehen" style={{flexShrink:0,width:20,height:30,display:'flex',alignItems:'center',justifyContent:'center',cursor:'grab',color:C.mut,touchAction:'none'}}><Ic p={P.grip} sz={16} col={C.mut}/></span>
+        )}
         <input value={item.name} placeholder="Bezeichnung…" onChange={e=>onUpdate(item.id,'name',e.target.value)}
           style={{...SI,flex:1,width:'auto',textAlign:'left',fontSize:14}} />
         <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...SI,width:84,...NUM}} />
         <span style={{fontSize:12,color:C.mut,width:12,flexShrink:0}}>€</span>
-        {/* Jeden-Monat-Schalter — immer sichtbar, klickbar (grau = aus, gelb = an) */}
-        <button onClick={()=>onToggleRecurring&&onToggleRecurring()}
-          title={item.recurring?'Jeden Monat aktiv — Betrag gilt für alle Monate. Klicken zum Ausschalten.':'Nur dieser Monat — klicken, damit der Betrag für jeden Monat gilt'}
-          style={{width:24,height:24,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,
-            background:item.recurring?C.ambL:'transparent',
-            display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <Ic p={P.repeat} sz={13} col={item.recurring?C.amb:C.mut}/>
-        </button>
-        <button onClick={()=>setMenuOpen(true)} title="Optionen" style={{
-          background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,
-          width:26,height:26,borderRadius:6,fontSize:18,lineHeight:1,fontFamily:'inherit',
-          display:'flex',alignItems:'center',justifyContent:'center',
-        }}>⋮</button>
+        {!selMode && (
+          <button onClick={()=>onToggleRecurring&&onToggleRecurring()}
+            title={item.recurring?'Jeden Monat aktiv — Betrag gilt für alle Monate. Klicken zum Ausschalten.':'Nur dieser Monat — klicken, damit der Betrag für jeden Monat gilt'}
+            style={{width:24,height:24,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,
+              background:item.recurring?C.ambL:'transparent',display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <Ic p={P.repeat} sz={13} col={item.recurring?C.amb:C.mut}/>
+          </button>
+        )}
+        {!selMode && (
+          <button onClick={openMenu} title="Optionen" style={{
+            background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,
+            width:26,height:26,borderRadius:6,fontSize:18,lineHeight:1,fontFamily:'inherit',
+            display:'flex',alignItems:'center',justifyContent:'center',
+          }}>⋮</button>
+        )}
         <input type="file" ref={fileRef} onChange={handleFile} style={{display:'none'}} accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt" />
       </div>
-      {(hasFrom||hasUntil||hasNote||hasFile) && (
-        <div style={{display:'flex',flexWrap:'wrap',gap:5,padding:'0 0 9px 2px',marginTop:-3}}>
-          {(hasFrom||hasUntil) && chip(P.cal,C.sub,rangeLabel, ()=>setMenuOpen(true))}
-          {hasNote && chip(P.note,C.mut,'Notiz', ()=>setMenuOpen(true))}
-          {hasFile && chip(P.clip,C.mut,'Datei', ()=>setMenuOpen(true))}
+      {(hasFrom||hasUntil||hasNote||hasFile) && !selMode && (
+        <div style={{display:'flex',flexWrap:'wrap',gap:5,padding:'0 0 9px 28px',marginTop:-3}}>
+          {(hasFrom||hasUntil) && chip(P.cal,C.sub,rangeLabel, ()=>setDlg('range'))}
+          {hasNote && chip(P.note,C.mut,'Notiz', ()=>setDlg('note'))}
+          {hasFile && chip(P.clip,C.mut,'Datei', ()=>setDlg('file'))}
         </div>
       )}
 
-      {menuOpen && (
-        <div onClick={()=>setMenuOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'20px 22px',maxWidth:400,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-              <div style={{fontSize:16,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.name||'Zeile'}</div>
-              <button onClick={()=>setMenuOpen(false)} title="Schließen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:22,lineHeight:1,padding:'0 2px'}}>×</button>
-            </div>
-
-            {onEditDetails && (
-              <button onClick={()=>{setMenuOpen(false); onEditDetails(item.id);}} style={{...menuBtn,background:C.priL,color:C.pri,fontWeight:600}}>
-                <Ic p={P.brief} sz={15} col={C.pri}/> <span>Kundendetails (Vertrag, Kontakt)…</span>
-              </button>
-            )}
-
-
-            <div style={{background:C.surf2,borderRadius:10,padding:'12px',marginTop:8}}>
-              <div style={{fontSize:13,fontWeight:600,marginBottom:6,display:'flex',alignItems:'center',gap:6}}><Ic p={P.cal} sz={14} col={C.sub}/> Zeitraum (von – bis)</div>
-              <div style={{fontSize:11,color:C.mut,marginBottom:10,lineHeight:1.5}}>„von" trägt diesen Posten rückwirkend in alle Monate ab dem Startmonat ein (gleicher Betrag je Monat). „bis" begrenzt das Ende. Außerhalb wird er weder angezeigt noch gezählt.</div>
-              <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:13}}>
-                <input type="checkbox" checked={hasFrom} onChange={e=>onSetRange&&onSetRange({from:e.target.checked?{y:curY,m:curM}:null,until:item.until||null})} />
-                von Monat
-              </label>
-              {hasFrom && (
-                <div style={{display:'flex',gap:8,margin:'8px 0 12px'}}>
-                  <select value={item.from.m} onChange={e=>onSetRange&&onSetRange({from:{...item.from,m:+e.target.value},until:item.until||null})} style={{...SHd,flex:1}}>
-                    {MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
-                  </select>
-                  <select value={item.from.y} onChange={e=>onSetRange&&onSetRange({from:{...item.from,y:+e.target.value},until:item.until||null})} style={{...SHd,width:92}}>
-                    {years.map(y=><option key={y} value={y}>{y}</option>)}
-                  </select>
-                </div>
-              )}
-              <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:13}}>
-                <input type="checkbox" checked={hasUntil} onChange={e=>onSetRange&&onSetRange({from:item.from||null,until:e.target.checked?{y:curY,m:curM}:null})} />
-                bis Monat
-              </label>
-              {hasUntil && (
-                <div style={{display:'flex',gap:8,marginTop:8}}>
-                  <select value={item.until.m} onChange={e=>onSetRange&&onSetRange({from:item.from||null,until:{...item.until,m:+e.target.value}})} style={{...SHd,flex:1}}>
-                    {MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
-                  </select>
-                  <select value={item.until.y} onChange={e=>onSetRange&&onSetRange({from:item.from||null,until:{...item.until,y:+e.target.value}})} style={{...SHd,width:92}}>
-                    {years.map(y=><option key={y} value={y}>{y}</option>)}
-                  </select>
-                </div>
-              )}
-            </div>
-
-            <div style={{fontSize:12,fontWeight:600,color:C.sub,margin:'14px 0 6px',display:'flex',alignItems:'center',gap:6}}><Ic p={P.note} sz={13} col={C.sub}/> Notiz</div>
-            <textarea value={item.note||''} onChange={e=>onUpdate(item.id,'note',e.target.value)} placeholder="Notiz…" rows={2}
-              style={{width:'100%',background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit',resize:'vertical'}} />
-
-            <div style={{fontSize:12,fontWeight:600,color:C.sub,margin:'14px 0 6px',display:'flex',alignItems:'center',gap:6}}><Ic p={P.clip} sz={13} col={C.sub}/> Datei</div>
-            {hasFile ? (
-              <div style={{display:'flex',alignItems:'center',gap:8,background:C.surf2,borderRadius:8,padding:'8px 10px'}}>
-                {item.filePath ? <button onClick={()=>onOpenFile&&onOpenFile(item.filePath,item.fileName)} style={{background:'none',border:'none',color:C.pri,fontSize:13,cursor:'pointer',fontFamily:'inherit',padding:0,flex:1,textAlign:'left',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.fileName}</button>
-                  : <a href={item.fileData} download={item.fileName} style={{color:C.pri,fontSize:13,flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.fileName}</a>}
-                <button onClick={()=>{ const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onUpdate(item.id,'__file__',{filePath:null,fileData:null,fileName:''}); }; askConfirm?askConfirm('Datei „'+item.fileName+'" entfernen? Sie wird auch aus dem Online-Speicher gelöscht.',run):run(); }} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:15,lineHeight:1}}>×</button>
-              </div>
-            ) : (
-              <button onClick={()=>fileRef.current.click()} style={{...menuBtn,marginTop:0,justifyContent:'center',color:C.sub}}>+ Datei anhängen</button>
-            )}
-
-            {moveTargets && onMoveItem && (
-              <div style={{background:C.surf2,borderRadius:10,padding:'12px',marginTop:14}}>
-                <div style={{fontSize:13,fontWeight:600,marginBottom:6,display:'flex',alignItems:'center',gap:6}}><Ic p={P.out} sz={14} col={C.sub}/> Verschieben</div>
-                <div style={{fontSize:11,color:C.mut,marginBottom:10,lineHeight:1.5}}>Verschiebt diesen Posten in einen anderen Bereich und/oder Monat. Standard ist der aktuelle Monat.</div>
-                <div style={{fontSize:11,color:C.sub,marginBottom:4}}>Bereich</div>
-                <select value={mvDest} onChange={e=>setMvDest(e.target.value)} style={{...SS,marginBottom:10}}>
-                  {moveTargets.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}
-                </select>
-                <div style={{fontSize:11,color:C.sub,marginBottom:4}}>Monat</div>
-                <div style={{display:'flex',gap:8,marginBottom:10}}>
-                  <button onClick={()=>{ let m=mvM-1,y=mvY; if(m<0){m=11;y--;} setMvM(m);setMvY(y); }} title="Monat zurück" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'0 12px',cursor:'pointer',fontFamily:'inherit',fontSize:16}}>‹</button>
-                  <select value={mvM} onChange={e=>setMvM(+e.target.value)} style={{...SS,flex:1}}>
-                    {MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
-                  </select>
-                  <select value={mvY} onChange={e=>setMvY(+e.target.value)} style={{...SS,width:96}}>
-                    {years.map(y=><option key={y} value={y}>{y}</option>)}
-                  </select>
-                  <button onClick={()=>{ let m=mvM+1,y=mvY; if(m>11){m=0;y++;} setMvM(m);setMvY(y); }} title="Monat vor" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'0 12px',cursor:'pointer',fontFamily:'inherit',fontSize:16}}>›</button>
-                </div>
-                <button onClick={()=>{ onMoveItem(mvDest,mvY,mvM); setMenuOpen(false); }}
-                  style={{...menuBtn,marginTop:0,justifyContent:'center',background:C.priL,color:C.pri,fontWeight:600}}>
-                  <Ic p={P.out} sz={14} col={C.pri}/> Nach „{(moveTargets.find(t=>t.key===mvDest)||{}).label}" · {MONTHS[mvM]} {mvY}
-                </button>
-              </div>
-            )}
-
-            <div style={{display:'flex',gap:8,marginTop:14}}>
-              <button onClick={()=>onMoveUp&&onMoveUp()} disabled={isFirst} style={{...menuBtn,marginTop:0,flex:1,justifyContent:'center',opacity:isFirst?0.4:1,cursor:isFirst?'default':'pointer'}}><Ic p={P.up} sz={13} col={C.sub}/> Hoch</button>
-              <button onClick={()=>onMoveDown&&onMoveDown()} disabled={isLast} style={{...menuBtn,marginTop:0,flex:1,justifyContent:'center',opacity:isLast?0.4:1,cursor:isLast?'default':'pointer'}}><Ic p={P.down} sz={13} col={C.sub}/> Runter</button>
-            </div>
-
-            <button onClick={()=>{ const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id); setMenuOpen(false); }; askConfirm?askConfirm('Zeile „'+(item.name||'ohne Bezeichnung')+'" wirklich löschen?'+(hasFile?' Die angehängte Datei wird ebenfalls entfernt.':''),run):run(); }}
-              style={{...menuBtn,marginTop:14,background:'rgba(255,90,95,0.12)',color:C.red,justifyContent:'center',fontWeight:600}}>
-              <Ic p={P.trash} sz={14} col={C.red}/> Zeile löschen
-            </button>
+      {/* Kompaktes Dropdown */}
+      {menu && (
+        <div onClick={()=>setMenu(null)} style={{position:'fixed',inset:0,zIndex:110}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',right:menu.right,top:menu.top!=null?menu.top:undefined,bottom:menu.bottom!=null?menu.bottom:undefined,width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+            {onEditDetails && mItem(P.brief,'Kundendetails…',()=>{setMenu(null);onEditDetails(item.id);},C.pri)}
+            {mItem(P.note, hasNote?'Notiz bearbeiten':'Notiz', ()=>{setMenu(null);setDlg('note');})}
+            {mItem(P.clip, hasFile?'Datei':'Datei anhängen', ()=>{setMenu(null);setDlg('file');})}
+            {onSetRange && mItem(P.cal,'Zeitraum (von–bis)',()=>{setMenu(null);setDlg('range');})}
+            {onMoveItem && mItem(P.out,'Verschieben…',()=>{setMenu(null);setDlg('move');})}
+            <div style={{height:1,background:C.sep,margin:'4px 8px'}}/>
+            {mItem(P.trash,'Löschen',()=>{ setMenu(null); const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id); }; askConfirm?askConfirm('Zeile „'+(item.name||'ohne Bezeichnung')+'" wirklich löschen?'+(hasFile?' Die angehängte Datei wird ebenfalls entfernt.':''),run):run(); },C.red)}
           </div>
         </div>
       )}
+
+      {/* Notiz */}
+      {dlg==='note' && (
+        <Sheet title={(item.name||'Zeile')+' · Notiz'} onClose={()=>setDlg(null)}>
+          <textarea autoFocus value={item.note||''} onChange={e=>onUpdate(item.id,'note',e.target.value)} placeholder="Notiz…" rows={4}
+            style={{width:'100%',background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit',resize:'vertical'}} />
+          <button onClick={()=>setDlg(null)} style={{...menuBtn,justifyContent:'center',background:C.priL,color:C.pri,fontWeight:600,marginTop:12}}>Fertig</button>
+        </Sheet>
+      )}
+
+      {/* Datei */}
+      {dlg==='file' && (
+        <Sheet title={(item.name||'Zeile')+' · Datei'} onClose={()=>setDlg(null)}>
+          {hasFile ? (
+            <div style={{display:'flex',alignItems:'center',gap:8,background:C.surf2,borderRadius:8,padding:'10px 12px'}}>
+              {item.filePath ? <button onClick={()=>onOpenFile&&onOpenFile(item.filePath,item.fileName)} style={{background:'none',border:'none',color:C.pri,fontSize:14,cursor:'pointer',fontFamily:'inherit',padding:0,flex:1,textAlign:'left',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.fileName}</button>
+                : <a href={item.fileData} download={item.fileName} style={{color:C.pri,fontSize:14,flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.fileName}</a>}
+              <button onClick={()=>{ const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onUpdate(item.id,'__file__',{filePath:null,fileData:null,fileName:''}); setDlg(null); }; askConfirm?askConfirm('Datei „'+item.fileName+'" entfernen? Sie wird auch aus dem Online-Speicher gelöscht.',run):run(); }} style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:18,lineHeight:1}}>×</button>
+            </div>
+          ) : (
+            <button onClick={()=>fileRef.current.click()} style={{...menuBtn,marginTop:0,justifyContent:'center',color:C.pri,background:C.priL,fontWeight:600}}>+ Datei anhängen</button>
+          )}
+        </Sheet>
+      )}
+
+      {/* Zeitraum */}
+      {dlg==='range' && onSetRange && (
+        <Sheet title={(item.name||'Zeile')+' · Zeitraum'} onClose={()=>setDlg(null)}>
+          <div style={{fontSize:12,color:C.mut,marginBottom:12,lineHeight:1.5}}>„von" trägt diesen Posten rückwirkend in alle Monate ab dem Startmonat ein (gleicher Betrag je Monat). „bis" begrenzt das Ende. Außerhalb wird er weder angezeigt noch gezählt.</div>
+          <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:14}}>
+            <input type="checkbox" checked={hasFrom} onChange={e=>onSetRange({from:e.target.checked?{y:curY,m:curM}:null,until:item.until||null})} /> von Monat
+          </label>
+          {hasFrom && (
+            <div style={{display:'flex',gap:8,margin:'8px 0 12px'}}>
+              <select value={item.from.m} onChange={e=>onSetRange({from:{...item.from,m:+e.target.value},until:item.until||null})} style={{...SS,flex:1}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
+              <select value={item.from.y} onChange={e=>onSetRange({from:{...item.from,y:+e.target.value},until:item.until||null})} style={{...SS,width:100}}>{years.map(y=><option key={y} value={y}>{y}</option>)}</select>
+            </div>
+          )}
+          <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:14,marginTop:8}}>
+            <input type="checkbox" checked={hasUntil} onChange={e=>onSetRange({from:item.from||null,until:e.target.checked?{y:curY,m:curM}:null})} /> bis Monat
+          </label>
+          {hasUntil && (
+            <div style={{display:'flex',gap:8,marginTop:8}}>
+              <select value={item.until.m} onChange={e=>onSetRange({from:item.from||null,until:{...item.until,m:+e.target.value}})} style={{...SS,flex:1}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
+              <select value={item.until.y} onChange={e=>onSetRange({from:item.from||null,until:{...item.until,y:+e.target.value}})} style={{...SS,width:100}}>{years.map(y=><option key={y} value={y}>{y}</option>)}</select>
+            </div>
+          )}
+          <button onClick={()=>setDlg(null)} style={{...menuBtn,justifyContent:'center',background:C.priL,color:C.pri,fontWeight:600,marginTop:14}}>Fertig</button>
+        </Sheet>
+      )}
+
+      {/* Verschieben */}
+      {dlg==='move' && onMoveItem && (
+        <Sheet title={(item.name||'Zeile')+' · Verschieben'} onClose={()=>setDlg(null)}>
+          <div style={{fontSize:12,color:C.mut,marginBottom:12,lineHeight:1.5}}>Verschiebt diesen Posten in einen anderen Bereich und/oder Monat. Standard ist der aktuelle Monat.</div>
+          <div style={{fontSize:11,color:C.sub,marginBottom:4}}>Bereich</div>
+          <select value={mvDest} onChange={e=>setMvDest(e.target.value)} style={{...SS,marginBottom:12}}>{moveTargets.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
+          <div style={{fontSize:11,color:C.sub,marginBottom:4}}>Monat</div>
+          <div style={{display:'flex',gap:8,marginBottom:14}}>
+            <button onClick={()=>{let m=mvM-1,y=mvY;if(m<0){m=11;y--;}setMvM(m);setMvY(y);}} title="Monat zurück" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'0 12px',cursor:'pointer',fontFamily:'inherit',fontSize:16}}>‹</button>
+            <select value={mvM} onChange={e=>setMvM(+e.target.value)} style={{...SS,flex:1}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
+            <select value={mvY} onChange={e=>setMvY(+e.target.value)} style={{...SS,width:100}}>{years.map(y=><option key={y} value={y}>{y}</option>)}</select>
+            <button onClick={()=>{let m=mvM+1,y=mvY;if(m>11){m=0;y++;}setMvM(m);setMvY(y);}} title="Monat vor" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'0 12px',cursor:'pointer',fontFamily:'inherit',fontSize:16}}>›</button>
+          </div>
+          <button onClick={()=>{onMoveItem(mvDest,mvY,mvM);setDlg(null);}} style={{...menuBtn,justifyContent:'center',background:C.priL,color:C.pri,fontWeight:600,marginTop:0}}><Ic p={P.out} sz={14} col={C.pri}/> Nach „{(moveTargets.find(t=>t.key===mvDest)||{}).label}" · {MONTHS[mvM]} {mvY}</button>
+        </Sheet>
+      )}
+    </div>
+  );
+}
+
+/* ══ Sortier-/Auswahl-Liste (Drag & Drop + Mehrfachauswahl) ══ */
+function ItemList({items, srcKey, updFn, delFn, recurFn, rangeFn, editFn, folderPath, moveTargets, moveItemFn, onReorder, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, curY, curM}) {
+  const dragRef=useRef(null), overRef=useRef(null);
+  const [,force]=useState(0); const rr=()=>force(n=>n+1);
+  const rowEls=useRef({});
+  const ids=items.map(i=>i.id);
+  const startDrag=(e,id)=>{
+    e.preventDefault();
+    dragRef.current=id; overRef.current=id; rr();
+    const move=(ev)=>{
+      const cy=ev.touches?ev.touches[0].clientY:ev.clientY;
+      let t=null;
+      items.forEach(it=>{ const el=rowEls.current[it.id]; if(!el)return; const r=el.getBoundingClientRect(); if(cy>=r.top&&cy<=r.bottom)t=it.id; });
+      if(t&&t!==overRef.current){ overRef.current=t; rr(); }
+    };
+    const up=()=>{
+      document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up);
+      const from=dragRef.current, to=overRef.current; dragRef.current=null; overRef.current=null;
+      if(from&&to&&from!==to){ const arr=[...ids]; const fi=arr.indexOf(from), ti=arr.indexOf(to); arr.splice(fi,1); arr.splice(ti,0,from); onReorder&&onReorder(arr); }
+      rr();
+    };
+    document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
+  };
+  return (
+    <div>
+      {items.map(item=>(
+        <div key={item.id} ref={el=>{rowEls.current[item.id]=el;}}>
+          <ItemRow item={item}
+            onUpdate={updFn} onDelete={delFn}
+            folderPath={folderPath}
+            onUploadFile={onUploadFile} onOpenFile={onOpenFile} onDeleteFile={onDeleteFile}
+            onToggleRecurring={()=>recurFn&&recurFn(item)}
+            onSetRange={rangeFn?(range)=>rangeFn(item,range):null}
+            curY={curY} curM={curM}
+            askConfirm={askConfirm}
+            onEditDetails={editFn}
+            moveTargets={moveTargets} onMoveItem={moveItemFn?((destKey,ty,tm)=>moveItemFn(srcKey,item,destKey,ty,tm)):null}
+            selMode={selMode} selected={selIds&&selIds.includes(item.id)} onToggleSelect={()=>onToggleSel&&onToggleSel(item.id)}
+            dragHandleProps={{onPointerDown:(e)=>startDrag(e,item.id)}}
+            dragging={dragRef.current===item.id}
+            dragOver={overRef.current===item.id && dragRef.current && dragRef.current!==item.id}
+          />
+        </div>
+      ))}
     </div>
   );
 }
@@ -585,6 +720,14 @@ function App({session}) {
   const [storageLoading,setStorageLoading]= useState(false);
   const isMobile = useIsMobile(900);
   const [navOpen,setNavOpen]= useState(false);
+  const [selKey,setSelKey]= useState(null);      // Bereich im Auswahl-Modus
+  const [selIds,setSelIds]= useState([]);        // ausgewählte Zeilen-IDs
+  const [bulkMove,setBulkMove]= useState(null);   // {srcKey, ids}
+  const [draftSel,setDraftSel]= useState([]);     // ausgewählte Entwürfe (Import)
+  const [assignOpen,setAssignOpen]= useState(false);
+  const [importBusy,setImportBusy]= useState(false);
+  const toggleSel = id => setSelIds(s=> s.includes(id)? s.filter(x=>x!==id) : [...s,id]);
+  const exitSel = () => { setSelKey(null); setSelIds([]); };
   const askConfirm = (message, onConfirm, title) => setConfirmState({message, onConfirm, title: title||'Wirklich löschen?'});
   const savedRef  = useRef(true);
   const lastSigRef = useRef('');
@@ -677,6 +820,7 @@ function App({session}) {
     setData(prev=>{
       const nd = JSON.parse(JSON.stringify(prev));
       Object.keys(nd).forEach(y=>{
+        if(!/^\d+$/.test(y)) return;
         Object.keys(nd[y]||{}).forEach(m=>{
           const md = nd[y][m];
           if(!md || !md.props) return;
@@ -702,6 +846,7 @@ function App({session}) {
     setData(prev=>{
       const nd = JSON.parse(JSON.stringify(prev));
       Object.keys(nd).forEach(y=>{
+        if(!/^\d+$/.test(y)) return;
         Object.keys(nd[y]||{}).forEach(m=>{
           const md = nd[y][m];
           if(md && md.unternehmen && Array.isArray(md.unternehmen.items)){
@@ -960,7 +1105,7 @@ function App({session}) {
     setData(prev=>{
       const nd=JSON.parse(JSON.stringify(prev));
       const removeFrom=(y,m)=>{ if(!nd[y]||!nd[y][m])return; const mo2=nd[y][m]; setListAt(mo2,srcLoc,getListAt(mo2,srcLoc).filter(i=>i.id!==item.id)); };
-      if(item.recurring){ Object.keys(nd).forEach(y=>Object.keys(nd[y]||{}).forEach(m=>removeFrom(y,m))); }
+      if(item.recurring){ Object.keys(nd).forEach(y=>{ if(!/^\d+$/.test(y))return; Object.keys(nd[y]||{}).forEach(m=>removeFrom(y,m)); }); }
       else removeFrom(yr,mo);
       if(!nd[ty]) nd[ty]={};
       if(!nd[ty][tm]) nd[ty][tm]=emptyMonth();
@@ -969,6 +1114,63 @@ function App({session}) {
       return nd;
     });
     setToast('„'+(item.name||'Posten')+'" → '+moveLabel(destKey)+' · '+MONTHS[tm]+' '+ty);
+  };
+  /* Mehrere Posten verschieben */
+  const moveItems = (srcKey, items, destKey, ty, tm) => {
+    const srcLoc=locOf(srcKey), dstLoc=locOf(destKey);
+    if(!srcLoc||!dstLoc||!items.length) return;
+    const ids=items.map(i=>i.id);
+    const recurIds=new Set(items.filter(i=>i.recurring).map(i=>i.id));
+    setData(prev=>{
+      const nd=JSON.parse(JSON.stringify(prev));
+      if(recurIds.size){ Object.keys(nd).forEach(y=>{ if(!/^\d+$/.test(y))return; Object.keys(nd[y]||{}).forEach(m=>{ const mo2=nd[y][m]; setListAt(mo2,srcLoc,getListAt(mo2,srcLoc).filter(i=>!recurIds.has(i.id))); }); }); }
+      if(nd[yr]&&nd[yr][mo]){ const mo2=nd[yr][mo]; setListAt(mo2,srcLoc,getListAt(mo2,srcLoc).filter(i=>!ids.includes(i.id))); }
+      if(!nd[ty]) nd[ty]={};
+      if(!nd[ty][tm]) nd[ty][tm]=emptyMonth();
+      const copies=items.map(it=>({...it,id:uid(),recurring:false,from:null,until:null}));
+      setListAt(nd[ty][tm],dstLoc,[...getListAt(nd[ty][tm],dstLoc),...copies]);
+      return nd;
+    });
+    setToast(items.length+' Posten → '+moveLabel(destKey)+' · '+MONTHS[tm]+' '+ty);
+  };
+  /* Mehrere Posten löschen (aktueller Monat) */
+  const bulkDelete = (srcKey, ids) => {
+    const loc=locOf(srcKey); if(!loc) return;
+    upd(m=>{ const c=JSON.parse(JSON.stringify(m)); setListAt(c,loc,getListAt(c,loc).filter(i=>!ids.includes(i.id))); return c; });
+  };
+  /* Reihenfolge per Drag & Drop */
+  const reorderArr = (arr,ids) => { const map=new Map(arr.map(i=>[i.id,i])); const out=ids.map(id=>map.get(id)).filter(Boolean); arr.forEach(i=>{ if(!ids.includes(i.id)) out.push(i); }); return out; };
+  const reorderList = (srcKey,ids) => { const loc=locOf(srcKey); if(!loc) return; upd(m=>{ const c=JSON.parse(JSON.stringify(m)); setListAt(c,loc,reorderArr(getListAt(c,loc),ids)); return c; }); };
+
+  /* ── Bankauszug-Entwürfe (Import) ── */
+  const drafts = data.drafts || [];
+  const setDrafts = updater => setData(prev=>({...prev, drafts: updater(prev.drafts||[])}));
+  const updateDraft = (id,patch) => setDrafts(ds=>ds.map(d=>d.id===id?{...d,...patch}:d));
+  const delDraft = id => { setDrafts(ds=>ds.filter(d=>d.id!==id)); setDraftSel(s=>s.filter(x=>x!==id)); };
+  const importPdf = async file => {
+    setImportBusy(true);
+    try{
+      const lines = await pdfToLines(file);
+      const parsed = parseStatement(lines);
+      if(!parsed.length){ setToast('Keine Umsätze erkannt. Ist es ein Text-PDF (kein Scan)?'); }
+      else { setDrafts(ds=>[...parsed,...ds]); setToast(parsed.length+' Umsätze als Entwurf erstellt'); }
+    }catch(e){ setToast('PDF konnte nicht gelesen werden: '+(e.message||e)); }
+    setImportBusy(false);
+  };
+  const assignDrafts = (ids, destKey, ty, tm) => {
+    const dlist = drafts.filter(d=>ids.includes(d.id));
+    const dstLoc=locOf(destKey); if(!dstLoc||!dlist.length) return;
+    setData(prev=>{
+      const nd=JSON.parse(JSON.stringify(prev));
+      if(!nd[ty]) nd[ty]={};
+      if(!nd[ty][tm]) nd[ty][tm]=emptyMonth();
+      const copies=dlist.map(d=>({...newItem(d.name),amount:num(d.amount),id:uid()}));
+      setListAt(nd[ty][tm],dstLoc,[...getListAt(nd[ty][tm],dstLoc),...copies]);
+      nd.drafts=(nd.drafts||[]).filter(d=>!ids.includes(d.id));
+      return nd;
+    });
+    setDraftSel([]);
+    setToast(dlist.length+' → '+moveLabel(destKey)+' · '+MONTHS[tm]+' '+ty);
   };
 
   /* Derived */
@@ -1092,35 +1294,45 @@ function App({session}) {
     {id:'immo',   label:'Immobilien',   icon:P.house},
     {id:'unter',  label:names.unternehmen, icon:P.brief},
     {id:'privat', label:'Privat',       icon:P.prson},
+    {id:'import', label:'Import',       icon:P.upload},
     {id:'kal',    label:'Events',       icon:P.bed},
     {id:'yr',     label:'Jahresübersicht', icon:P.cal},
     {id:'steuer', label:'Steuer',       icon:P.doc},
   ];
 
   /* Reusable items renderer */
+  const toolBtn = {background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:8,padding:'5px 11px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'};
   const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn, rangeFn, srcKey) => {
     const shown = (items||[]).filter(it=>activeInMonth(it, yr, mo));
-    return shown.map((item,idx) => (
-      <ItemRow key={item.id} item={item}
-        onUpdate={updFn}
-        onDelete={delFn}
-        onMoveUp={()=>moveFn(item.id,-1)}
-        onMoveDown={()=>moveFn(item.id,1)}
-        isFirst={idx===0}
-        isLast={idx===shown.length-1}
-        folderPath={folderPath}
-        onUploadFile={uploadFile}
-        onOpenFile={openFile}
-        onDeleteFile={deleteFile}
-        onToggleRecurring={()=>recurFn && recurFn(item)}
-        onSetRange={rangeFn?(range)=>rangeFn(item,range):null}
-        curY={yr} curM={mo}
-        askConfirm={askConfirm}
-        onEditDetails={editFn}
-        moveTargets={srcKey?moveTargets:null}
-        onMoveItem={srcKey?((destKey,ty,tm)=>moveItem(srcKey,item,destKey,ty,tm)):null}
-      />
-    ));
+    const inSel = srcKey && selKey===srcKey;
+    const shownIds = shown.map(i=>i.id);
+    const allSel = shownIds.length>0 && selIds.length===shownIds.length;
+    return (
+      <>
+        {srcKey && (
+          <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:6,minHeight:28}}>
+            {!inSel && shown.length>0 && (
+              <button onClick={()=>{setSelKey(srcKey);setSelIds([]);}} style={{...toolBtn,marginLeft:'auto'}}>Auswählen</button>
+            )}
+            {inSel && (<>
+              <span style={{fontSize:12,color:C.sub,marginRight:'auto'}}>{selIds.length} ausgewählt</span>
+              <button onClick={()=>setSelIds(allSel?[]:shownIds)} style={toolBtn}>{allSel?'Keine':'Alle'}</button>
+              <button disabled={!selIds.length} onClick={()=>setBulkMove({srcKey,ids:selIds})} style={{...toolBtn,color:C.pri,opacity:selIds.length?1:0.4}}>Verschieben</button>
+              <button disabled={!selIds.length} onClick={()=>{ const ids=[...selIds]; askConfirm(ids.length+' Zeilen wirklich löschen?',()=>{ bulkDelete(srcKey,ids); exitSel(); }); }} style={{...toolBtn,color:C.red,opacity:selIds.length?1:0.4}}>Löschen</button>
+              <button onClick={exitSel} style={{...toolBtn,color:C.txt}}>Fertig</button>
+            </>)}
+          </div>
+        )}
+        <ItemList items={shown} srcKey={srcKey}
+          updFn={updFn} delFn={delFn} recurFn={recurFn} rangeFn={rangeFn} editFn={editFn}
+          folderPath={folderPath}
+          moveTargets={srcKey?moveTargets:null} moveItemFn={srcKey?moveItem:null}
+          onReorder={srcKey?(ids=>reorderList(srcKey,ids)):null}
+          selMode={inSel} selIds={selIds} onToggleSel={toggleSel}
+          onOpenFile={openFile} onUploadFile={uploadFile} onDeleteFile={deleteFile}
+          askConfirm={askConfirm} curY={yr} curM={mo} />
+      </>
+    );
   };
 
   const ResultBanner = ({label, sublabel, value}) => {
@@ -1562,6 +1774,65 @@ function App({session}) {
             </div>
           </>}
 
+          {/* ══ IMPORT (Bankauszug) ══ */}
+          {tab==='import' && (()=>{
+            const ein = drafts.filter(d=>d.kind==='ein');
+            const aus = drafts.filter(d=>d.kind==='aus');
+            const allIds = drafts.map(d=>d.id);
+            const allSel = allIds.length>0 && draftSel.length===allIds.length;
+            const draftRow = d => (
+              <div key={d.id} style={{display:'flex',gap:8,alignItems:'center',padding:'8px 0',borderBottom:'1px solid '+C.sep}}>
+                <button onClick={()=>setDraftSel(s=>s.includes(d.id)?s.filter(x=>x!==d.id):[...s,d.id])} style={{width:22,height:22,flexShrink:0,borderRadius:6,border:'1.5px solid '+(draftSel.includes(d.id)?C.pri:C.bdrM),background:draftSel.includes(d.id)?C.pri:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>{draftSel.includes(d.id)&&<Ic p={P.check} sz={13} col={C.priTxt}/>}</button>
+                <input value={d.name} onChange={e=>updateDraft(d.id,{name:e.target.value})} style={{...SI,flex:1,width:'auto',textAlign:'left',fontSize:14}} />
+                <input value={d.amount} onChange={e=>updateDraft(d.id,{amount:e.target.value})} inputMode="decimal" style={{...SI,width:74,...NUM}} />
+                <span style={{fontSize:12,color:C.mut,width:10,flexShrink:0}}>€</span>
+                <button onClick={()=>updateDraft(d.id,{kind:d.kind==='ein'?'aus':'ein'})} title="Einnahme/Ausgabe wechseln" style={{width:24,height:24,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,background:'transparent',display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.swap} sz={14} col={C.sub}/></button>
+                <button onClick={()=>delDraft(d.id)} title="Entwurf entfernen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',flexShrink:0,fontSize:17,lineHeight:1}}>×</button>
+              </div>
+            );
+            const col = (title,list,colr) => (
+              <div style={{...SC,flex:1,minWidth:isMobile?'auto':280}}>
+                <div style={{fontSize:12,fontWeight:600,color:colr,marginBottom:6,display:'flex',justifyContent:'space-between'}}><span>{title}</span><span style={{color:C.mut}}>{list.length}</span></div>
+                {list.length? list.map(draftRow) : <div style={{fontSize:13,color:C.mut,padding:'10px 0'}}>Noch nichts.</div>}
+              </div>
+            );
+            return (
+              <>
+                <div style={{marginBottom:18}}>
+                  <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Bankauszug-Import</div>
+                  <div style={{fontSize:13,color:C.sub}}>PDF hochladen → automatisch in Einnahmen/Ausgaben → einzeln/mehrere dem richtigen Konto zuordnen</div>
+                </div>
+
+                <div style={{...SC,marginBottom:16}}>
+                  <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'22px',border:'1.5px dashed '+C.surf3,borderRadius:14,cursor:'pointer',textAlign:'center'}}>
+                    <Ic p={P.upload} sz={26} col={C.pri}/>
+                    <div style={{fontSize:15,fontWeight:600,color:C.txt}}>{importBusy?'Wird gelesen…':'Bankauszug-PDF auswählen'}</div>
+                    <div style={{fontSize:12,color:C.mut,lineHeight:1.5}}>Nur Text-PDFs (keine Foto-Scans). Die Umsätze landen unten als Entwurf – nichts wird automatisch gebucht.</div>
+                    <input type="file" accept=".pdf,application/pdf" disabled={importBusy} onChange={e=>{const f=e.target.files[0]; if(f)importPdf(f); e.target.value='';}} style={{display:'none'}} />
+                  </label>
+                </div>
+
+                {drafts.length>0 && (
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:10}}>
+                    <span style={{fontSize:13,color:C.sub,marginRight:'auto'}}>{draftSel.length} von {drafts.length} ausgewählt</span>
+                    <button onClick={()=>setDraftSel(allSel?[]:allIds)} style={toolBtn}>{allSel?'Keine':'Alle'}</button>
+                    <button disabled={!draftSel.length} onClick={()=>setAssignOpen(true)} style={{...toolBtn,color:C.pri,opacity:draftSel.length?1:0.4}}>Zuordnen</button>
+                    <button onClick={()=>askConfirm('Alle Entwürfe verwerfen?',()=>{setDrafts(()=>[]);setDraftSel([]);})} style={{...toolBtn,color:C.red}}>Alle verwerfen</button>
+                  </div>
+                )}
+
+                {drafts.length>0 ? (
+                  <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
+                    {col('Einnahmen', ein, C.grn)}
+                    {col('Ausgaben', aus, C.txt)}
+                  </div>
+                ) : (
+                  <div style={{...SC,textAlign:'center',color:C.mut,fontSize:14,padding:'30px 24px'}}>Noch keine Entwürfe. Lade oben einen Bankauszug als PDF hoch.</div>
+                )}
+              </>
+            );
+          })()}
+
           {/* ══ JAHRESÜBERSICHT ══ */}
           {tab==='yr' && <>
             <div style={{marginBottom:24}}>
@@ -1814,6 +2085,20 @@ function App({session}) {
           </div>
         );
       })()}
+
+      {bulkMove && (
+        <TargetPicker title={bulkMove.ids.length+' Posten verschieben'} moveTargets={moveTargets} curY={yr} curM={mo}
+          confirmLabel="Verschieben"
+          onClose={()=>setBulkMove(null)}
+          onConfirm={(dest,ty,tm)=>{ const loc=locOf(bulkMove.srcKey); const arr=loc?getListAt(md,loc):[]; const items=arr.filter(i=>bulkMove.ids.includes(i.id)); moveItems(bulkMove.srcKey,items,dest,ty,tm); setBulkMove(null); exitSel(); }} />
+      )}
+
+      {assignOpen && (
+        <TargetPicker title={draftSel.length+' Umsätze zuordnen'} moveTargets={moveTargets} curY={yr} curM={mo}
+          confirmLabel="Zuordnen"
+          onClose={()=>setAssignOpen(false)}
+          onConfirm={(dest,ty,tm)=>{ assignDrafts(draftSel,dest,ty,tm); setAssignOpen(false); }} />
+      )}
 
       {confirmState && (
         <div onClick={()=>setConfirmState(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}}>
