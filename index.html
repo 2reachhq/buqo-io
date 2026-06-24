@@ -149,6 +149,18 @@ const SC  = {background:C.surf,borderRadius:20,padding:24,border:'1px solid '+C.
 const BVm = {background:C.priL,border:'none',color:C.pri,borderRadius:8,padding:'5px 12px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'};
 const BPrs= {background:C.priL,border:'none',color:C.pri,borderRadius:7,padding:'4px 9px',fontSize:11,fontWeight:500,cursor:'pointer',fontFamily:'inherit'};
 
+/* ══ Responsive: Mobile/Tablet erkennen ══ */
+function useIsMobile(bp){
+  const limit = bp||820;
+  const [m,setM]=useState(typeof window!=='undefined' ? window.innerWidth<limit : false);
+  useEffect(()=>{
+    const on=()=>setM(window.innerWidth<limit);
+    on(); window.addEventListener('resize',on); window.addEventListener('orientationchange',on);
+    return ()=>{ window.removeEventListener('resize',on); window.removeEventListener('orientationchange',on); };
+  },[limit]);
+  return m;
+}
+
 /* ══ SVG Icon paths ══ */
 const P = {
   grid:  'M3 3h7v7H3z M14 3h7v7h-7z M14 14h7v7h-7z M3 14h7v7H3z',
@@ -165,6 +177,8 @@ const P = {
   out:   'M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4 M16 17l5-5-5-5 M21 12H9',
   bed:   'M3 18v-5a3 3 0 013-3h12a3 3 0 013 3v5 M3 18h18 M3 13V8 M7 10V8h5v2',
   repeat:'M17 1l4 4-4 4 M3 11V9a4 4 0 014-4h14 M7 23l-4-4 4-4 M21 13v2a4 4 0 01-4 4H3',
+  menu:  'M3 6h18 M3 12h18 M3 18h18',
+  close: 'M18 6L6 18 M6 6l12 12',
 };
 
 /* ══ Icon component ══ */
@@ -540,6 +554,8 @@ function App({session}) {
   const [yrFilter,setYrFilter]= useState({immo:true,unter:true,privat:true});
   const [storageInfo,setStorageInfo]= useState(null);
   const [storageLoading,setStorageLoading]= useState(false);
+  const isMobile = useIsMobile(900);
+  const [navOpen,setNavOpen]= useState(false);
   const askConfirm = (message, onConfirm, title) => setConfirmState({message, onConfirm, title: title||'Wirklich löschen?'});
   const savedRef  = useRef(true);
   const lastSigRef = useRef('');
@@ -1063,34 +1079,48 @@ function App({session}) {
       {/* ═══ TOP BAR ═══ */}
       <header style={{
         flexShrink:0,background:C.surf,borderBottom:'1px solid '+C.bdr,
-        display:'flex',alignItems:'center',gap:18,padding:'0 20px',height:56,
+        display:'flex',alignItems:'center',gap:isMobile?10:18,padding:isMobile?'0 12px':'0 20px',height:56,
+        position:'relative',zIndex:40,
       }}>
-        {/* Logo — plain wordmark */}
-        <div style={{fontSize:19,fontWeight:700,color:C.txt,letterSpacing:'-0.03em',flexShrink:0}}>SP Finanz</div>
+        {/* Hamburger — nur mobil */}
+        {isMobile && (
+          <button onClick={()=>setNavOpen(o=>!o)} aria-label="Menü" style={{
+            display:'flex',alignItems:'center',justifyContent:'center',
+            background:navOpen?C.priL:C.surf2,border:'1px solid '+C.bdr,color:navOpen?C.pri:C.txt,
+            borderRadius:10,width:38,height:38,cursor:'pointer',flexShrink:0,
+          }}><Ic p={navOpen?P.close:P.menu} sz={19}/></button>
+        )}
 
-        {/* Nav items */}
-        <nav style={{display:'flex',alignItems:'center',gap:2,flex:1,overflowX:'auto'}}>
-          {NAV.map(({id,label,icon})=>{
-            const active = tab===id;
-            return (
-              <button key={id} onClick={()=>setTab(id)} style={{
-                display:'flex',alignItems:'center',gap:7,
-                padding:'7px 12px',borderRadius:9,border:'none',
-                background:active?'rgba(62,207,142,0.16)':'transparent',
-                color:active?C.pri:C.sub,
-                fontFamily:'inherit',fontSize:13,fontWeight:active?600:500,
-                cursor:'pointer',whiteSpace:'nowrap',flexShrink:0,
-              }}>
-                <span style={{opacity:active?1:0.7}}><Ic p={icon} sz={15}/></span>
-                <span>{label}</span>
-              </button>
-            );
-          })}
-        </nav>
+        {/* Logo — plain wordmark (Desktop) */}
+        {!isMobile && <div style={{fontSize:19,fontWeight:700,color:C.txt,letterSpacing:'-0.03em',flexShrink:0}}>SP Finanz</div>}
 
-        {/* Rückgängig + Date pickers + save status + logout */}
-        <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
-          {canUndo && (
+        {/* Nav items — inline nur Desktop */}
+        {!isMobile && (
+          <nav style={{display:'flex',alignItems:'center',gap:2,flex:1,overflowX:'auto'}}>
+            {NAV.map(({id,label,icon})=>{
+              const active = tab===id;
+              return (
+                <button key={id} onClick={()=>setTab(id)} style={{
+                  display:'flex',alignItems:'center',gap:7,
+                  padding:'7px 12px',borderRadius:9,border:'none',
+                  background:active?'rgba(62,207,142,0.16)':'transparent',
+                  color:active?C.pri:C.sub,
+                  fontFamily:'inherit',fontSize:13,fontWeight:active?600:500,
+                  cursor:'pointer',whiteSpace:'nowrap',flexShrink:0,
+                }}>
+                  <span style={{opacity:active?1:0.7}}><Ic p={icon} sz={15}/></span>
+                  <span>{label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        )}
+
+        {isMobile && <div style={{flex:1}} />}
+
+        {/* Monats-Navigation (+ Undo/Status/Logout auf Desktop) */}
+        <div style={{display:'flex',alignItems:'center',gap:isMobile?6:8,flexShrink:0}}>
+          {!isMobile && canUndo && (
             <button onClick={undo} title="Rückgängig (⌘Z)" style={{
               display:'flex',alignItems:'center',justifyContent:'center',
               background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,
@@ -1098,38 +1128,92 @@ function App({session}) {
               fontSize:14,lineHeight:1,
             }}>↩︎</button>
           )}
-          <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>‹</button>
-          <select value={mo} onChange={e=>setMo(+e.target.value)} style={SHd}>
+          <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:isMobile?'8px 10px':'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>‹</button>
+          <select value={mo} onChange={e=>setMo(+e.target.value)} style={{...SHd,padding:isMobile?'8px 8px':'6px 10px',fontSize:13}}>
             {MONTHS.map((m,i)=><option key={i} value={i}>{m}</option>)}
           </select>
-          <select value={yr} onChange={e=>setYr(+e.target.value)} style={SHd}>
+          <select value={yr} onChange={e=>setYr(+e.target.value)} style={{...SHd,padding:isMobile?'8px 8px':'6px 10px',fontSize:13}}>
             {[yr-1,yr,yr+1].map(y=><option key={y} value={y}>{y}</option>)}
           </select>
-          <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>›</button>
-          <span title={saved?'Gespeichert':'Speichern…'} style={{
-            fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,
-            display:'flex',alignItems:'center',gap:5,marginLeft:4,
-          }}>
-            <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,flexShrink:0,display:'inline-block'}} />
-            {saved?'Gespeichert':'Speichern…'}
-          </span>
-          <button onClick={()=>sb.auth.signOut()}
-            title={(session&&session.user&&session.user.email?session.user.email+' — ':'')+'Abmelden'}
-            style={{
-              display:'flex',alignItems:'center',gap:6,
-              background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,
-              borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',
-              fontSize:12,fontWeight:500,marginLeft:4,
+          <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:isMobile?'8px 10px':'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>›</button>
+          {!isMobile && (
+            <span title={saved?'Gespeichert':'Speichern…'} style={{
+              fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,
+              display:'flex',alignItems:'center',gap:5,marginLeft:4,
             }}>
-            <Ic p={P.out} sz={14}/>
-            <span>Abmelden</span>
-          </button>
+              <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,flexShrink:0,display:'inline-block'}} />
+              {saved?'Gespeichert':'Speichern…'}
+            </span>
+          )}
+          {!isMobile && (
+            <button onClick={()=>sb.auth.signOut()}
+              title={(session&&session.user&&session.user.email?session.user.email+' — ':'')+'Abmelden'}
+              style={{
+                display:'flex',alignItems:'center',gap:6,
+                background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,
+                borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',
+                fontSize:12,fontWeight:500,marginLeft:4,
+              }}>
+              <Ic p={P.out} sz={14}/>
+              <span>Abmelden</span>
+            </button>
+          )}
         </div>
       </header>
 
+      {/* ═══ MOBILE NAV-DRAWER ═══ */}
+      {isMobile && navOpen && (
+        <>
+          <div onClick={()=>setNavOpen(false)} style={{position:'fixed',top:56,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.55)',zIndex:30}} />
+          <div style={{
+            position:'fixed',top:56,left:0,right:0,zIndex:35,
+            background:C.surf,borderBottom:'1px solid '+C.bdr,
+            padding:'10px 12px 16px',boxShadow:'0 18px 44px rgba(0,0,0,0.55)',
+            maxHeight:'calc(100vh - 56px)',overflowY:'auto',
+          }}>
+            {NAV.map(({id,label,icon})=>{
+              const active = tab===id;
+              return (
+                <button key={id} onClick={()=>{setTab(id);setNavOpen(false);}} style={{
+                  display:'flex',alignItems:'center',gap:13,width:'100%',
+                  padding:'13px 14px',borderRadius:12,border:'none',marginBottom:2,
+                  background:active?'rgba(62,207,142,0.16)':'transparent',
+                  color:active?C.pri:C.txt,
+                  fontFamily:'inherit',fontSize:16,fontWeight:active?600:500,
+                  cursor:'pointer',textAlign:'left',
+                }}>
+                  <Ic p={icon} sz={20}/>
+                  <span>{label}</span>
+                </button>
+              );
+            })}
+            <div style={{borderTop:'1px solid '+C.sep,marginTop:10,paddingTop:12,display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
+              <span style={{fontSize:13,color:saved?C.mut:C.amb,fontWeight:500,display:'flex',alignItems:'center',gap:6}}>
+                <span style={{width:7,height:7,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}} />
+                {saved?'Gespeichert':'Speichern…'}
+              </span>
+              <div style={{display:'flex',gap:8}}>
+                {canUndo && (
+                  <button onClick={()=>{undo();}} style={{
+                    display:'flex',alignItems:'center',gap:6,
+                    background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,
+                    borderRadius:9,padding:'9px 13px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:500,
+                  }}>↩︎ <span>Rückgängig</span></button>
+                )}
+                <button onClick={()=>sb.auth.signOut()} style={{
+                  display:'flex',alignItems:'center',gap:6,
+                  background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,
+                  borderRadius:9,padding:'9px 13px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:500,
+                }}><Ic p={P.out} sz={15}/><span>Abmelden</span></button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ═══ CONTENT ═══ */}
-      <div style={{flex:1,overflowY:'auto',background:C.bg}}>
-        <div style={{padding:'28px 28px',maxWidth:1020,margin:'0 auto'}}>
+      <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg}}>
+        <div style={{padding:isMobile?'18px 14px 48px':'28px 28px',maxWidth:1020,margin:'0 auto'}}>
 
           {/* ══ ÜBERSICHT ══ */}
           {tab==='dash' && <>
@@ -1137,7 +1221,7 @@ function App({session}) {
               <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>{MONTHS[mo]}</div>
               <div style={{fontSize:13,color:C.sub}}>{yr}</div>
             </div>
-            <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:20}}>
+            <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12,flexWrap:'wrap',marginBottom:20}}>
               <KPI label="Gesamteinnahmen" val={fmt(tot.totalInc)} color={C.grn}
                 sub={'Immobilien '+fmt(tot.immoInc)+' · '+names.unternehmen+' '+fmt(tot.unterInc)} />
               <KPI label="Gesamtausgaben" val={fmtN(tot.totalExp)} color={C.txt}
@@ -1145,15 +1229,15 @@ function App({session}) {
               <KPI label="Nettogewinn" val={(tot.net>=0?'+':'')+fmt(tot.net)}
                 color={tot.net>=0?C.grn:C.txt} sub={tot.net>=0?'Im Plus':'Im Minus'} />
             </div>
-            <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-              <div style={{...SC,flex:2,minWidth:280}}>
+            <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12,flexWrap:'wrap'}}>
+              <div style={{...SC,flex:2,minWidth:isMobile?'auto':280}}>
                 <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:14}}>Immobilien</div>
                 {PROPS.map(p=>{
                   const r=calcProp(md.props?.[p], yr, mo);
                   return (
-                    <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
+                    <div key={p} style={{display:'flex',flexDirection:isMobile?'column':'row',justifyContent:'space-between',alignItems:isMobile?'stretch':'center',gap:isMobile?6:0,padding:'10px 0',borderBottom:'1px solid '+C.sep}}>
                       <span style={{fontWeight:600}}>{names[p]}</span>
-                      <div style={{display:'flex',gap:16,alignItems:'center'}}>
+                      <div style={{display:'flex',gap:isMobile?0:16,justifyContent:isMobile?'space-between':'flex-end',alignItems:'center'}}>
                         <span style={{fontSize:12,color:C.sub}}>Ein <b style={{color:C.grn,...NUM}}>{fmt(r.netto)}</b></span>
                         <span style={{fontSize:12,color:C.sub}}>Aus <b style={{color:C.txt,...NUM}}>{fmtN(r.exp)}</b></span>
                         <b style={{color:r.gewinn>=0?C.grn:C.txt,...NUM,minWidth:68,textAlign:'right'}}>{r.gewinn>=0?'+':''}{fmt(r.gewinn)}</b>
