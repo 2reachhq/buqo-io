@@ -72,6 +72,15 @@ const fmt  = v => new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR'
 const fmtN = v => ((v||0)>0 ? '-' : '')+fmt(v||0);
 
 /* ── Bankauszug (Text-PDF) auslesen ── */
+function loadTesseract(){
+  return new Promise((res,rej)=>{
+    if(window.Tesseract) return res();
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload=()=>res(); s.onerror=()=>rej(new Error('OCR-Bibliothek konnte nicht geladen werden'));
+    document.head.appendChild(s);
+  });
+}
 async function pdfToLines(file){
   const lib = window.pdfjsLib;
   if(!lib) throw new Error('PDF-Bibliothek nicht geladen');
@@ -1194,6 +1203,25 @@ function App({session}) {
     }catch(e){ setToast('Konnte „'+file.name+'" nicht auslesen: '+(e.message||e)); }
     setImportBusy(false);
   };
+  /* Import OHNE KI (lokal) – nur zum Vergleichen */
+  const importLocal = async file => {
+    setImportBusy(true);
+    try{
+      const isPdf = file.type==='application/pdf' || /\.pdf$/i.test(file.name);
+      let lines;
+      if(isPdf){ lines = await pdfToLines(file); }
+      else {
+        setToast('OCR läuft… (kann etwas dauern)');
+        await loadTesseract();
+        const { data:{ text } } = await window.Tesseract.recognize(file, 'deu');
+        lines = String(text||'').split('\n');
+      }
+      const parsed = parseStatement(lines);
+      if(!parsed.length) setToast('Ohne KI nichts erkannt (Text-PDF nötig bzw. OCR zu ungenau).');
+      else { setDrafts(ds=>[...parsed,...ds]); setToast(parsed.length+' Posten erkannt (ohne KI)'); }
+    }catch(e){ setToast('Ohne KI fehlgeschlagen: '+(e.message||e)); }
+    setImportBusy(false);
+  };
   const assignDrafts = (ids, destKey, ty, tm) => {
     const dlist = drafts.filter(d=>ids.includes(d.id));
     const dstLoc=locOf(destKey); if(!dstLoc||!dlist.length) return;
@@ -1895,13 +1923,25 @@ function App({session}) {
                   <div style={{fontSize:13,color:C.sub}}>PDF oder Foto hochladen → KI liest die Posten aus → einzeln/mehrere dem richtigen Konto zuordnen</div>
                 </div>
 
-                <div style={{...SC,marginBottom:16}}>
-                  <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'22px',border:'1.5px dashed '+C.surf3,borderRadius:14,cursor:importBusy?'default':'pointer',textAlign:'center',opacity:importBusy?0.6:1}}>
-                    <Ic p={P.upload} sz={26} col={C.pri}/>
-                    <div style={{fontSize:15,fontWeight:600,color:C.txt}}>{importBusy?'KI liest aus…':'Beleg/Bankauszug auswählen'}</div>
-                    <div style={{fontSize:12,color:C.mut,lineHeight:1.5}}>PDF oder Foto (Rechnung, Quittung, Kontoauszug). Mehrere Dateien möglich. Die KI erkennt Beschreibung, Betrag, Datum & Rechnungsnummer – alles landet unten als Entwurf, nichts wird automatisch gebucht.</div>
-                    <input type="file" accept=".pdf,application/pdf,image/*" multiple disabled={importBusy} onChange={async e=>{const fs=[...e.target.files]; e.target.value=''; for(const f of fs){ await importPdf(f); }}} style={{display:'none'}} />
-                  </label>
+                <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12,marginBottom:16}}>
+                  <div style={{...SC,flex:1}}>
+                    <div style={{fontSize:11,fontWeight:700,color:C.pri,marginBottom:8,letterSpacing:'0.04em'}}>VARIANTE A · MIT KI</div>
+                    <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'20px',border:'1.5px dashed '+C.pri,borderRadius:14,cursor:importBusy?'default':'pointer',textAlign:'center',opacity:importBusy?0.6:1}}>
+                      <Ic p={P.spark} sz={24} col={C.pri}/>
+                      <div style={{fontSize:14,fontWeight:600,color:C.txt}}>{importBusy?'KI liest aus…':'PDF/Foto auswählen'}</div>
+                      <div style={{fontSize:12,color:C.mut,lineHeight:1.5}}>Claude liest Beschreibung, Betrag, Datum & Rechnungsnummer – auch aus Fotos/Scans.</div>
+                      <input type="file" accept=".pdf,application/pdf,image/*" multiple disabled={importBusy} onChange={async e=>{const fs=[...e.target.files]; e.target.value=''; for(const f of fs){ await importPdf(f); }}} style={{display:'none'}} />
+                    </label>
+                  </div>
+                  <div style={{...SC,flex:1}}>
+                    <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:8,letterSpacing:'0.04em'}}>VARIANTE B · OHNE KI (TEST)</div>
+                    <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'20px',border:'1.5px dashed '+C.surf3,borderRadius:14,cursor:importBusy?'default':'pointer',textAlign:'center',opacity:importBusy?0.6:1}}>
+                      <Ic p={P.upload} sz={24} col={C.sub}/>
+                      <div style={{fontSize:14,fontWeight:600,color:C.txt}}>{importBusy?'Wird gelesen…':'PDF/Foto auswählen'}</div>
+                      <div style={{fontSize:12,color:C.mut,lineHeight:1.5}}>Lokal, ohne KI: Text-PDF direkt, Fotos per OCR (langsamer, ungenauer). Nur zum Vergleichen.</div>
+                      <input type="file" accept=".pdf,application/pdf,image/*" multiple disabled={importBusy} onChange={async e=>{const fs=[...e.target.files]; e.target.value=''; for(const f of fs){ await importLocal(f); }}} style={{display:'none'}} />
+                    </label>
+                  </div>
                 </div>
 
                 {drafts.length>0 && (
