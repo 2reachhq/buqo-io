@@ -160,7 +160,7 @@ const stripBlobs = obj => JSON.parse(JSON.stringify(obj, (k,v)=> k==='fileData'?
 /* ══ Konten-Pastellfarben (N26-Stil) ══ */
 const KONTO_COLORS = {
   immo:   { c:'#8FE3C6', tint:'rgba(143,227,198,0.13)', bd:'rgba(143,227,198,0.35)' },
-  unter:  { c:'#ABC4FF', tint:'rgba(171,196,255,0.13)', bd:'rgba(171,196,255,0.35)' },
+  unter:  { c:'#7BC2AA', tint:'rgba(123,194,170,0.13)', bd:'rgba(123,194,170,0.35)' },
   privat: { c:'#FFC7A6', tint:'rgba(255,199,166,0.13)', bd:'rgba(255,199,166,0.35)' },
 };
 const KONTO_ICONS = { immo:'M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z M9 22V12h6v10', unter:'M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2m-8-3a2 2 0 00-2 2h4a2 2 0 00-2-2z', privat:'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2 M12 11a4 4 0 100-8 4 4 0 000 8z' };
@@ -345,8 +345,9 @@ function TargetPicker({title, moveTargets, curY, curM, confirmLabel, onClose, on
 }
 
 /* ══ Item row (Name + Betrag + kompaktes ⋮-Dropdown) ══ */
-function ItemRow({item, accent, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
+function ItemRow({item, accent, kind, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
   const acc = accent||C.pri;
+  const dateLabel = kind==='aus' ? 'Abbuchungsdatum' : kind==='ein' ? 'Eingangsdatum' : 'Datum';
   const [menu,setMenu]=useState(null);   // {top,bottom,right}
   const [catMenu,setCatMenu]=useState(null); // {left,top,bottom} Kategorie-Dropdown
   const [drawer,setDrawer]=useState(false); // Detail-Drawer (von rechts)
@@ -405,10 +406,15 @@ function ItemRow({item, accent, onUpdate, onDelete, folderPath, onUploadFile, on
           <Ic p={hasFile?P.clip:P.upload} sz={18} col={hasFile?acc:C.sub}/>
           {hasFile && <span style={{position:'absolute',right:-3,bottom:-3,width:15,height:15,borderRadius:'50%',background:C.grn,border:'2px solid '+C.surf2,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.check} sz={8} col={'#06281C'}/></span>}
         </button>
-        {/* Name + Kategorie */}
-        <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:2}}>
+        {/* Name + Kategorie + Datum */}
+        <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:5}}>
           <input value={item.name} placeholder="Bezeichnung…" onClick={e=>e.stopPropagation()} onChange={e=>onUpdate(item.id,'name',e.target.value)} style={{background:'transparent',border:'none',outline:'none',fontFamily:'inherit',fontSize:15.5,fontWeight:600,color:C.txt,width:'100%',padding:0,letterSpacing:'-0.01em'}} />
-          <button onClick={e=>{e.stopPropagation();openCat(e);}} style={{alignSelf:'flex-start',background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',fontSize:13,color:item.category?C.sub:C.mut,display:'inline-flex',alignItems:'center',gap:4}}>{item.category||'Kategorie'} <Ic p={P.down} sz={11} col={C.mut}/></button>
+          <div style={{display:'flex',alignItems:'center',gap:9,flexWrap:'wrap'}}>
+            <button onClick={e=>{e.stopPropagation();openCat(e);}} style={item.category
+              ? {background:hexA(acc,0.18),border:'1px solid '+hexA(acc,0.5),borderRadius:8,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:600,color:acc,display:'inline-flex',alignItems:'center',gap:5,boxShadow:'0 0 12px '+hexA(acc,0.45)}
+              : {background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',fontSize:13,color:C.mut,display:'inline-flex',alignItems:'center',gap:4}}>{item.category||'Kategorie'} <Ic p={P.down} sz={11} col={item.category?acc:C.mut}/></button>
+            {isoDate(item.datum) && <span title={dateLabel} style={{fontSize:12,color:C.sub,display:'inline-flex',alignItems:'center',gap:4}}><Ic p={P.cal} sz={11} col={C.mut}/>{(()=>{const iso=isoDate(item.datum);const a=iso.split('-');return a[2]+'.'+a[1]+'.'+a[0].slice(2);})()}</span>}
+          </div>
         </div>
         {/* Preis */}
         <div style={{fontSize:16,fontWeight:700,color:C.txt,...NUM,whiteSpace:'nowrap'}}>{money}</div>
@@ -445,7 +451,7 @@ function ItemRow({item, accent, onUpdate, onDelete, folderPath, onUploadFile, on
             </select>
 
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
-              {dcell('Datum', <input type="date" value={isoDate(item.datum)} onChange={e=>onUpdate(item.id,'datum',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',colorScheme:'dark'}} />)}
+              {dcell(dateLabel, <input type="date" value={isoDate(item.datum)} onChange={e=>onUpdate(item.id,'datum',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',colorScheme:'dark'}} />)}
               {dcell('Beleg-Nr', <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={{...dInput('100%'),padding:'10px 12px'}} />)}
               {dcell('Netto €', <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="Netto" style={{...dInput('100%'),padding:'10px 12px',...NUM}} />)}
               {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',cursor:'pointer'}}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>)}
@@ -588,11 +594,11 @@ function ItemRow({item, accent, onUpdate, onDelete, folderPath, onUploadFile, on
 }
 
 /* ══ Sortier-/Auswahl-Liste (Drag & Drop + Mehrfachauswahl) ══ */
-function ItemList({items, srcKey, accent, updFn, delFn, recurFn, rangeFn, editFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, curY, curM, hideRecur}) {
+function ItemList({items, srcKey, accent, kind, updFn, delFn, recurFn, rangeFn, editFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, curY, curM, hideRecur}) {
   return (
     <div style={{display:'flex',flexDirection:'column',gap:10}}>
         {items.map((item,idx)=>(
-          <ItemRow key={item.id} item={item} accent={accent}
+          <ItemRow key={item.id} item={item} accent={accent} kind={kind}
             onUpdate={updFn} onDelete={delFn}
             folderPath={folderPath}
             onUploadFile={onUploadFile} onOpenFile={onOpenFile} onDeleteFile={onDeleteFile}
@@ -824,6 +830,9 @@ function App({session}) {
   const [custEdit,setCustEdit]= useState(null);    // Kunde im Editor
   const [invAiBusy,setInvAiBusy]= useState(false);  // KI-Assistent Rechnung
   const [invAiText,setInvAiText]= useState('');
+  const [recOn,setRecOn]= useState(false);          // Sprachmemo aktiv
+  const [recText,setRecText]= useState('');         // Transkript
+  const recRef = useRef(null);
   const [sp,   setSp]   = useState('p1');
   const [data, setData] = useState({});
   const [names,setNames]= useState({p1:'Immobilie 1',p2:'Immobilie 2',p3:'Immobilie 3',unternehmen:'Unternehmen'});
@@ -1455,27 +1464,100 @@ function App({session}) {
     }catch(e){ setToast('KI-Fehler: '+(e.message||e)); }
     setInvAiBusy(false);
   };
-  const saveInvoice = ()=>{ const inv=invEdit; if(!inv) return; const tot=invTotals(inv.items); const cust=customers.find(c=>c.id===inv.customerId); const dt=new Date(inv.date); const ty=isNaN(dt)?yr:dt.getFullYear(); const tm=isNaN(dt)?mo:dt.getMonth();
-    setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const list=[...(nd.invoices||[])]; const i=list.findIndex(x=>x.id===inv.id); const saved={...inv,total:tot.gross}; const isNew=i<0; if(isNew)list.push(saved); else list[i]=saved; nd.invoices=list;
-      if(isNew){ if(!nd[ty])nd[ty]={}; if(!nd[ty][tm])nd[ty][tm]=emptyMonth(); const s=nd[ty][tm].unternehmen||{}; const item={...newItem('Rechnung '+inv.number+(cust?(' · '+cust.name):'')),amount:tot.gross,belegnr:inv.number,datum:inv.date,netto:tot.net,note:'Rechnung'}; nd[ty][tm].unternehmen={...s,clients:[...(s.clients||[]),item]}; }
+  // jsPDF nachladen (nur bei Bedarf)
+  const loadJsPDF = ()=> new Promise((res,rej)=>{ if(window.jspdf&&window.jspdf.jsPDF) return res(); const s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'; s.onload=()=>res(); s.onerror=()=>rej(new Error('PDF-Bibliothek konnte nicht geladen werden')); document.head.appendChild(s); });
+  // Echtes PDF aus den Rechnungsdaten bauen → Blob
+  const buildInvoicePDF = async (inv)=>{
+    await loadJsPDF(); const { jsPDF }=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'});
+    const co=company||{}; const cust=customers.find(c=>c.id===inv.customerId)||{}; const tot=invTotals(inv.items);
+    const W=595, L=40, R=W-40; let y=54;
+    if(co.logoData){ try{ doc.addImage(co.logoData,'JPEG',L,y-14,90,40); }catch(_){} }
+    doc.setFont('helvetica','bold'); doc.setFontSize(22); doc.setTextColor(20); doc.text('Rechnung',R,y,{align:'right'});
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120);
+    doc.text('Nr. '+(inv.number||''),R,y+16,{align:'right'}); doc.text('Datum: '+(inv.date||''),R,y+28,{align:'right'}); if(inv.due) doc.text('Fällig: '+inv.due,R,y+40,{align:'right'});
+    y+=64; doc.setTextColor(20); doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.text(co.name||'',L,y);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120); String(co.address||'').split('\n').forEach((ln,i)=>doc.text(ln,L,y+13+i*12));
+    y+=64; doc.setTextColor(120); doc.setFontSize(9); doc.text('Rechnung an',L,y); doc.setTextColor(20); doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.text(cust.name||'—',L,y+15);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120); String(cust.address||'').split('\n').forEach((ln,i)=>doc.text(ln,L,y+29+i*12));
+    y+=58; doc.setDrawColor(225); doc.setFontSize(9); doc.setTextColor(120);
+    doc.text('Beschreibung',L,y); doc.text('Menge',360,y,{align:'right'}); doc.text('Einzelpreis',430,y,{align:'right'}); doc.text('MwSt',480,y,{align:'right'}); doc.text('Netto',R,y,{align:'right'});
+    y+=6; doc.line(L,y,R,y); y+=16; doc.setTextColor(30);
+    (inv.items||[]).forEach(it=>{ const n=num(it.qty||1)*num(it.price); const lines=doc.splitTextToSize(String(it.desc||''),300);
+      doc.text(lines,L,y); doc.text(String(num(it.qty)||1),360,y,{align:'right'}); doc.text(fmt(num(it.price)),430,y,{align:'right'}); doc.text((num(it.mwst!=null?it.mwst:19))+'%',480,y,{align:'right'}); doc.text(fmt(n),R,y,{align:'right'});
+      y+=Math.max(lines.length*12,16)+4; doc.setDrawColor(240); doc.line(L,y-8,R,y-8); if(y>740){ doc.addPage(); y=54; } });
+    y+=8; doc.setTextColor(120); doc.setFontSize(9); doc.text('Netto: '+fmt(tot.net),R,y,{align:'right'}); doc.text('MwSt: '+fmt(tot.tax),R,y+13,{align:'right'});
+    doc.setTextColor(20); doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text('Gesamt: '+fmt(tot.gross),R,y+32,{align:'right'});
+    if(co.iban||co.taxId||co.ustId){ y+=58; doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(130); let fy=y; if(co.iban){ doc.text('Zahlbar an: '+co.iban+(co.bic?(' · '+co.bic):''),L,fy); fy+=12;} const tl=[co.taxId?('Steuernr.: '+co.taxId):'',co.ustId?('USt-IdNr.: '+co.ustId):''].filter(Boolean).join('   '); if(tl) doc.text(tl,L,fy); }
+    if(inv.note){ doc.setFontSize(8.5); doc.setTextColor(130); doc.text(doc.splitTextToSize(String(inv.note),R-L),L,Math.min(y+96,800)); }
+    return doc.output('blob');
+  };
+  const downloadInvoicePDF = async (inv)=>{ try{ setToast('📄 Erzeuge PDF…'); const blob=await buildInvoicePDF(inv); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='Rechnung_'+(inv.number||'')+'.pdf'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); setToast('PDF heruntergeladen'); }catch(e){ setToast('PDF-Fehler: '+(e.message||e)); } };
+
+  const saveInvoice = async ()=>{ const inv=invEdit; if(!inv) return; const tot=invTotals(inv.items); const cust=customers.find(c=>c.id===inv.customerId); const dt=new Date(inv.date); const ty=isNaN(dt)?yr:dt.getFullYear(); const tm=isNaN(dt)?mo:dt.getMonth();
+    const account=inv.account||'unter'; const isExpense=tot.gross<0;
+    setToast('💾 Speichere Rechnung…');
+    let pdfPath=inv.pdfPath||null;
+    try{ const blob=await buildInvoicePDF(inv); if(blob){ const path=['Rechnungen',String(ty),'Rechnung_'+safeName(inv.number)+'.pdf'].map(safeName).join('/'); const {error}=await sb.storage.from('belege').upload(path, blob, {upsert:true, contentType:'application/pdf'}); if(!error) pdfPath=path; } }catch(e){ /* PDF optional, Buchung trotzdem */ }
+    const sentDate=inv.sentDate||new Date().toISOString().slice(0,10);
+    setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const list=[...(nd.invoices||[])]; const i=list.findIndex(x=>x.id===inv.id);
+      const wasBooked = i>=0 && list[i] && list[i].booked;
+      const saved={...inv, total:tot.gross, account, pdfPath, sentDate, booked:true}; const isNew=i<0; if(isNew)list.push(saved); else list[i]=saved; nd.invoices=list;
+      if(!wasBooked){ if(!nd[ty])nd[ty]={}; if(!nd[ty][tm])nd[ty][tm]=emptyMonth(); const M=nd[ty][tm];
+        const item={...newItem('Rechnung '+inv.number+(cust?(' · '+cust.name):'')),amount:Math.abs(tot.gross),belegnr:inv.number,datum:inv.date,netto:Math.abs(tot.net),category:'Allgemein',note:'Rechnung',invId:inv.id};
+        if(account==='unter'){ const s=M.unternehmen||{}; M.unternehmen= isExpense?{...s,items:[...(s.items||[]),item]}:{...s,clients:[...(s.clients||[]),item]}; }
+        else if(account==='privat'){ const s=M.privat||{}; M.privat= isExpense?{...s,items:[...(s.items||[]),item]}:{...s,einnahmen:[...(s.einnahmen||[]),item]}; }
+        else { if(!M.props)M.props={}; const s=M.props[account]||{}; M.props[account]= isExpense?{...s,expenses:[...(s.expenses||[]),item]}:{...s,einnahmen:[...(s.einnahmen||[]),item]}; }
+      }
       return nd; });
-    setToast('Rechnung '+inv.number+' gespeichert + als Einnahme gebucht'); setInvEdit(null);
+    setToast('Rechnung '+inv.number+' gespeichert'+(pdfPath?' (PDF abgelegt)':'')+' + als '+(isExpense?'Ausgabe':'Einnahme')+' gebucht'); setInvEdit(null);
   };
   const uploadLogo = async (file)=>{ try{ let blob=file; try{ blob=await compressImage(file,400,0.8); }catch(_){} const b64=await fileToB64(blob); setCompany({logoData:'data:image/jpeg;base64,'+b64}); setToast('Logo gespeichert'); }catch(e){ setToast('Logo-Upload fehlgeschlagen: '+(e.message||e)); } };
-  const printInvoice = (inv)=>{ const cust=customers.find(c=>c.id===inv.customerId)||{}; const tot=invTotals(inv.items); const co=company||{};
+  // Rechnungs-HTML (für Live-Vorschau & Druck/PDF)
+  const invoiceHTML = (inv, forPrint)=>{ const cust=customers.find(c=>c.id===inv.customerId)||{}; const tot=invTotals(inv.items); const co=company||{};
     const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
     const rows=(inv.items||[]).map(it=>{ const n=num(it.qty||1)*num(it.price); return '<tr><td>'+esc(it.desc)+'</td><td class=r>'+(num(it.qty)||1)+'</td><td class=r>'+fmt(num(it.price))+'</td><td class=r>'+(num(it.mwst!=null?it.mwst:19))+'%</td><td class=r>'+fmt(n)+'</td></tr>'; }).join('');
-    const html='<html><head><meta charset="utf-8"><title>Rechnung '+esc(inv.number)+'</title><style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:40px;max-width:820px;margin:0 auto}h1{font-size:26px;margin:0}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{padding:8px;border-bottom:1px solid #e2e2e2;font-size:13px}th{text-align:left;color:#777}.r{text-align:right}.tot{margin-top:16px;text-align:right}.muted{color:#777;font-size:12px;line-height:1.5}</style></head><body>'
+    return '<html><head><meta charset="utf-8"><title>Rechnung '+esc(inv.number)+'</title><style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:40px;max-width:820px;margin:0 auto;background:#fff}h1{font-size:26px;margin:0}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{padding:8px;border-bottom:1px solid #e2e2e2;font-size:13px}th{text-align:left;color:#777}.r{text-align:right}.tot{margin-top:16px;text-align:right}.muted{color:#777;font-size:12px;line-height:1.5}</style></head><body>'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
-      +'<div>'+(co.logoData?'<img src="'+co.logoData+'" style="max-height:74px;margin-bottom:10px"><br>':'')+'<b>'+esc(co.name)+'</b><br><span class=muted>'+esc(co.address)+'</span></div>'
+      +'<div>'+(co.logoData?'<img src="'+co.logoData+'" style="max-height:74px;margin-bottom:10px"><br>':'')+'<b>'+esc(co.name||'Dein Firmenname')+'</b><br><span class=muted>'+esc(co.address)+'</span></div>'
       +'<div style="text-align:right"><h1>Rechnung</h1><div class=muted style="margin-top:6px">Nr. '+esc(inv.number)+'<br>Datum: '+esc(inv.date)+(inv.due?('<br>Fällig: '+esc(inv.due)):'')+'</div></div></div>'
-      +'<div style="margin-top:24px"><span class=muted>Rechnung an</span><br><b>'+esc(cust.name)+'</b><br><span class=muted>'+esc(cust.address)+'</span></div>'
+      +'<div style="margin-top:24px"><span class=muted>Rechnung an</span><br><b>'+esc(cust.name||'—')+'</b><br><span class=muted>'+esc(cust.address)+'</span></div>'
       +'<table><thead><tr><th>Beschreibung</th><th class=r>Menge</th><th class=r>Einzelpreis</th><th class=r>MwSt</th><th class=r>Netto</th></tr></thead><tbody>'+rows+'</tbody></table>'
       +'<div class=tot><div class=muted>Netto: '+fmt(tot.net)+'</div><div class=muted>MwSt: '+fmt(tot.tax)+'</div><div style="font-size:19px;font-weight:bold;margin-top:6px">Gesamt: '+fmt(tot.gross)+'</div></div>'
       +((co.iban||co.taxId||co.ustId)?('<div class=muted style="margin-top:28px">'+(co.iban?('Zahlbar an: '+esc(co.iban)+(co.bic?(' · '+esc(co.bic)):'')+'<br>'):'')+(co.taxId?('Steuernr.: '+esc(co.taxId)+' '):'')+(co.ustId?('USt-IdNr.: '+esc(co.ustId)):'')+'</div>'):'')
       +(inv.note?('<div class=muted style="margin-top:16px">'+esc(inv.note)+'</div>'):'')
-      +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);}</scr'+'ipt></body></html>';
-    const w=window.open('','_blank'); if(w){ w.document.write(html); w.document.close(); } else setToast('Bitte Pop-ups erlauben, um die Rechnung zu drucken.');
+      +(forPrint?'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);}</scr'+'ipt>':'')+'</body></html>';
+  };
+  const printInvoice = (inv)=>{ const w=window.open('','_blank'); if(w){ w.document.write(invoiceHTML(inv,true)); w.document.close(); } else setToast('Bitte Pop-ups erlauben, um die Rechnung zu drucken.'); };
+
+  // Sprachmemo (kostenlos, Web Speech API) – startet/stoppt die Aufnahme
+  const toggleRec = ()=>{
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!SR){ setToast('Spracherkennung wird von diesem Browser nicht unterstützt (am besten Chrome).'); return; }
+    if(recOn){ try{ recRef.current && recRef.current.stop(); }catch(_){ } setRecOn(false); return; }
+    const r = new SR(); r.lang='de-DE'; r.interimResults=true; r.continuous=true;
+    let finalTxt = recText?recText+' ':'';
+    r.onresult = (e)=>{ let interim=''; for(let i=e.resultIndex;i<e.results.length;i++){ const t=e.results[i][0].transcript; if(e.results[i].isFinal) finalTxt+=t+' '; else interim+=t; } setRecText((finalTxt+interim).trim()); };
+    r.onerror = (e)=>{ setToast('Sprachfehler: '+(e.error||'')); setRecOn(false); };
+    r.onend = ()=>{ setRecOn(false); };
+    recRef.current=r; try{ r.start(); setRecOn(true); }catch(_){ setToast('Aufnahme konnte nicht gestartet werden.'); }
+  };
+  // Transkript → Rechnungspositionen + Kunde/Konto (lokal, ohne KI)
+  const voiceParse = ()=>{
+    const t=(recText||'').trim(); if(!t){ setToast('Bitte zuerst etwas einsprechen.'); return; }
+    const items=[]; const re=/([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-]{1,60}?)\s*(?:für|:|kostet|à|a)?\s*(\d+(?:[.,]\d{1,2})?)\s*(?:euro|eur|€)/gi; let m;
+    while((m=re.exec(t))!==null){ const desc=m[1].replace(/\b(und|der|die|das|ein|eine|für|den|dem)\b/gi,'').trim(); const price=Math.abs(parseFloat(m[2].replace(',','.'))||0); if(price>0) items.push({desc:desc||'Position',qty:1,price,mwst:19}); }
+    const patch={};
+    if(items.length) patch.items=items;
+    // Kunde erkennen
+    const ck=t.match(/kunde\s+([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-&]{1,40})/i);
+    if(ck){ const name=ck[1].trim(); const found=customers.find(c=>(c.name||'').toLowerCase().includes(name.toLowerCase().split(' ')[0])); if(found) patch.customerId=found.id; }
+    // Konto erkennen
+    const lc=t.toLowerCase();
+    let acct=null; if(/\bprivat/.test(lc))acct='privat'; else if(/unternehm|firma|business/.test(lc))acct='unter'; else { PROPS.forEach(p=>{ if((names[p]||'').toLowerCase() && lc.includes((names[p]||'').toLowerCase()))acct=p; }); }
+    if(acct) patch.account=acct;
+    if(!items.length && !patch.customerId && !patch.account){ setToast('Konnte nichts erkennen. Sag z. B. „Webdesign 1500 Euro, Wartung 200 Euro".'); return; }
+    setInvEdit(e=>({...e, ...patch}));
+    setToast((items.length?items.length+' Positionen':'Felder')+' aus Sprachmemo übernommen');
   };
 
   /* Alle Daten als Datei exportieren (zur Auswertung) */
@@ -1672,7 +1754,8 @@ function App({session}) {
   const activeAcct = tab==='quellen' ? openAcct : (tab==='immo' ? sp : tab==='unter' ? 'unter' : tab==='privat' ? 'privat' : null);
   const secAccent = activeAcct ? acctColor(activeAcct) : C.pri;
 
-  const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn, rangeFn, srcKey, hideRecur) => {
+  const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn, rangeFn, srcKey, hideRecur, kind) => {
+    const kindEff = kind || (folderPath && folderPath[folderPath.length-1]==='Einnahmen' ? 'ein' : 'aus');
     const shown = (items||[]).filter(it=>activeInMonth(it, yr, mo));
     const inSel = srcKey && selKey===srcKey;
     const shownIds = shown.map(i=>i.id);
@@ -1693,7 +1776,7 @@ function App({session}) {
             </>)}
           </div>
         )}
-        <ItemList items={shown} srcKey={srcKey} accent={secAccent}
+        <ItemList items={shown} srcKey={srcKey} accent={secAccent} kind={kindEff}
           updFn={updFn} delFn={delFn} recurFn={recurFn} rangeFn={rangeFn} editFn={editFn}
           folderPath={folderPath}
           moveTargets={srcKey?moveTargets:null} moveItemFn={srcKey?moveItem:null}
@@ -1757,19 +1840,18 @@ function App({session}) {
             <div style={{position:'relative'}}>
               {(()=>{ const sa=SONSTIGES.some(s=>s.id===tab); return (
               <button onClick={()=>setSonstOpen(o=>!o)} className={'navlink'+(sa?' active':'')} style={{
-                display:'flex',alignItems:'center',gap:8,padding:'8px 14px',
+                display:'flex',alignItems:'center',gap:6,padding:'8px 14px',
                 fontFamily:'inherit',fontSize:15,fontWeight:sa?600:500,whiteSpace:'nowrap',
-              }}><Ic p={P.menu} sz={16}/> <span>Sonstiges</span></button>
+              }}><span>Sonstiges</span> <span style={{display:'inline-flex',transition:'transform .16s',transform:sonstOpen?'rotate(180deg)':'none'}}><Ic p={P.down} sz={14}/></span></button>
               ); })()}
-              {sonstOpen && (
-                <div onClick={()=>setSonstOpen(false)} style={{position:'fixed',inset:0,zIndex:90}}>
-                  <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:50,right:0,width:210,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
-                    {SONSTIGES.map(({id,label,icon})=>(
-                      <button key={id} onClick={()=>{setTab(id);setSonstOpen(false);}} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:tab===id?C.pri:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={icon} sz={16} col={tab===id?C.pri:C.sub}/> <span>{label}</span></button>
-                    ))}
-                  </div>
+              {sonstOpen && (<>
+                <div onClick={()=>setSonstOpen(false)} style={{position:'fixed',inset:0,zIndex:90}} />
+                <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'calc(100% + 8px)',right:0,zIndex:91,width:210,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+                  {SONSTIGES.map(({id,label,icon})=>(
+                    <button key={id} onClick={()=>{setTab(id);setSonstOpen(false);}} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:tab===id?C.pri:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={icon} sz={16} col={tab===id?C.pri:C.sub}/> <span>{label}</span></button>
+                  ))}
                 </div>
-              )}
+              </>)}
             </div>
           </nav>
         )}
@@ -2058,14 +2140,6 @@ function App({session}) {
               {immoView==='einnahmen' && (
                 <div style={SC}>
                   {futureMonth && <div style={{fontSize:12,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.22)',borderRadius:8,padding:'8px 11px',marginBottom:12}}>Dieser Monat hat noch nicht begonnen.</div>}
-                  {[['Mieteinnahmen','mieteinnahmen'],['Sonstige','sonstig']].map(([label,fld])=>(
-                    <div key={fld} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
-                      <span style={{flex:1,fontSize:14,color:C.sub}}>{label}</span>
-                      <CalcField value={pd.income?.[fld]} onCommit={v=>setPropInc(sp,fld,v)} disabled={futureMonth} style={{...SI,width:96,...NUM}} />
-                      <span style={{fontSize:12,color:C.mut,width:14}}>€</span>
-                    </div>
-                  ))}
-                  <div style={{fontSize:11,color:C.mut,margin:'12px 0 6px'}}>Weitere Einnahmen</div>
                   {renderItems(
                     (pd.einnahmen||[]).filter(i=>!i.recurring),
                     (id,fld,val)=>updPropSub(sp,'einnahmen',id,fld,val),
@@ -2107,6 +2181,14 @@ function App({session}) {
                   <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
                     <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
                       <div style={{fontSize:12,fontWeight:600,color:C.grn,marginBottom:10}}>Wiederkehrende Einnahmen</div>
+                      {[['Mieteinnahmen','mieteinnahmen'],['Sonstige','sonstig']].map(([label,fld])=>(
+                        <div key={fld} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
+                          <span style={{flex:1,fontSize:14,color:C.sub}}>{label}</span>
+                          <CalcField value={pd.income?.[fld]} onCommit={v=>setPropInc(sp,fld,v)} disabled={futureMonth} style={{...SI,width:96,...NUM}} />
+                          <span style={{fontSize:12,color:C.mut,width:14}}>€</span>
+                        </div>
+                      ))}
+                      <div style={{fontSize:11,color:C.mut,margin:'12px 0 6px'}}>Weitere wiederkehrende Einnahmen</div>
                       {renderItems(
                         (pd.einnahmen||[]).filter(i=>i.recurring),
                         (id,fld,val)=>updPropSub(sp,'einnahmen',id,fld,val),
@@ -2167,21 +2249,6 @@ function App({session}) {
               )}
 
               <ResultBanner label={names[sp]} sublabel={fmt(pc.netto)+' Einnahmen · '+fmt(pc.exp)+' Ausgaben'} value={pc.gewinn} />
-
-              {/* Events-Highlight */}
-              {(()=>{ const up=(events||[]).filter(e=>{ const d=new Date(e.date); return !isNaN(d) && d>=new Date(yr,0,1) && d<=new Date(yr,11,31); }).slice(0,8); const accent='#FFD27F'; return (
-                <div style={{marginTop:14,borderRadius:20,padding:'16px 18px',border:'1px solid rgba(255,210,127,0.35)',background:'rgba(255,210,127,0.10)'}}>
-                  <div style={{fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:7,marginBottom:4,color:accent}}><Ic p={P.bed} sz={15} col={accent}/> Events & Nachfrage (für Preise)</div>
-                  <div style={{fontSize:12,color:C.sub,marginBottom:up.length?10:0}}>Veranstaltungen in der Region {yr} – höhere Nachfrage = höhere Preise möglich.</div>
-                  {up.length? up.map((e,i)=>(
-                    <div key={i} style={{display:'flex',gap:10,alignItems:'center',padding:'7px 0',borderTop:i?'1px solid '+C.sep:'none'}}>
-                      <span style={{fontSize:12,color:accent,fontWeight:700,...NUM,minWidth:56}}>{(()=>{const d=new Date(e.date);return isNaN(d)?'':d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'});})()}</span>
-                      <span style={{flex:1,fontSize:13,color:C.txt}}>{e.title}</span>
-                      {e.category && <span style={{fontSize:10,color:C.mut,background:C.surf2,borderRadius:6,padding:'2px 7px'}}>{e.category}</span>}
-                    </div>
-                  )) : <div style={{fontSize:12,color:C.mut}}>Noch keine Events hinterlegt.</div>}
-                </div>
-              ); })()}
             </>
             );
           })()}
@@ -2538,6 +2605,8 @@ function App({session}) {
             if(invEdit){
               const setI=patch=>setInvEdit({...invEdit,...patch});
               const setItem=(i,patch)=>setInvEdit({...invEdit, items:invEdit.items.map((it,ix)=>ix===i?{...it,...patch}:it)});
+              const acctOpts=[{k:'unter',label:names.unternehmen||'Unternehmen'},...PROPS.map(p=>({k:p,label:names[p]||p})),{k:'privat',label:names.privatLabel||'Privat'}];
+              const A=KONTO_COLORS.unter;
               return (
                 <>
                   <button onClick={()=>setInvEdit(null)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:10}}>‹ Rechnungen</button>
@@ -2545,7 +2614,9 @@ function App({session}) {
                   {customers.length===0 ? (
                     <div style={{...SC,fontSize:14,color:C.sub}}>Lege zuerst einen Kunden an.<br/><button onClick={()=>setCustEdit({id:uid(),name:'',address:'',email:'',custNo:''})} style={{...primBtn,marginTop:12}}>+ Kunde anlegen</button></div>
                   ) : (
-                    <>
+                    <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:16,alignItems:'flex-start'}}>
+                      {/* LINKS: Formular */}
+                      <div style={{flex:1,minWidth:0,width:isMobile?'100%':'auto'}}>
                       <div style={{...SC,marginBottom:12,display:'flex',flexDirection:'column',gap:10}}>
                         <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Kunde</div>
                           <select value={invEdit.customerId} onChange={e=>setI({customerId:e.target.value})} style={SS}>{customers.map(c=><option key={c.id} value={c.id}>{c.name||'(ohne Name)'}</option>)}</select>
@@ -2556,11 +2627,18 @@ function App({session}) {
                           <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Fällig</div><input type="date" value={invEdit.due} onChange={e=>setI({due:e.target.value})} style={{...fld,colorScheme:'dark'}}/></div>
                         </div>
                       </div>
-                      <div style={{...SC,marginBottom:12,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint}}>
-                        <div style={{fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:7,marginBottom:8}}><Ic p={P.spark} sz={15} col={KONTO_COLORS.unter.c}/> KI-Assistent</div>
-                        <div style={{fontSize:12,color:C.mut,marginBottom:8,lineHeight:1.5}}>Kurz beschreiben, was du in Rechnung stellst – die KI erstellt die Positionen.</div>
-                        <textarea value={invAiText} onChange={e=>setInvAiText(e.target.value)} rows={2} placeholder="z. B. Webdesign 1.500 €, Wartung 200 €/Monat" style={{...fld,resize:'vertical',marginBottom:8}}/>
-                        <button onClick={aiInvoice} disabled={invAiBusy} style={{...primBtn,background:KONTO_COLORS.unter.c,color:'#0A0A0A',opacity:invAiBusy?0.6:1}}>{invAiBusy?'Erstellt…':'Positionen erstellen'}</button>
+                      <div style={{...SC,marginBottom:12,border:'1px solid '+A.bd,background:A.tint}}>
+                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                          <div style={{fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:7}}><span style={{fontSize:15}}>🎤</span> Sprachmemo</div>
+                          {recOn && <span style={{fontSize:11,color:C.red,display:'flex',alignItems:'center',gap:5}}><span style={{width:8,height:8,borderRadius:'50%',background:C.red,display:'inline-block'}}/>Aufnahme läuft…</span>}
+                        </div>
+                        <div style={{fontSize:12,color:C.mut,marginBottom:8,lineHeight:1.5}}>Sprich einfach rein, z. B.: „Kunde Müller, Webdesign 1500 Euro, Wartung 200 Euro" – Positionen, Kunde &amp; Konto werden automatisch übernommen. Kostenlos, ohne KI.</div>
+                        <textarea value={recText} onChange={e=>setRecText(e.target.value)} rows={2} placeholder="Transkript erscheint hier… (oder selbst tippen)" style={{...fld,resize:'vertical',marginBottom:8}}/>
+                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                          <button onClick={toggleRec} style={{...primBtn,flex:1,minWidth:130,background:recOn?C.red:C.surf2,color:recOn?'#fff':C.txt}}>{recOn?'■ Stoppen':'🎤 Aufnahme'}</button>
+                          <button onClick={voiceParse} style={{...primBtn,flex:1,minWidth:130,background:A.c,color:'#0A0A0A'}}>Übernehmen</button>
+                          {recText && <button onClick={()=>setRecText('')} title="Transkript leeren" style={{...primBtn,width:'auto',padding:'12px 14px',background:'none',color:C.mut}}>×</button>}
+                        </div>
                       </div>
                       <div style={{...SC,marginBottom:12}}>
                         <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:10}}>Positionen</div>
@@ -2582,12 +2660,27 @@ function App({session}) {
                           <div style={{fontSize:20,fontWeight:800,...NUM,marginTop:4}}>Gesamt: {fmt(tot.gross)}</div>
                         </div>
                       </div>
-                      <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Notiz (optional, erscheint auf der Rechnung)</div><textarea value={invEdit.note||''} onChange={e=>setI({note:e.target.value})} rows={2} style={{...fld,resize:'vertical',marginBottom:12}}/></div>
-                      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
-                        <button onClick={saveInvoice} style={{...primBtn,flex:2,minWidth:200}}>Speichern + als Einnahme buchen</button>
-                        <button onClick={()=>printInvoice(invEdit)} style={{...primBtn,background:C.surf2,color:C.txt,flex:1,minWidth:130}}>Als PDF</button>
+                      <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Notiz (optional, erscheint auf der Rechnung)</div><textarea value={invEdit.note||''} onChange={e=>setI({note:e.target.value})} rows={2} style={{...fld,resize:'vertical'}}/></div>
+                      {/* Konto-Zuordnung */}
+                      <div style={{...SC,marginBottom:12}}>
+                        <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:6}}>Diese Rechnung gehört zu Konto</div>
+                        <select value={invEdit.account||'unter'} onChange={e=>setI({account:e.target.value})} style={SS}>{acctOpts.map(o=><option key={o.k} value={o.k}>{o.label}</option>)}</select>
+                        <div style={{fontSize:11,color:C.mut,marginTop:7,lineHeight:1.5}}>Beim Speichern wird die Rechnung automatisch hier eingeordnet: positiver Betrag → Einnahmen, negativer → Ausgaben.</div>
                       </div>
-                    </>
+                      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                        <button onClick={saveInvoice} style={{...primBtn,flex:2,minWidth:200}}>Speichern + buchen + PDF ablegen</button>
+                        <button onClick={()=>downloadInvoicePDF(invEdit)} style={{...primBtn,background:C.surf2,color:C.txt,flex:1,minWidth:120}}>PDF laden</button>
+                        <button onClick={()=>printInvoice(invEdit)} style={{...primBtn,background:C.surf2,color:C.txt,width:'auto',padding:'12px 16px'}}>Drucken</button>
+                      </div>
+                      </div>
+                      {/* RECHTS: Live-Vorschau */}
+                      <div style={{flex:1,minWidth:0,width:isMobile?'100%':'auto',position:isMobile?'static':'sticky',top:80}}>
+                        <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:8,display:'flex',alignItems:'center',gap:7}}><Ic p={P.doc} sz={14} col={C.sub}/> Rechnung anschauen</div>
+                        <div style={{borderRadius:14,overflow:'hidden',border:'1px solid '+C.bdr,background:'#fff'}}>
+                          <iframe title="Rechnungsvorschau" srcDoc={invoiceHTML(invEdit)} style={{width:'100%',height:isMobile?520:720,border:'none',background:'#fff',display:'block'}} />
+                        </div>
+                      </div>
+                    </div>
                   )}
                 </>
               );
@@ -2600,16 +2693,22 @@ function App({session}) {
                   <button onClick={()=>setInvEdit(newInvoice())} style={{...primBtn,width:'auto',padding:'10px 16px'}}>+ Neue Rechnung</button>
                 </div>
                 {!company.name && <div style={{...SC,marginBottom:12,fontSize:13,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',lineHeight:1.5}}>Tipp: Hinterlege unter <b>Einstellungen</b> deine Firmendaten + Logo für den Rechnungskopf.</div>}
-                <div style={{...SC,marginBottom:14}}>
+                <div style={{marginBottom:14}}>
                   <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:8}}>Deine Rechnungen</div>
-                  {invoices.length? [...invoices].reverse().map(inv=>{ const c=customers.find(x=>x.id===inv.customerId); return (
-                    <div key={inv.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
-                      <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:600}}>{inv.number}</div><div style={{fontSize:12,color:C.sub}}>{(c&&c.name)||'—'} · {inv.date}</div></div>
-                      <div style={{fontSize:15,fontWeight:700,...NUM,color:C.grn}}>{fmt(inv.total||invTotals(inv.items).gross)}</div>
-                      <button onClick={()=>printInvoice(inv)} title="Als PDF" style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'7px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:12}}>PDF</button>
-                      <button onClick={()=>setInvEdit(inv)} title="Öffnen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:16}}>›</button>
+                  {invoices.length? <div style={{display:'flex',flexDirection:'column',gap:10}}>{[...invoices].reverse().map(inv=>{ const c=customers.find(x=>x.id===inv.customerId); const total=inv.total!=null?inv.total:invTotals(inv.items).gross; const sent=inv.sentDate||inv.date; return (
+                    <div key={inv.id} onClick={()=>setInvEdit(inv)} style={{display:'flex',alignItems:'center',gap:13,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 14px',cursor:'pointer'}}>
+                      <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:hexA(KONTO_COLORS.unter.c,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.doc} sz={20} col={KONTO_COLORS.unter.c}/></div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:15.5,fontWeight:700,color:C.txt}}>{inv.number}</div>
+                        <div style={{fontSize:13,color:C.sub,display:'flex',alignItems:'center',gap:5,marginTop:2}}><Ic p={P.prson} sz={12} col={C.mut}/>{(c&&c.name)||'—'}</div>
+                      </div>
+                      <div style={{textAlign:'right',display:'flex',flexDirection:'column',alignItems:'flex-end',gap:3}}>
+                        <div style={{fontSize:11,color:C.mut,display:'flex',alignItems:'center',gap:4}}><Ic p={P.cal} sz={11} col={C.mut}/>{sent}</div>
+                        <div style={{fontSize:16,fontWeight:700,...NUM,color:total<0?'#FFB37A':C.grn}}>{fmt(total)}</div>
+                      </div>
+                      {inv.pdfPath && <button onClick={e=>{e.stopPropagation();openFile(inv.pdfPath);}} title="PDF herunterladen" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:9,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:12,flexShrink:0}}>PDF</button>}
                     </div>
-                  ); }) : <div style={{fontSize:13,color:C.mut}}>Noch keine Rechnungen.</div>}
+                  ); })}</div> : <div style={{...SC,fontSize:13,color:C.mut}}>Noch keine Rechnungen.</div>}
                 </div>
                 <div style={SC}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
