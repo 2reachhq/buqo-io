@@ -70,6 +70,7 @@ const FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', syst
 const NUM  = {fontVariantNumeric:'tabular-nums', letterSpacing:'-0.02em'};
 const fmt  = v => new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v||0);
 const fmtN = v => ((v||0)>0 ? '-' : '')+fmt(v||0);
+const cleanMd = t => String(t||'').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/`+/g,'').replace(/^\s*[-*]\s+/gm,'• ').trim();
 
 /* ── Bankauszug (Text-PDF) auslesen ── */
 function loadTesseract(){
@@ -765,7 +766,8 @@ function App({session}) {
   const [draftSel,setDraftSel]= useState([]);     // ausgewählte Entwürfe (Import)
   const [assignOpen,setAssignOpen]= useState(false);
   const [importBusy,setImportBusy]= useState(false);
-  const [chat,setChat]= useState([]);             // KI-Berater Verlauf
+  const chat = data.chat || [];                   // KI-Berater Verlauf (gespeichert)
+  const setChat = updater => setData(prev=>{ const cur=prev.chat||[]; const next=(typeof updater==='function'?updater(cur):updater).slice(-40); return {...prev, chat:next}; });
   const [chatInput,setChatInput]= useState('');
   const [aiBusy,setAiBusy]= useState(false);
   const [belegOpen,setBelegOpen]= useState(false); // Beleg-Erfassung
@@ -779,6 +781,7 @@ function App({session}) {
   const [calOpen,setCalOpen]= useState(false);     // Monats-Kalender-Popover
   const [calYr,setCalYr]= useState(now.getFullYear());
   const [profOpen,setProfOpen]= useState(false);   // Profil-Menü
+  const [taxBusy,setTaxBusy]= useState(false);     // Steuer-KI-Analyse
   const toggleSel = id => setSelIds(s=> s.includes(id)? s.filter(x=>x!==id) : [...s,id]);
   const exitSel = () => { setSelKey(null); setSelIds([]); };
   /* Eigene URL pro Bereich (Hash-Routing) */
@@ -1281,15 +1284,19 @@ function App({session}) {
       belegMetaRef.current={ name: isPdf?(file.name||'beleg.pdf'):(String(file.name||'beleg').replace(/\.[^.]+$/,'')+'.jpg'), isPdf, media };
       const b64 = await fileToB64(blob);
       const block = isPdf ? { type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } } : { type:'image', source:{ type:'base64', media_type:media, data:b64 } };
-      const prompt = "Dies ist EIN einzelner Beleg/Rechnung/Quittung (Deutschland). Gib AUSSCHLIESSLICH minifiziertes JSON, kein Text drumherum, im Format:\n"
-        + '{"b":"Händler/Beschreibung","a":12.34,"k":"a","d":"TT.MM.JJJJ","r":"Rechnungsnummer"}\n'
-        + "a=Gesamtbetrag positiv (Punkt als Dezimaltrennzeichen), k=\"e\" bei Einnahme/Gutschrift sonst \"a\", d und r leer lassen wenn nicht vorhanden. Erfinde nichts.";
+      const prompt = "Dies ist EIN einzelner Beleg/Rechnung/Quittung (Deutschland). Lies die Felder aus. Gib AUSSCHLIESSLICH minifiziertes JSON, kein Text drumherum, im Format:\n"
+        + '{"b":"Händler/Beschreibung","brutto":12.34,"netto":10.37,"mwst":19,"k":"a","d":"TT.MM.JJJJ","r":"Rechnungsnummer","unsicher":false}\n'
+        + "brutto=Gesamtbetrag (Punkt als Dezimaltrennzeichen), netto=Nettobetrag, mwst=MwSt-Satz in % (meist 19 oder 7), k=\"e\" bei Einnahme/Gutschrift sonst \"a\", d/r leer lassen wenn nicht vorhanden. "
+        + "Setze \"unsicher\":true, wenn das Bild unscharf/unvollständig ist oder du dir bei Beträgen nicht sicher bist. Erfinde nichts – fehlende Zahl = 0.";
       const { data:resp, error } = await sb.functions.invoke('ai', { body:{ model:'claude-haiku-4-5', max_tokens:1000, messages:[{ role:'user', content:[block, { type:'text', text:prompt }] }] } });
       if(error) throw error;
       if(resp && resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
       let txt=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; txt=txt.replace(/```json|```/g,'').trim(); const mm=txt.match(/\{[\s\S]*\}/); if(mm)txt=mm[0];
       const p=JSON.parse(txt);
-      setBelegRes({ name:String(p.b||'Beleg').slice(0,70), amount:Math.abs(parseFloat(String(p.a).replace(',','.'))||0), kind:(p.k==='e'?'ein':'aus'), info:[p.r&&('Nr. '+p.r), p.d].filter(Boolean).join(' · ') });
+      const brutto=Math.abs(parseFloat(String(p.brutto!=null?p.brutto:p.a).replace(',','.'))||0);
+      const netto=Math.abs(parseFloat(String(p.netto).replace(',','.'))||0);
+      const mwst=parseFloat(String(p.mwst).replace(',','.'))||0;
+      setBelegRes({ name:String(p.b||'Beleg').slice(0,70), amount:brutto, netto, mwst, kind:(p.k==='e'?'ein':'aus'), belegnr:String(p.r||''), datum:String(p.d||''), unsicher:!!p.unsicher });
       setBelegDest(d=> (p.k==='e' ? 'unterInc' : d));
     }catch(e){ setToast('Beleg konnte nicht gelesen werden: '+(e.message||e)); }
     setBelegBusy(false);
@@ -1309,7 +1316,8 @@ function App({session}) {
         const nd=JSON.parse(JSON.stringify(prev));
         if(!nd[belegY]) nd[belegY]={};
         if(!nd[belegY][belegM]) nd[belegY][belegM]=emptyMonth();
-        const item={ ...newItem(belegRes.name), amount:num(belegRes.amount), note:belegRes.info||'', filePath:path, fileName:meta.name };
+        const noteParts=[]; if(belegRes.belegnr)noteParts.push('Nr. '+belegRes.belegnr); if(belegRes.datum)noteParts.push(belegRes.datum); if(num(belegRes.netto))noteParts.push('Netto '+fmt(num(belegRes.netto))); if(num(belegRes.mwst))noteParts.push('MwSt '+num(belegRes.mwst)+'%');
+        const item={ ...newItem(belegRes.name), amount:num(belegRes.amount), note:noteParts.join(' · '), datum:belegRes.datum||'', belegnr:belegRes.belegnr||'', netto:num(belegRes.netto), mwst:num(belegRes.mwst), filePath:path, fileName:meta.name };
         setListAt(nd[belegY][belegM], loc, [...getListAt(nd[belegY][belegM],loc), item]);
         return nd;
       });
@@ -1363,7 +1371,8 @@ function App({session}) {
         + "Du kennst seine echten Daten (JSON unten; Beträge in EUR, Monate 0=Januar … 11=Dezember; Ausgaben sind positiv gespeichert). "
         + "Antworte auf Deutsch: konkret, freundlich, kompakt, mit echten Zahlen aus den Daten. Gib praktische Hinweise (worauf achten, wo evtl. sparen, was in Deutschland häufig absetzbar ist). "
         + "Erfinde niemals Zahlen. Wenn Daten fehlen, sag es. "
-        + "WICHTIG: Du bist KEIN zugelassener Steuerberater – weise bei verbindlichen Steuerfragen kurz darauf hin, dass ein echter Steuerberater das prüfen sollte.\n\n"
+        + "WICHTIG: Du bist KEIN zugelassener Steuerberater – weise bei verbindlichen Steuerfragen kurz darauf hin, dass ein echter Steuerberater das prüfen sollte. "
+        + "Schreibe in normalem Fließtext mit kurzen Absätzen. KEIN Markdown: keine #-Überschriften, keine Sternchen, keine Tabellen-Pipes. Für Aufzählungen nutze einfache Bindestriche.\n\n"
         + "DATEN (Jahr "+yr+"):\n"+JSON.stringify(snapshot);
       const { data:resp, error } = await sb.functions.invoke('ai', { body:{ model:'claude-sonnet-4-6', max_tokens:1800, system, messages: next.map(m=>({role:m.role,content:m.content})) } });
       if(error) throw error;
@@ -1372,6 +1381,25 @@ function App({session}) {
       setChat(c=>[...c,{role:'assistant',content:txt}]);
     }catch(e){ setChat(c=>[...c,{role:'assistant',content:'⚠️ Fehler: '+(e.message||e)+'\n\n(Bist du eingeloggt? Ist die Funktion „ai" deployt und der Schlüssel hinterlegt?)'}]); }
     setAiBusy(false);
+  };
+  const analyzeTax = async () => {
+    if(taxBusy) return;
+    setTaxBusy(true);
+    try{
+      const monatswerte = Array.from({length:12},(_,i)=>{const t=calcTotals(getMD(yr,i),yr,i);return {monat:MONTHS[i],einnahmen:t.totalInc,ausgaben:t.totalExp,ergebnis:t.net};});
+      const snapshot = { namen:names, jahr:yr, jahressumme:yrTot, monatswerte, jahresdaten:data[yr]||{} };
+      const system = "Du bist Steuer-Assistent für einen Nutzer in Deutschland (Immobilien-Vermietung, ein Unternehmen, Privatausgaben). Analysiere die Jahresdaten ("+yr+") und schreibe konkrete Hinweise/Notizen: "
+        + "auffällige Posten, was häufig absetzbar ist, was er mit dem Steuerberater klären sollte, mögliche Spar-/Optimierungsansätze, fehlende Belege. "
+        + "Antworte auf Deutsch in normalem Fließtext mit kurzen Absätzen, KEIN Markdown (keine Rauten, keine Sternchen), für Listen einfache Bindestriche. Erfinde keine Zahlen. "
+        + "Schließe mit einem kurzen Hinweis, dass dies keine verbindliche Steuerberatung ist.\n\nDATEN:\n"+JSON.stringify(snapshot);
+      const { data:resp, error } = await sb.functions.invoke('ai', { body:{ model:'claude-sonnet-4-6', max_tokens:2000, system, messages:[{role:'user',content:'Bitte analysiere meine Daten für '+yr+' und gib mir Steuer-Hinweise.'}] } });
+      if(error) throw error;
+      if(resp && resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
+      const txt = cleanMd((resp && resp.content && resp.content[0] && resp.content[0].text) || '');
+      setData(prev=>({...prev, taxNotes:{...(prev.taxNotes||{}), [yr]:{ text:txt, ts:new Date().toISOString() }}}));
+      setToast('Steuer-Analyse erstellt');
+    }catch(e){ setToast('Analyse fehlgeschlagen: '+(e.message||e)); }
+    setTaxBusy(false);
   };
 
   /* Derived */
@@ -1888,6 +1916,21 @@ function App({session}) {
               </div>
             </div>
             <ResultBanner label={names[sp]} sublabel={fmt(pc.netto)+' Einnahmen · '+fmt(pc.exp)+' Ausgaben'} value={pc.gewinn} />
+
+            {/* Events-Highlight (Nachfrage / dynamische Preise) */}
+            {(()=>{ const up=(events||[]).filter(e=>{ const d=new Date(e.date); return !isNaN(d) && d>=new Date(yr,0,1) && d<=new Date(yr,11,31); }).slice(0,8); const accent='#FFD27F'; return (
+              <div style={{marginTop:14,borderRadius:20,padding:'16px 18px',border:'1px solid rgba(255,210,127,0.35)',background:'rgba(255,210,127,0.10)'}}>
+                <div style={{fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:7,marginBottom:4,color:accent}}><Ic p={P.bed} sz={15} col={accent}/> Events & Nachfrage (für Preise)</div>
+                <div style={{fontSize:12,color:C.sub,marginBottom:up.length?10:0}}>Veranstaltungen in der Region {yr} – höhere Nachfrage = höhere Preise möglich.</div>
+                {up.length? up.map((e,i)=>(
+                  <div key={i} style={{display:'flex',gap:10,alignItems:'center',padding:'7px 0',borderTop:i?'1px solid '+C.sep:'none'}}>
+                    <span style={{fontSize:12,color:accent,fontWeight:700,...NUM,minWidth:56}}>{(()=>{const d=new Date(e.date);return isNaN(d)?'':d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'});})()}</span>
+                    <span style={{flex:1,fontSize:13,color:C.txt}}>{e.title}</span>
+                    {e.category && <span style={{fontSize:10,color:C.mut,background:C.surf2,borderRadius:6,padding:'2px 7px'}}>{e.category}</span>}
+                  </div>
+                )) : <div style={{fontSize:12,color:C.mut}}>Noch keine Events hinterlegt.</div>}
+              </div>
+            ); })()}
           </>}
 
           {/* ══ UNTERNEHMEN ══ */}
@@ -2105,7 +2148,7 @@ function App({session}) {
                 </div>
               )}
 
-              <div style={{...SC,minHeight:200,marginBottom:12}}>
+              <div style={{...SC,minHeight:isMobile?'58vh':440,marginBottom:12}}>
                 {chat.length===0 ? (
                   <div>
                     <div style={{fontSize:13,color:C.mut,marginBottom:12,lineHeight:1.5}}>Stell eine Frage zu deinen Finanzen – z.B.:</div>
@@ -2123,9 +2166,9 @@ function App({session}) {
                           <div style={{
                             background:m.role==='user'?C.act:C.surf2, color:m.role==='user'?C.actTxt:C.txt,
                             borderRadius:14, padding:'10px 13px', fontSize:14, lineHeight:1.55, whiteSpace:'pre-wrap',
-                          }}>{m.content}</div>
+                          }}>{m.role==='assistant'?cleanMd(m.content):m.content}</div>
                           {m.role==='assistant' && (
-                            <button onClick={()=>{addNote(m.content); setToast('Als Notiz gespeichert');}} style={{marginTop:5,background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:12,fontFamily:'inherit',display:'flex',alignItems:'center',gap:5,padding:0}}><Ic p={P.pin} sz={12} col={C.sub}/> Als Notiz speichern</button>
+                            <button onClick={()=>{addNote(cleanMd(m.content)); setToast('Als Notiz gespeichert');}} style={{marginTop:5,background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:12,fontFamily:'inherit',display:'flex',alignItems:'center',gap:5,padding:0}}><Ic p={P.pin} sz={12} col={C.sub}/> Als Notiz speichern</button>
                           )}
                         </div>
                       </div>
@@ -2225,10 +2268,27 @@ function App({session}) {
 
           {/* ══ STEUER ══ */}
           {tab==='steuer' && <>
-            <div style={{marginBottom:24}}>
+            <div style={{marginBottom:20}}>
               <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Steuer-Übersicht</div>
               <div style={{fontSize:13,color:C.sub}}>{yr} · Mönchengladbach, NRW · Schätzungen ohne Gewähr</div>
             </div>
+            {/* KI-Steuer-Analyse */}
+            {(()=>{ const tnote=(data.taxNotes||{})[yr]; return (
+              <div style={{...SC,marginBottom:20,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:10,flexWrap:'wrap'}}>
+                  <div style={{fontSize:14,fontWeight:700,display:'flex',alignItems:'center',gap:7}}><Ic p={P.spark} sz={16} col={KONTO_COLORS.unter.c}/> KI-Steuer-Analyse</div>
+                  <button onClick={analyzeTax} disabled={taxBusy} style={{background:KONTO_COLORS.unter.c,color:'#0A0A0A',border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:600,cursor:taxBusy?'default':'pointer',fontFamily:'inherit',opacity:taxBusy?0.6:1}}>{taxBusy?'Analysiert…':(tnote?'Neu analysieren':'Analysieren')}</button>
+                </div>
+                {tnote ? (
+                  <>
+                    <div style={{fontSize:14,color:C.txt,whiteSpace:'pre-wrap',lineHeight:1.6}}>{tnote.text}</div>
+                    <div style={{fontSize:11,color:C.mut,marginTop:10}}>Erstellt: {new Date(tnote.ts).toLocaleDateString('de-DE')} · keine verbindliche Steuerberatung</div>
+                  </>
+                ) : (
+                  <div style={{fontSize:13,color:C.sub,lineHeight:1.5}}>Lass die KI deine Zahlen für {yr} durchgehen – sie schreibt dir Hinweise, mögliche Spar-/Absetzpunkte und was du mit dem Steuerberater klären solltest.</div>
+                )}
+              </div>
+            ); })()}
             <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:20}}>
               <KPI label="Jahreseinnahmen"  val={fmt(yrTot.totalInc)} color={C.grn} />
               <KPI label="Jahresausgaben"   val={fmt(yrTot.totalExp)} color={C.red} />
@@ -2438,11 +2498,14 @@ function App({session}) {
             </>
           ) : (
             <>
+              {belegRes.unsicher && (
+                <div style={{background:C.ambL,border:'1px solid rgba(255,180,0,0.4)',borderRadius:10,padding:'10px 12px',marginBottom:12,fontSize:12,color:C.amb,lineHeight:1.5}}>⚠ Bild war evtl. unscharf/unvollständig – bitte Beträge kurz prüfen.</div>
+              )}
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Bezeichnung</div>
               <input value={belegRes.name} onChange={e=>setBelegRes(r=>({...r,name:e.target.value}))} style={{...SS,marginBottom:10,textAlign:'left'}} />
               <div style={{display:'flex',gap:8,marginBottom:10}}>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Betrag (€)</div>
+                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Brutto (€)</div>
                   <input value={belegRes.amount} onChange={e=>setBelegRes(r=>({...r,amount:e.target.value}))} inputMode="decimal" style={{...SS,textAlign:'left',...NUM}} />
                 </div>
                 <div style={{width:140}}>
@@ -2450,7 +2513,26 @@ function App({session}) {
                   <button onClick={()=>setBelegRes(r=>({...r,kind:r.kind==='ein'?'aus':'ein'}))} style={{...SS,cursor:'pointer',textAlign:'left',color:belegRes.kind==='ein'?C.grn:C.txt,fontWeight:600}}>{belegRes.kind==='ein'?'Einnahme':'Ausgabe'}</button>
                 </div>
               </div>
-              {belegRes.info && <div style={{fontSize:12,color:C.mut,marginBottom:10}}>{belegRes.info}</div>}
+              <div style={{display:'flex',gap:8,marginBottom:10}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Netto (€)</div>
+                  <input value={belegRes.netto} onChange={e=>setBelegRes(r=>({...r,netto:e.target.value}))} inputMode="decimal" style={{...SS,textAlign:'left',...NUM}} />
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>MwSt (%)</div>
+                  <input value={belegRes.mwst} onChange={e=>setBelegRes(r=>({...r,mwst:e.target.value}))} inputMode="decimal" style={{...SS,textAlign:'left',...NUM}} />
+                </div>
+              </div>
+              <div style={{display:'flex',gap:8,marginBottom:10}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Belegnummer</div>
+                  <input value={belegRes.belegnr} onChange={e=>setBelegRes(r=>({...r,belegnr:e.target.value}))} style={{...SS,textAlign:'left'}} />
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Datum</div>
+                  <input value={belegRes.datum} onChange={e=>setBelegRes(r=>({...r,datum:e.target.value}))} placeholder="TT.MM.JJJJ" style={{...SS,textAlign:'left'}} />
+                </div>
+              </div>
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Konto</div>
               <select value={belegDest} onChange={e=>setBelegDest(e.target.value)} style={{...SS,marginBottom:10}}>{moveTargets.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Monat</div>
