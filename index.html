@@ -333,7 +333,7 @@ function TargetPicker({title, moveTargets, curY, curM, confirmLabel, onClose, on
 }
 
 /* ══ Item row (Name + Betrag + kompaktes ⋮-Dropdown) ══ */
-function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, dragHandleProps, dragging, dragOver, hideRecur}) {
+function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
   const [menu,setMenu]=useState(null);   // {top,bottom,right}
   const [dlg,setDlg]=useState(null);     // 'note'|'file'|'range'|'move'
   const [mvDest,setMvDest]=useState((moveTargets&&moveTargets[0]&&moveTargets[0].key)||'');
@@ -360,6 +360,8 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
   const mItem=(icon,label,onClick,col)=>(<button onClick={onClick} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:col||C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={icon} sz={16} col={col||C.sub}/> <span>{label}</span></button>);
   const dInput=(w)=>({background:C.surf2,border:'none',borderRadius:7,color:C.txt,padding:'6px 8px',fontSize:13,outline:'none',fontFamily:'inherit',width:w,textAlign:'left'});
   const dcell=(label,node)=>(<label style={{display:'flex',flexDirection:'column',gap:3}}><span style={{fontSize:10,color:C.mut,fontWeight:600}}>{label}</span>{node}</label>);
+  const isoDate=(d)=>{ if(!d) return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(d)) return d; const m=String(d).match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})$/); if(m){ let dd=m[1],mm=m[2],yy=m[3]; if(yy.length===2) yy='20'+yy; return yy+'-'+mm.padStart(2,'0')+'-'+dd.padStart(2,'0'); } return ''; };
+  const cellInput=(w)=>({background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'8px 9px',fontSize:13,outline:'none',fontFamily:'inherit',width:w,textAlign:'left',flexShrink:0});
 
   const openMenu=(e)=>{
     const r=e.currentTarget.getBoundingClientRect();
@@ -368,44 +370,24 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
   };
 
   return (
-    <div style={{borderBottom:'1px solid '+C.sep, borderTop:dragOver?('2px solid '+C.pri):'2px solid transparent', opacity:dragging?0.4:1, background:dragging?C.surf2:'transparent'}}>
-      <div style={{display:'flex',gap:8,alignItems:'center',padding:'9px 0',minHeight:42}}>
-        {selMode ? (
+    <div style={{borderBottom:'1px solid '+C.sep}}>
+      <div style={{display:'flex',gap:8,alignItems:'center',padding:'8px 0',minWidth:'max-content'}}>
+        {selMode && (
           <button onClick={()=>onToggleSelect&&onToggleSelect()} title="Auswählen" style={{width:24,height:24,flexShrink:0,borderRadius:6,border:'1.5px solid '+(selected?C.pri:C.bdrM),background:selected?C.pri:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>
             {selected && <Ic p={P.check} sz={14} col={C.priTxt}/>}
           </button>
-        ) : (
-          <span {...(dragHandleProps||{})} title="Zum Sortieren ziehen" style={{flexShrink:0,width:20,height:30,display:'flex',alignItems:'center',justifyContent:'center',cursor:'grab',color:C.mut,touchAction:'none'}}><Ic p={P.grip} sz={16} col={C.mut}/></span>
         )}
-        <input value={item.name} placeholder="Bezeichnung…" onChange={e=>onUpdate(item.id,'name',e.target.value)}
-          style={{...SI,flex:1,width:'auto',textAlign:'left',fontSize:14}} />
-        <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...SI,width:84,...NUM}} />
-        <span style={{fontSize:12,color:C.mut,width:12,flexShrink:0}}>€</span>
-        {!selMode && !hideRecur && (
-          <button onClick={()=>onToggleRecurring&&onToggleRecurring()}
-            title={item.recurring?'Jeden Monat aktiv — Betrag gilt für alle Monate. Klicken zum Ausschalten.':'Nur dieser Monat — klicken, damit der Betrag für jeden Monat gilt'}
-            style={{width:24,height:24,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,
-              background:item.recurring?C.ambL:'transparent',display:'flex',alignItems:'center',justifyContent:'center'}}>
-            <Ic p={P.repeat} sz={13} col={item.recurring?C.amb:C.mut}/>
-          </button>
-        )}
+        <input value={item.name} placeholder="Bezeichnung…" onChange={e=>onUpdate(item.id,'name',e.target.value)} style={{...cellInput(160),fontSize:14}} />
+        <input type="date" value={isoDate(item.datum)} onChange={e=>onUpdate(item.id,'datum',e.target.value)} style={{...cellInput(138),colorScheme:'dark'}} />
+        <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={cellInput(104)} />
+        <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="Netto" style={{...cellInput(84),...NUM}} />
+        <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...cellInput(88),...NUM}} />
+        <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={cellInput(66)}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>
         {!selMode && (
-          <button onClick={openMenu} title="Optionen" style={{
-            background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,
-            width:26,height:26,borderRadius:6,fontSize:18,lineHeight:1,fontFamily:'inherit',
-            display:'flex',alignItems:'center',justifyContent:'center',
-          }}>⋮</button>
+          <button onClick={openMenu} title="Optionen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,width:26,height:26,borderRadius:6,fontSize:18,lineHeight:1,fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center'}}>⋮</button>
         )}
         <input type="file" ref={fileRef} onChange={handleFile} style={{display:'none'}} accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt" />
       </div>
-      {!selMode && (
-        <div style={{display:'flex',gap:8,flexWrap:'wrap',padding:'0 0 10px 28px'}}>
-          {dcell('Datum', <input value={item.datum||''} onChange={e=>onUpdate(item.id,'datum',e.target.value)} placeholder="TT.MM.JJ" style={dInput(84)} />)}
-          {dcell('Beleg-Nr', <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="—" style={dInput(96)} />)}
-          {dcell('Netto €', <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="—" style={{...dInput(74),...NUM}} />)}
-          {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={dInput(60)}><option value="19">19 %</option><option value="7">7 %</option><option value="0">0 %</option></select>)}
-        </div>
-      )}
       {(hasFrom||hasUntil||hasNote||hasFile) && !selMode && (
         <div style={{display:'flex',flexWrap:'wrap',gap:5,padding:'0 0 9px 28px',marginTop:-3}}>
           {(hasFrom||hasUntil) && chip(P.cal,C.sub,rangeLabel, ()=>setDlg('range'))}
@@ -423,6 +405,8 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
             {mItem(P.clip, hasFile?'Beleg':'Beleg anhängen', ()=>{setMenu(null);setDlg('file');})}
             {onSetRange && mItem(P.cal,'Zeitraum (von–bis)',()=>{setMenu(null);setDlg('range');})}
             {onMoveItem && mItem(P.out,'Verschieben…',()=>{setMenu(null);setDlg('move');})}
+            {onMoveUp && !isFirst && mItem(P.up,'Nach oben',()=>{setMenu(null);onMoveUp();})}
+            {onMoveDown && !isLast && mItem(P.down,'Nach unten',()=>{setMenu(null);onMoveDown();})}
             <div style={{height:1,background:C.sep,margin:'4px 8px'}}/>
             {mItem(P.trash,'Löschen',()=>{ setMenu(null); const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id); }; askConfirm?askConfirm('Zeile „'+(item.name||'ohne Bezeichnung')+'" wirklich löschen?'+(hasFile?' Die angehängte Datei wird ebenfalls entfernt.':''),run):run(); },C.red)}
           </div>
@@ -500,33 +484,19 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
 }
 
 /* ══ Sortier-/Auswahl-Liste (Drag & Drop + Mehrfachauswahl) ══ */
-function ItemList({items, srcKey, updFn, delFn, recurFn, rangeFn, editFn, folderPath, moveTargets, moveItemFn, onReorder, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, curY, curM, hideRecur}) {
-  const dragRef=useRef(null), overRef=useRef(null);
-  const [,force]=useState(0); const rr=()=>force(n=>n+1);
-  const rowEls=useRef({});
-  const ids=items.map(i=>i.id);
-  const startDrag=(e,id)=>{
-    e.preventDefault();
-    dragRef.current=id; overRef.current=id; rr();
-    const move=(ev)=>{
-      const cy=ev.touches?ev.touches[0].clientY:ev.clientY;
-      let t=null;
-      items.forEach(it=>{ const el=rowEls.current[it.id]; if(!el)return; const r=el.getBoundingClientRect(); if(cy>=r.top&&cy<=r.bottom)t=it.id; });
-      if(t&&t!==overRef.current){ overRef.current=t; rr(); }
-    };
-    const up=()=>{
-      document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up);
-      const from=dragRef.current, to=overRef.current; dragRef.current=null; overRef.current=null;
-      if(from&&to&&from!==to){ const arr=[...ids]; const fi=arr.indexOf(from), ti=arr.indexOf(to); arr.splice(fi,1); arr.splice(ti,0,from); onReorder&&onReorder(arr); }
-      rr();
-    };
-    document.addEventListener('pointermove',move); document.addEventListener('pointerup',up);
-  };
+function ItemList({items, srcKey, updFn, delFn, recurFn, rangeFn, editFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, curY, curM, hideRecur}) {
+  const hcell=(label,w)=>(<div style={{width:w,flexShrink:0,fontSize:10,color:C.mut,fontWeight:700}}>{label}</div>);
   return (
-    <div>
-      {items.map(item=>(
-        <div key={item.id} ref={el=>{rowEls.current[item.id]=el;}}>
-          <ItemRow item={item}
+    <div style={{overflowX:'auto'}}>
+      <div style={{minWidth:'max-content'}}>
+        {items.length>0 && (
+          <div style={{display:'flex',gap:8,alignItems:'center',padding:'2px 0 6px',borderBottom:'1px solid '+C.sep,marginBottom:2}}>
+            {selMode && <div style={{width:24,flexShrink:0}}/>}
+            {hcell('Bezeichnung',160)}{hcell('Datum',138)}{hcell('Beleg-Nr',104)}{hcell('Netto €',84)}{hcell('Brutto €',88)}{hcell('MwSt',66)}
+          </div>
+        )}
+        {items.map((item,idx)=>(
+          <ItemRow key={item.id} item={item}
             onUpdate={updFn} onDelete={delFn}
             folderPath={folderPath}
             onUploadFile={onUploadFile} onOpenFile={onOpenFile} onDeleteFile={onDeleteFile}
@@ -537,13 +507,12 @@ function ItemList({items, srcKey, updFn, delFn, recurFn, rangeFn, editFn, folder
             onEditDetails={editFn}
             moveTargets={moveTargets} onMoveItem={moveItemFn?((destKey,ty,tm)=>moveItemFn(srcKey,item,destKey,ty,tm)):null}
             selMode={selMode} selected={selIds&&selIds.includes(item.id)} onToggleSelect={()=>onToggleSel&&onToggleSel(item.id)}
-            dragHandleProps={{onPointerDown:(e)=>startDrag(e,item.id)}}
-            dragging={dragRef.current===item.id}
-            dragOver={overRef.current===item.id && dragRef.current && dragRef.current!==item.id}
+            onMoveUp={moveFn?()=>moveFn(item.id,-1):null} onMoveDown={moveFn?()=>moveFn(item.id,1):null}
+            isFirst={idx===0} isLast={idx===items.length-1}
             hideRecur={hideRecur}
           />
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
@@ -1574,7 +1543,7 @@ function App({session}) {
           updFn={updFn} delFn={delFn} recurFn={recurFn} rangeFn={rangeFn} editFn={editFn}
           folderPath={folderPath}
           moveTargets={srcKey?moveTargets:null} moveItemFn={srcKey?moveItem:null}
-          onReorder={srcKey?(ids=>reorderList(srcKey,ids)):null}
+          moveFn={moveFn}
           selMode={inSel} selIds={selIds} onToggleSel={toggleSel}
           onOpenFile={openFile} onUploadFile={uploadFile} onDeleteFile={deleteFile}
           askConfirm={askConfirm} curY={yr} curM={mo} hideRecur={hideRecur} />
