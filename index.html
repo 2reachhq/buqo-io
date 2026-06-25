@@ -35,6 +35,8 @@
     .navlink:hover { color:#7BC2AA; }
     .drawerPanel{animation:slideInRight .24s cubic-bezier(.2,.7,.2,1)}
     @keyframes slideInRight{from{transform:translateX(100%);opacity:.5}to{transform:translateX(0);opacity:1}}
+    .drawerPanelLeft{animation:slideInLeft .24s cubic-bezier(.2,.7,.2,1)}
+    @keyframes slideInLeft{from{transform:translateX(-100%);opacity:.5}to{transform:translateX(0);opacity:1}}
     .navlink.active { color:#fff; }
   </style>
 </head>
@@ -928,6 +930,8 @@ function App({session}) {
   const recRef = useRef(null);
   const [invSearch,setInvSearch]= useState('');     // Rechnungssuche
   const [invDomain,setInvDomain]= useState('unter'); // Rechnungen/Kunden: Unternehmen vs. Immobilien
+  const [yrView,setYrView]= useState('jahr');        // Jahres- vs Monatsübersicht (Analytics)
+  const [taxOpen,setTaxOpen]= useState({});          // ausklappbare Steuer-Hinweise
   const [sp,   setSp]   = useState('p1');
   const [data, setData] = useState({});
   const [names,setNames]= useState({p1:'Immobilie 1',p2:'Immobilie 2',p3:'Immobilie 3',unternehmen:'Unternehmen'});
@@ -1732,20 +1736,25 @@ function App({session}) {
     setTaxBusy(true);
     try{
       const monatswerte = Array.from({length:12},(_,i)=>{const t=calcTotals(getMD(yr,i),yr,i);return {monat:MONTHS[i],einnahmen:t.totalInc,ausgaben:t.totalExp,ergebnis:t.net};});
-      const snapshot = { namen:names, jahr:yr, jahressumme:yrTot, monatswerte, jahresdaten:data[yr]||{} };
-      const system = "Du bist Steuer-Assistent für einen Nutzer in Deutschland (Immobilien-Vermietung, ein Unternehmen, Privatausgaben). Analysiere die Jahresdaten ("+yr+") und schreibe konkrete Hinweise/Notizen: "
-        + "auffällige Posten, was häufig absetzbar ist, was er mit dem Steuerberater klären sollte, mögliche Spar-/Optimierungsansätze, fehlende Belege. "
-        + "Antworte auf Deutsch in normalem Fließtext mit kurzen Absätzen, KEIN Markdown (keine Rauten, keine Sternchen), für Listen einfache Bindestriche. Erfinde keine Zahlen. "
-        + "Schließe mit einem kurzen Hinweis, dass dies keine verbindliche Steuerberatung ist.\n\nDATEN:\n"+JSON.stringify(snapshot);
-      const { data:resp, error } = await sb.functions.invoke('ai', { body:{ model:'claude-sonnet-4-6', max_tokens:2000, system, messages:[{role:'user',content:'Bitte analysiere meine Daten für '+yr+' und gib mir Steuer-Hinweise.'}] } });
+      const prevAnswers = (data.taxNotes||{})[yr]&&(data.taxNotes||{})[yr].answers || {};
+      const snapshot = { namen:names, jahr:yr, jahressumme:yrTot, monatswerte, jahresdaten:data[yr]||{}, beantworteteRueckfragen:prevAnswers };
+      const system = "Du bist der persönliche Steuerberater-Assistent für einen Nutzer in Deutschland (Immobilien-Vermietung, ein Unternehmen, Privatausgaben). "
+        + "Gib KURZE, konkrete Stichpunkt-Hinweise – KEINE langen Fließtexte. Jeder Hinweis: knapper Titel + 1-2 Sätze Detail. "
+        + "Stelle auch gezielte Rückfragen, wenn dir Infos fehlen (z. B. „Wofür wurde dieser Laptop genutzt?“, „Privat oder geschäftlich?“, „Unternehmen oder Immobilien?“). Berücksichtige bereits beantwortete Rückfragen. "
+        + "Antworte AUSSCHLIESSLICH mit minifiziertem JSON: {\"hinweise\":[{\"typ\":\"tipp|achtung|sparen|frage\",\"titel\":\"...\",\"detail\":\"...\"}]} . "
+        + "typ=frage nur für echte Rückfragen. 5-10 Hinweise. Erfinde keine Zahlen. Kein Text außerhalb des JSON.\n\nDATEN:\n"+JSON.stringify(snapshot);
+      const { data:resp, error } = await sb.functions.invoke('ai', { body:{ model:'claude-sonnet-4-6', max_tokens:2000, system, messages:[{role:'user',content:'Analysiere meine Daten für '+yr+' als persönlicher Steuerberater. Kurze Stichpunkte + Rückfragen.'}] } });
       if(error) throw error;
       if(resp && resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
-      const txt = cleanMd((resp && resp.content && resp.content[0] && resp.content[0].text) || '');
-      setData(prev=>({...prev, taxNotes:{...(prev.taxNotes||{}), [yr]:{ text:txt, ts:new Date().toISOString() }}}));
-      setToast('Steuer-Analyse erstellt');
+      let txt=(resp && resp.content && resp.content[0] && resp.content[0].text) || ''; txt=txt.replace(/```json|```/g,'').trim(); const mm=txt.match(/\{[\s\S]*\}/); if(mm)txt=mm[0];
+      const parsed=JSON.parse(txt); const items=(parsed.hinweise||[]).map(h=>({typ:String(h.typ||'tipp'),titel:String(h.titel||''),detail:String(h.detail||'')})).filter(h=>h.titel);
+      setData(prev=>({...prev, taxNotes:{...(prev.taxNotes||{}), [yr]:{ items, answers:prevAnswers, ts:new Date().toISOString() }}}));
+      setTaxOpen({});
+      setToast(items.length+' Hinweise erstellt');
     }catch(e){ setToast('Analyse fehlgeschlagen: '+(e.message||e)); }
     setTaxBusy(false);
   };
+  const setTaxAnswer = (q, a) => setData(prev=>{ const tn={...(prev.taxNotes||{})}; const cur=tn[yr]||{}; tn[yr]={...cur, answers:{...(cur.answers||{}), [q]:a}}; return {...prev, taxNotes:tn}; });
 
   /* Derived */
   const md    = getMD(yr,mo);
@@ -1988,14 +1997,6 @@ function App({session}) {
 
         {/* Monats-Navigation (Kalender-Popover) + Profil */}
         <div style={{display:'flex',alignItems:'center',gap:isMobile?6:8,flexShrink:0}}>
-          {!isMobile && canUndo && (
-            <button onClick={undo} title="Rückgängig (⌘Z)" style={{
-              display:'flex',alignItems:'center',justifyContent:'center',
-              background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,
-              borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',
-              fontSize:14,lineHeight:1,
-            }}>↩︎</button>
-          )}
           <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>‹</button>
           <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 12px',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600,display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
             <Ic p={P.cal} sz={14} col={C.sub}/> {MONTHS[mo].slice(0,3)} {yr}
@@ -2123,7 +2124,7 @@ function App({session}) {
                     <div style={{fontSize:13,fontWeight:600,color:C.sub,letterSpacing:'0.02em',marginBottom:7}}>Gesamtvermögen · alle Quellen</div>
                     <div style={{display:'flex',alignItems:'baseline',gap:18,flexWrap:'wrap'}}>
                       <div style={{fontSize:isMobile?40:50,fontWeight:800,color:tot.net>=0?C.grn:C.txt,...NUM,lineHeight:1}}>{tot.net>=0?'+':''}{fmt(tot.net)}</div>
-                      <div style={{display:'flex',gap:18,fontSize:13,color:C.sub,opacity:(gesamtHover||isMobile)?1:0,transition:'opacity .15s ease'}}>
+                      <div style={{display:'flex',gap:18,fontSize:13,color:C.sub}}>
                         <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:8,height:8,borderRadius:'50%',background:C.grn,display:'inline-block'}}/>Einnahmen <b style={{color:C.txt,...NUM}}>{fmt(tot.totalInc)}</b></span>
                         <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:8,height:8,borderRadius:'50%',background:'#FFB37A',display:'inline-block'}}/>Ausgaben <b style={{color:C.txt,...NUM}}>{fmtN(tot.totalExp)}</b></span>
                       </div>
@@ -2374,7 +2375,8 @@ function App({session}) {
                     const inserate = names.inserate?.[sp] || [];
                     const channelLocked = inserate.length>0;
                     return (
-                    <div key={fld} style={{display:'flex',alignItems:'center',gap:6,padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
+                    <div key={fld} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
+                      <span style={{width:26,height:26,flexShrink:0,borderRadius:8,background:fld==='airbnb'?'#FF5A5F':'#003580',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:800,fontSize:14,lineHeight:1}}>{fld==='airbnb'?'a':'B'}</span>
                       <span style={{flex:1,fontSize:14,color:C.sub}}>{label}{channelLocked?<span style={{fontSize:11,color:C.mut,marginLeft:6}}>· {inserate.length} Inserate</span>:null}</span>
                       {channelLocked ? (
                         <div onClick={futureMonth?undefined:()=>setEditIncome(true)} style={{...SI,width:96,...NUM,display:'flex',alignItems:'center',justifyContent:'flex-end',cursor:futureMonth?'not-allowed':'pointer',opacity:futureMonth?0.4:1,color:C.pri,fontWeight:600}}>{incomeVal(pd.income,fld)}</div>
@@ -2607,14 +2609,16 @@ function App({session}) {
                 </label>
                 <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:6}}>
                   <input onClick={e=>e.stopPropagation()} value={d.name} onChange={e=>updateDraft(d.id,{name:e.target.value})} placeholder="Bezeichnung…" style={{background:'transparent',border:'none',outline:'none',fontFamily:'inherit',fontSize:15,fontWeight:600,color:C.txt,width:'100%',padding:0}} />
-                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                    <select onClick={e=>e.stopPropagation()} value={d.category||''} onChange={e=>updateDraft(d.id,{category:e.target.value})} style={{background:C.surf3,border:'1px solid '+C.bdr,borderRadius:8,color:d.category?C.txt:C.mut,padding:'4px 9px',fontSize:12,outline:'none',fontFamily:'inherit',cursor:'pointer'}}><option value="">Kategorie</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
-                    <input onClick={e=>e.stopPropagation()} type="date" value={d.datum||''} onChange={e=>updateDraft(d.id,{datum:e.target.value})} style={{background:C.surf3,border:'1px solid '+C.bdr,borderRadius:8,color:C.sub,padding:'4px 9px',fontSize:12,outline:'none',fontFamily:'inherit',colorScheme:'dark'}}/>
+                  <div style={{display:'flex',alignItems:'center',gap:6}}>
+                    <select onClick={e=>e.stopPropagation()} value={d.category||''} onChange={e=>updateDraft(d.id,{category:e.target.value})} style={{background:'transparent',border:'none',color:d.category?C.sub:C.mut,padding:0,fontSize:11,outline:'none',fontFamily:'inherit',cursor:'pointer',maxWidth:110}}><option value="">Kategorie</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
+                    <span style={{color:C.mut,fontSize:11}}>·</span>
+                    <input onClick={e=>e.stopPropagation()} type="date" value={d.datum||''} onChange={e=>updateDraft(d.id,{datum:e.target.value})} style={{background:'transparent',border:'none',color:C.mut,padding:0,fontSize:11,outline:'none',fontFamily:'inherit',colorScheme:'dark'}}/>
                   </div>
                 </div>
-                <input onClick={e=>e.stopPropagation()} value={d.amount} onChange={e=>updateDraft(d.id,{amount:e.target.value})} inputMode="decimal" style={{background:'transparent',border:'none',outline:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,color:C.txt,width:80,textAlign:'right',padding:0,...NUM}} />
-                <button onClick={e=>{e.stopPropagation();updateDraft(d.id,{kind:d.kind==='ein'?'aus':'ein'});}} title="Einnahme/Ausgabe wechseln" style={{width:30,height:30,border:'none',borderRadius:8,cursor:'pointer',flexShrink:0,padding:0,background:C.surf3,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.swap} sz={14} col={C.sub}/></button>
-                <button onClick={e=>{e.stopPropagation();delDraft(d.id);}} title="Entwurf entfernen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',flexShrink:0,fontSize:18,lineHeight:1}}>×</button>
+                <input onClick={e=>e.stopPropagation()} value={d.amount} onChange={e=>updateDraft(d.id,{amount:e.target.value})} inputMode="decimal" style={{background:'transparent',border:'none',outline:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,color:C.txt,width:66,textAlign:'right',padding:0,...NUM}} />
+                <span style={{fontSize:13,color:C.sub,flexShrink:0}}>€</span>
+                <button onClick={e=>{e.stopPropagation();updateDraft(d.id,{kind:d.kind==='ein'?'aus':'ein'});}} title="Einnahme/Ausgabe wechseln" style={{width:24,height:24,border:'none',borderRadius:6,cursor:'pointer',flexShrink:0,padding:0,background:'transparent',display:'flex',alignItems:'center',justifyContent:'center',opacity:0.6}}><Ic p={P.swap} sz={13} col={C.mut}/></button>
+                <button onClick={e=>{e.stopPropagation();delDraft(d.id);}} title="Entwurf entfernen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',flexShrink:0,fontSize:15,lineHeight:1,opacity:0.6}}>×</button>
               </div>
             ); };
             const col = (title,list,colr) => (
@@ -2893,27 +2897,31 @@ function App({session}) {
           {tab==='kunden' && (()=>{
             const fld={...SS,textAlign:'left'};
             const primBtn={display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'};
-            if(custEdit){
-              const isNew=!customers.some(c=>c.id===custEdit.id);
-              return (
-                <>
-                  <button onClick={()=>setCustEdit(null)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:10}}>‹ Kunden</button>
-                  <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em',marginBottom:16}}>{isNew?'Neuer Kunde':'Kunde bearbeiten'}</div>
-                  <div style={{...SC,display:'flex',flexDirection:'column',gap:10}}>
-                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Name / Firma</div><input value={custEdit.name||''} onChange={e=>setCustEdit({...custEdit,name:e.target.value})} style={fld}/></div>
-                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse</div><textarea value={custEdit.address||''} onChange={e=>setCustEdit({...custEdit,address:e.target.value})} rows={3} style={{...fld,resize:'vertical'}}/></div>
-                    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                      <div style={{flex:1,minWidth:160}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={custEdit.email||''} onChange={e=>setCustEdit({...custEdit,email:e.target.value})} style={fld}/></div>
-                      <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Kundennr.</div><input value={custEdit.custNo||''} onChange={e=>setCustEdit({...custEdit,custNo:e.target.value})} style={fld}/></div>
-                    </div>
-                    <button onClick={()=>{ saveCustomer(custEdit); setCustEdit(null); setToast('Kunde gespeichert'); }} style={primBtn}>Speichern</button>
-                  </div>
-                </>
-              );
-            }
             const domCustomers=customersFor(invDomain);
+            const cDom=custEdit&&(custEdit.domain||'unter'); const cIsNew=custEdit&&!customers.some(c=>c.id===custEdit.id);
+            const cDomLbl=cDom==='immo'?'Immobilienkunde':'Unternehmenskunde'; const cDomCol=KONTO_COLORS.unter.c;
             return (
               <>
+                {custEdit && (
+                  <div onClick={()=>setCustEdit(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:130,display:'flex',justifyContent:'flex-start'}}>
+                    <div className="drawerPanelLeft" onClick={e=>e.stopPropagation()} style={{width:'min(440px,100%)',height:'100%',background:C.surf,borderRight:'1px solid '+C.bdr,boxShadow:'24px 0 60px rgba(0,0,0,0.5)',overflowY:'auto',padding:'20px 20px 48px'}}>
+                      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                        <div style={{fontSize:19,fontWeight:800,color:C.txt,letterSpacing:'-0.02em'}}>{cIsNew?('Neuer '+cDomLbl):(cDomLbl+' bearbeiten')}</div>
+                        <button onClick={()=>setCustEdit(null)} title="Schließen" style={{background:C.surf2,border:'none',color:C.sub,width:34,height:34,borderRadius:10,cursor:'pointer',fontSize:20,lineHeight:1,fontFamily:'inherit'}}>×</button>
+                      </div>
+                      <div style={{marginBottom:18}}><span style={{fontSize:12,fontWeight:600,color:cDomCol,background:hexA(cDomCol,0.16),border:'1px solid '+hexA(cDomCol,0.4),borderRadius:8,padding:'4px 11px'}}>{cDom==='immo'?'Immobilien':'Unternehmen'}</span></div>
+                      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                        <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Name / Firma</div><input autoFocus value={custEdit.name||''} onChange={e=>setCustEdit({...custEdit,name:e.target.value})} style={fld}/></div>
+                        <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse</div><textarea value={custEdit.address||''} onChange={e=>setCustEdit({...custEdit,address:e.target.value})} rows={3} style={{...fld,resize:'vertical'}}/></div>
+                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                          <div style={{flex:1,minWidth:160}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={custEdit.email||''} onChange={e=>setCustEdit({...custEdit,email:e.target.value})} style={fld}/></div>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Kundennr.</div><input value={custEdit.custNo||''} onChange={e=>setCustEdit({...custEdit,custNo:e.target.value})} style={fld}/></div>
+                        </div>
+                        <button onClick={()=>{ saveCustomer(custEdit); setCustEdit(null); setToast('Kunde gespeichert'); }} style={primBtn}>Speichern</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14,flexWrap:'wrap',gap:10}}>
                   <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Kunden</div>
                   <button onClick={()=>setCustEdit({id:uid(),name:'',address:'',email:'',custNo:nextCustNo(invDomain),domain:invDomain})} style={{...primBtn,width:'auto',padding:'10px 16px'}}>+ Neuer Kunde</button>
@@ -2936,12 +2944,45 @@ function App({session}) {
               </>
             );
           })()}
-          {/* ══ JAHRESÜBERSICHT ══ */}
+          {/* ══ JAHRESÜBERSICHT / MONATSÜBERSICHT ══ */}
           {tab==='yr' && <>
-            <div style={{marginBottom:24}}>
-              <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Jahresübersicht</div>
-              <div style={{fontSize:13,color:C.sub}}>{yr}</div>
+            <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:16}}>{yrView==='jahr'?('Jahresübersicht '+yr):('Monatsübersicht · '+MONTHS[mo]+' '+yr)}</div>
+            <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
+              {[['jahr','Jahresübersicht'],['monat','Monatsübersicht']].map(([k,label])=>{ const on=yrView===k; return (
+                <button key={k} onClick={()=>setYrView(k)} style={{background:on?hexA(C.pri,0.16):C.surf,border:'1px solid '+(on?hexA(C.pri,0.45):'transparent'),color:on?C.pri:C.sub,borderRadius:10,padding:'8px 18px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
+              ); })}
             </div>
+
+            {yrView==='monat' && (()=>{
+              const py=mo===0?yr-1:yr, pm=mo===0?11:mo-1;
+              const cur=calcTotals(md,yr,mo); const prev=calcTotals(getMD(py,pm),py,pm);
+              const propStats=PROPS.map(p=>{ const r=calcProp(md.props?.[p],yr,mo); return {name:names[p]||p, inc:r.netto, exp:r.exp, gewinn:r.gewinn}; });
+              const topInc=propStats.slice().sort((a,b)=>b.inc-a.inc)[0]||{name:'—',inc:0};
+              const bestG=propStats.slice().sort((a,b)=>b.gewinn-a.gewinn)[0]||{name:'—',gewinn:0};
+              const pct=(c,p)=> (p&&Math.abs(p)>0.5)? Math.round((c-p)/Math.abs(p)*100) : null;
+              const delta=(c,p,goodUp)=>{ const v=pct(c,p); if(v==null) return null; const up=v>=0; const good=goodUp?up:!up; return <span style={{fontSize:12,fontWeight:700,color:good?C.grn:'#FFB37A',display:'inline-flex',alignItems:'center',gap:3}}>{up?'▲':'▼'} {Math.abs(v)}%</span>; };
+              const card=(title,valNode,sub)=>(<div style={{...SC,flex:1,minWidth:200}}><div style={{fontSize:12,color:C.sub,marginBottom:8}}>{title}</div>{valNode}{sub&&<div style={{fontSize:12,color:C.mut,marginTop:7,display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>{sub}</div>}</div>);
+              return (
+                <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                  <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+                    {card('Monatsergebnis', <div style={{fontSize:28,fontWeight:800,color:cur.net>=0?C.grn:'#FFB37A',...NUM}}>{cur.net>=0?'+':'-'}{fmt(Math.abs(cur.net))}</div>, <>{delta(cur.net,prev.net,true)} <span>ggü. {MONTHS[pm].slice(0,3)} ({prev.net>=0?'+':'-'}{fmt(Math.abs(prev.net))})</span></>)}
+                    {card('Einnahmen', <div style={{fontSize:28,fontWeight:800,color:C.grn,...NUM}}>{fmt(cur.totalInc)}</div>, <>{delta(cur.totalInc,prev.totalInc,true)} <span>ggü. Vormonat</span></>)}
+                    {card('Ausgaben', <div style={{fontSize:28,fontWeight:800,color:'#FFB37A',...NUM}}>-{fmt(cur.totalExp)}</div>, <>{delta(cur.totalExp,prev.totalExp,false)} <span>ggü. Vormonat</span></>)}
+                  </div>
+                  <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+                    {card('Top-Standort (Umsatz)', <div style={{fontSize:20,fontWeight:800,color:C.txt}}>{topInc.name}</div>, <span style={{...NUM,color:C.grn}}>{fmt(topInc.inc)} Einnahmen</span>)}
+                    {card('Beste Immobilie (Gewinn)', <div style={{fontSize:20,fontWeight:800,color:C.txt}}>{bestG.name}</div>, <span style={{...NUM,color:bestG.gewinn>=0?C.grn:'#FFB37A'}}>{bestG.gewinn>=0?'+':'-'}{fmt(Math.abs(bestG.gewinn))} Gewinn</span>)}
+                  </div>
+                  <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+                    {card('Private Ausgaben', <div style={{fontSize:24,fontWeight:800,color:'#FFB37A',...NUM}}>-{fmt(cur.privatExp)}</div>, <>{delta(cur.privatExp,prev.privatExp,false)} <span>ggü. {MONTHS[pm].slice(0,3)} (-{fmt(prev.privatExp)})</span></>)}
+                    {card('Unternehmen Ergebnis', <div style={{fontSize:24,fontWeight:800,color:(cur.unterInc-cur.unterExp)>=0?C.grn:'#FFB37A',...NUM}}>{(cur.unterInc-cur.unterExp)>=0?'+':'-'}{fmt(Math.abs(cur.unterInc-cur.unterExp))}</div>, <span style={{color:C.mut}}>{fmt(cur.unterInc)} Ein · -{fmt(cur.unterExp)} Aus</span>)}
+                  </div>
+                  <div style={{fontSize:12,color:C.mut,lineHeight:1.5,padding:'2px 2px'}}>Werte für {MONTHS[mo]} {yr}. Monat oben über die Monats-Navigation wechseln.</div>
+                </div>
+              );
+            })()}
+
+            {yrView==='jahr' && <>
             <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
               <span style={{fontSize:12,color:C.mut,marginRight:2}}>Anzeigen:</span>
               {[['immo','Immobilien'],['unter','Unternehmen'],['privat','Privat']].map(([k,label])=>{
@@ -2975,15 +3016,15 @@ function App({session}) {
                         title={fut?'Monat hat noch nicht begonnen':''}>
                         <td style={{padding:'10px',fontWeight:s.m===mo?600:400,color:s.m===mo?C.txt:C.sub}}>{MONTHS[s.m]}</td>
                         <td style={{padding:'10px',textAlign:'right',opacity:dim('immo'),color:(!fut&&s.immoInc>0)?C.grn:C.mut,...NUM}}>{cell(s.immoInc>0,fmt(s.immoInc))}</td>
-                        <td style={{padding:'10px',textAlign:'right',opacity:dim('immo'),color:(!fut&&s.immoExp>0)?C.red:C.mut,...NUM}}>{cell(s.immoExp>0,fmt(s.immoExp))}</td>
+                        <td style={{padding:'10px',textAlign:'right',opacity:dim('immo'),color:(!fut&&s.immoExp>0)?C.red:C.mut,...NUM}}>{cell(s.immoExp>0,fmtN(s.immoExp))}</td>
                         <td style={{padding:'10px',textAlign:'right',opacity:dim('unter'),color:(!fut&&(s.unterInc>0||s.unterExp>0))?(ur>=0?C.grn:C.red):C.mut,...NUM}}>
-                          {cell(s.unterInc>0||s.unterExp>0,(ur>=0?'+':'')+fmt(ur))}
+                          {cell(s.unterInc>0||s.unterExp>0,(ur>=0?'+':'-')+fmt(Math.abs(ur)))}
                         </td>
-                        <td style={{padding:'10px',textAlign:'right',opacity:dim('privat'),color:(!fut&&s.privatExp>0)?C.red:C.mut,...NUM}}>{cell(s.privatExp>0,fmt(s.privatExp))}</td>
+                        <td style={{padding:'10px',textAlign:'right',opacity:dim('privat'),color:(!fut&&s.privatExp>0)?C.red:C.mut,...NUM}}>{cell(s.privatExp>0,fmtN(s.privatExp))}</td>
                         <td style={{padding:'10px',textAlign:'right',color:(!fut&&inc>0)?C.grn:C.mut,...NUM}}>{cell(inc>0,fmt(inc))}</td>
-                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&exp>0)?C.red:C.mut,...NUM}}>{cell(exp>0,fmt(exp))}</td>
+                        <td style={{padding:'10px',textAlign:'right',color:(!fut&&exp>0)?C.red:C.mut,...NUM}}>{cell(exp>0,fmtN(exp))}</td>
                         <td style={{padding:'10px',textAlign:'right',fontWeight:600,color:ok?(net>=0?C.grn:C.red):C.mut,...NUM}}>
-                          {cell(inc>0||exp>0,(net>=0?'+':'')+fmt(net))}
+                          {cell(inc>0||exp>0,(net>=0?'+':'-')+fmt(Math.abs(net)))}
                         </td>
                       </tr>
                     );
@@ -2994,8 +3035,8 @@ function App({session}) {
                     <td style={{padding:'12px',fontWeight:600,color:C.sub}}>Jahresgesamt</td>
                     <td colSpan={4}></td>
                     <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:C.grn,...NUM}}>{fmt(yrTotF.totalInc)}</td>
-                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:C.red,...NUM}}>{fmt(yrTotF.totalExp)}</td>
-                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:yrTotF.net>=0?C.grn:C.red,...NUM}}>{yrTotF.net>=0?'+':''}{fmt(yrTotF.net)}</td>
+                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:C.red,...NUM}}>{fmtN(yrTotF.totalExp)}</td>
+                    <td style={{padding:'12px',textAlign:'right',fontWeight:700,color:yrTotF.net>=0?C.grn:C.red,...NUM}}>{yrTotF.net>=0?'+':'-'}{fmt(Math.abs(yrTotF.net))}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -3003,8 +3044,8 @@ function App({session}) {
             <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
               {[
                 {label:'Jahreseinnahmen',val:fmt(yrTotF.totalInc),col:C.grn,bg:C.grnL,bdr:'rgba(62,207,142,0.22)'},
-                {label:'Jahresausgaben', val:fmt(yrTotF.totalExp),col:C.red,bg:C.redL,bdr:'rgba(255,90,95,0.22)'},
-                {label:'Jahresergebnis', val:(yrTotF.net>=0?'+':'')+fmt(yrTotF.net),col:yrTotF.net>=0?C.grn:C.red,bg:yrTotF.net>=0?C.grnL:C.redL,bdr:yrTotF.net>=0?'rgba(62,207,142,0.22)':'rgba(255,90,95,0.22)'},
+                {label:'Jahresausgaben', val:fmtN(yrTotF.totalExp),col:C.red,bg:C.redL,bdr:'rgba(255,90,95,0.22)'},
+                {label:'Jahresergebnis', val:(yrTotF.net>=0?'+':'-')+fmt(Math.abs(yrTotF.net)),col:yrTotF.net>=0?C.grn:C.red,bg:yrTotF.net>=0?C.grnL:C.redL,bdr:yrTotF.net>=0?'rgba(62,207,142,0.22)':'rgba(255,90,95,0.22)'},
               ].map(({label,val,col,bg,bdr})=>(
                 <div key={label} style={{flex:1,minWidth:155,background:bg,border:'1px solid '+bdr,borderRadius:16,padding:'18px 22px'}}>
                   <div style={{fontSize:12,color:col,opacity:.8,marginBottom:8,fontWeight:500}}>{label}</div>
@@ -3012,6 +3053,7 @@ function App({session}) {
                 </div>
               ))}
             </div>
+            </>}
           </>}
 
           {/* ══ STEUER ══ */}
@@ -3020,27 +3062,47 @@ function App({session}) {
               <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Steuer-Übersicht</div>
               <div style={{fontSize:13,color:C.sub}}>{yr} · Mönchengladbach, NRW · Schätzungen ohne Gewähr</div>
             </div>
-            {/* KI-Steuer-Analyse */}
-            {(()=>{ const tnote=(data.taxNotes||{})[yr]; return (
-              <div style={{...SC,marginBottom:20,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint}}>
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:10,flexWrap:'wrap'}}>
-                  <div style={{fontSize:14,fontWeight:700,display:'flex',alignItems:'center',gap:7}}><Ic p={P.spark} sz={16} col={KONTO_COLORS.unter.c}/> KI-Steuer-Analyse</div>
-                  <button onClick={analyzeTax} disabled={taxBusy} style={{background:KONTO_COLORS.unter.c,color:'#0A0A0A',border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:600,cursor:taxBusy?'default':'pointer',fontFamily:'inherit',opacity:taxBusy?0.6:1}}>{taxBusy?'Analysiert…':(tnote?'Neu analysieren':'Analysieren')}</button>
+            {/* Persönlicher Steuerberater-Assistent */}
+            {(()=>{ const tnote=(data.taxNotes||{})[yr]; const items=(tnote&&tnote.items)||[];
+              const TY={tipp:{c:'#7BC2AA',ic:P.spark,lbl:'Tipp'},sparen:{c:'#7BC2AA',ic:P.spark,lbl:'Sparpotenzial'},achtung:{c:'#FFB37A',ic:P.doc,lbl:'Achtung'},frage:{c:'#ABC4FF',ic:P.note,lbl:'Rückfrage'}};
+              return (
+              <div style={{marginBottom:20}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+                  <div style={{fontSize:14,fontWeight:700,display:'flex',alignItems:'center',gap:7}}><Ic p={P.spark} sz={16} col={KONTO_COLORS.unter.c}/> Persönlicher Steuerberater</div>
+                  <button onClick={analyzeTax} disabled={taxBusy} style={{background:KONTO_COLORS.unter.c,color:'#0A0A0A',border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:600,cursor:taxBusy?'default':'pointer',fontFamily:'inherit',opacity:taxBusy?0.6:1}}>{taxBusy?'Analysiert…':(items.length?'Neu analysieren':'Analysieren')}</button>
                 </div>
-                {tnote ? (
-                  <>
-                    <div style={{fontSize:14,color:C.txt,whiteSpace:'pre-wrap',lineHeight:1.6}}>{tnote.text}</div>
-                    <div style={{fontSize:11,color:C.mut,marginTop:10}}>Erstellt: {new Date(tnote.ts).toLocaleDateString('de-DE')} · keine verbindliche Steuerberatung</div>
-                  </>
+                {items.length ? (
+                  <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                    {items.map((h,i)=>{ const ty=TY[h.typ]||TY.tipp; const open=!!taxOpen[i]; const isQ=h.typ==='frage'; const ans=(tnote.answers||{})[h.titel]||''; return (
+                      <div key={i} style={{background:C.surf2,border:'1px solid '+(open?hexA(ty.c,0.4):C.bdr),borderRadius:12,overflow:'hidden'}}>
+                        <button onClick={()=>setTaxOpen(o=>({...o,[i]:!o[i]}))} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',padding:'12px 14px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                          <span style={{width:26,height:26,borderRadius:8,background:hexA(ty.c,0.16),display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={ty.ic} sz={14} col={ty.c}/></span>
+                          <span style={{flex:1,minWidth:0,fontSize:14,fontWeight:600,color:C.txt}}>{h.titel}</span>
+                          <span style={{display:'inline-flex',transition:'transform .16s',transform:open?'rotate(180deg)':'none'}}><Ic p={P.down} sz={14} col={C.sub}/></span>
+                        </button>
+                        {open && (
+                          <div style={{padding:'0 14px 14px 50px'}}>
+                            <div style={{fontSize:13.5,color:C.sub,lineHeight:1.55}}>{h.detail}</div>
+                            {isQ && (
+                              <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap'}}>
+                                <input defaultValue={ans} onBlur={e=>setTaxAnswer(h.titel,e.target.value)} placeholder="Deine Antwort… (wird beim nächsten Analysieren berücksichtigt)" style={{flex:1,minWidth:180,background:C.surf3,border:'1px solid '+C.bdr,borderRadius:9,color:C.txt,padding:'9px 11px',fontSize:13,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ); })}
+                    <div style={{fontSize:11,color:C.mut,marginTop:4}}>Erstellt: {new Date(tnote.ts).toLocaleDateString('de-DE')} · keine verbindliche Steuerberatung</div>
+                  </div>
                 ) : (
-                  <div style={{fontSize:13,color:C.sub,lineHeight:1.5}}>Lass die KI deine Zahlen für {yr} durchgehen – sie schreibt dir Hinweise, mögliche Spar-/Absetzpunkte und was du mit dem Steuerberater klären solltest.</div>
+                  <div style={{...SC,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint,fontSize:13,color:C.sub,lineHeight:1.5}}>Dein persönlicher Steuerberater geht deine Zahlen für {yr} durch und gibt dir kurze Hinweise (worauf achten, was absetzbar ist, wo du sparen kannst) sowie gezielte Rückfragen. Tippe auf einen Hinweis zum Aufklappen.</div>
                 )}
               </div>
             ); })()}
             <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:20}}>
               <KPI label="Jahreseinnahmen"  val={fmt(yrTot.totalInc)} color={C.grn} />
-              <KPI label="Jahresausgaben"   val={fmt(yrTot.totalExp)} color={C.red} />
-              <KPI label="Jahresgewinn"      val={(yrTot.net>=0?'+':'')+fmt(yrTot.net)} color={yrTot.net>=0?C.grn:C.red} />
+              <KPI label="Jahresausgaben"   val={fmtN(yrTot.totalExp)} color={C.red} />
+              <KPI label="Jahresgewinn"      val={(yrTot.net>=0?'+':'-')+fmt(Math.abs(yrTot.net))} color={yrTot.net>=0?C.grn:C.red} />
             </div>
             <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:20}}>
               <div style={{...SC,flex:1,minWidth:200}}>
