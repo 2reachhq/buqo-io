@@ -2837,6 +2837,18 @@ function App({session}) {
                         <button onClick={()=>downloadInvoicePDF(invEdit)} style={{...primBtn,background:C.surf2,color:C.txt,flex:1,minWidth:130}}><Ic p={P.upload} sz={16} col={C.txt}/> Herunterladen</button>
                       </div>
                       </div>
+                      {/* RECHTS: Live-Vorschau */}
+                      {!isMobile && (
+                      <div style={{flex:1,minWidth:0,position:'sticky',top:80}}>
+                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                          <div style={{fontSize:12,fontWeight:600,color:C.sub,display:'flex',alignItems:'center',gap:7}}><Ic p={P.eye} sz={14} col={C.sub}/> Vorschau</div>
+                          <button onClick={()=>setInvPreview(true)} title="Groß anzeigen" style={{background:C.surf2,border:'none',color:C.sub,borderRadius:8,padding:'5px 10px',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Vergrößern</button>
+                        </div>
+                        <div style={{borderRadius:14,overflow:'hidden',border:'1px solid '+C.bdr,background:'#fff'}}>
+                          <iframe title="Rechnungsvorschau" srcDoc={invoiceHTML(invEdit)} style={{width:'100%',height:760,border:'none',background:'#fff',display:'block'}} />
+                        </div>
+                      </div>
+                      )}
                     </div>
                   )}
                   {/* Große Vorschau (Popup) */}
