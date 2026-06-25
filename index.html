@@ -1715,17 +1715,19 @@ function App({session}) {
   const belBerLabel = k => k==='unter' ? (names.unternehmen||'Firma') : k==='privat' ? (names.privatLabel||'Privat') : (names[k]||k);
   const belYears = ()=>{ const ys=Object.keys(data).filter(k=>/^\d+$/.test(k)).map(Number); if(!ys.includes(yr)) ys.push(yr); return ys.sort((a,b)=>b-a); };
   const belegesLeaf = (ber,y2,m2,kind)=>{ const md=getMD(y2,m2)||{}; const list = ber==='unter' ? (kind==='ein'?md.unternehmen?.clients:md.unternehmen?.items) : ber==='privat' ? (kind==='ein'?md.privat?.einnahmen:md.privat?.items) : (kind==='ein'?md.props?.[ber]?.einnahmen:md.props?.[ber]?.expenses);
-    const items=(list||[]).filter(it=>it.filePath||it.fileData).map(it=>({id:it.id,name:it.name||'Beleg',date:it.datum,amount:num(it.amount),recurring:it.recurring,filePath:it.filePath,fileData:it.fileData,fileName:it.fileName}));
+    const items=(list||[]).filter(it=>it.filePath||it.fileData).map(it=>({id:it.id,name:it.name||'Beleg',date:it.datum,amount:num(it.amount),recurring:it.recurring,filePath:it.filePath,fileData:it.fileData,fileName:it.fileName,_ber:ber,_y:y2,_m:m2,_kind:kind}));
     const dom = ber==='unter'?'unter':(ber==='privat'?null:'immo');
-    if(kind==='ein' && dom){ (data.invoices||[]).forEach(iv=>{ if(iv.pdfPath && (iv.domain||'unter')===dom && iv.account===ber){ const dt=new Date(iv.sentDate||iv.date); if(!isNaN(dt)&&dt.getFullYear()===y2&&dt.getMonth()===m2) items.push({id:iv.id,name:'Rechnung '+iv.number,date:iv.sentDate||iv.date,amount:(iv.total||0),filePath:iv.pdfPath}); } }); }
+    if(kind==='ein' && dom){ (data.invoices||[]).forEach(iv=>{ if(iv.pdfPath && (iv.domain||'unter')===dom && iv.account===ber){ const dt=new Date(iv.sentDate||iv.date); if(!isNaN(dt)&&dt.getFullYear()===y2&&dt.getMonth()===m2) items.push({id:iv.id,name:'Rechnung '+iv.number,date:iv.sentDate||iv.date,amount:(iv.total||0),filePath:iv.pdfPath,_ber:ber,_y:y2,_m:m2,_kind:kind}); } }); }
     return items; };
   const belegesUnder = (p)=>{ const out=[]; const bers=p[0]?[p[0]]:belBerKeys; const yl=belYears(); bers.forEach(ber=>{ const yrs=p[1]!=null?[p[1]]:yl; yrs.forEach(y2=>{ const mos=p[2]!=null?[p[2]]:[0,1,2,3,4,5,6,7,8,9,10,11]; mos.forEach(m2=>{ const kinds=p[3]?[p[3]]:['ein','aus']; kinds.forEach(kind=>{ belegesLeaf(ber,y2,m2,kind).forEach(b=>out.push(b)); }); }); }); }); return out; };
   const downloadBelegeZip = async (p, label)=>{ const items=belegesUnder(p); if(!items.length){ setToast('Keine Belege in diesem Ordner.'); return; } setZipBusy(true); setToast('📦 Belege werden gepackt…');
+    const safe=s=>String(s||'').replace(/[\/\\:*?"<>|]/g,'_').trim();
+    const segLabels=b=>[belBerLabel(b._ber), String(b._y), MONTHS[b._m], b._kind==='ein'?'Einnahmen':'Ausgaben'].map(safe);
     try{ await loadJSZip(); const zip=new window.JSZip(); const used={};
       for(const b of items){ let payload=null, ext='pdf', isB64=false;
         if(b.fileData){ const m=String(b.fileData).match(/^data:(.*?);base64,(.*)$/); if(m){ payload=m[2]; isB64=true; ext=(m[1].split('/')[1]||'bin').replace('jpeg','jpg'); } }
         else if(b.filePath){ try{ const {data:dd}=await sb.storage.from('belege').createSignedUrl(b.filePath,3600); if(dd&&dd.signedUrl){ const r=await fetch(dd.signedUrl); payload=await r.arrayBuffer(); ext=(b.filePath.split('.').pop()||'pdf').toLowerCase(); } }catch(_){} }
-        if(payload!=null){ let fn=(String(b.name||'Beleg').replace(/[^A-Za-z0-9äöüÄÖÜ \-]/g,'_').trim()||'Beleg')+(b.date?'_'+toISO(b.date):'')+'.'+ext; if(used[fn]){ used[fn]++; fn=fn.replace('.'+ext,'_'+used[fn]+'.'+ext); } else used[fn]=1; zip.file(fn, payload, isB64?{base64:true}:undefined); } }
+        if(payload!=null){ const rel=segLabels(b).slice(p.length).join('/'); let fn=(rel?rel+'/':'')+(String(b.name||'Beleg').replace(/[^A-Za-z0-9äöüÄÖÜ \-]/g,'_').trim()||'Beleg')+(b.date?'_'+toISO(b.date):'')+'.'+ext; if(used[fn]){ used[fn]++; fn=fn.replace('.'+ext,'_'+used[fn]+'.'+ext); } else used[fn]=1; zip.file(fn, payload, isB64?{base64:true}:undefined); } }
       const blob=await zip.generateAsync({type:'blob'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=(String(label||'Belege').replace(/[^A-Za-z0-9äöüÄÖÜ \-]/g,'_'))+'.zip'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); setToast(items.length+' Belege als ZIP geladen');
     }catch(e){ setToast('ZIP-Fehler: '+(e.message||e)); }
     setZipBusy(false); };
