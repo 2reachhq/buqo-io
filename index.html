@@ -727,7 +727,7 @@ function App({session}) {
   const [tab,  setTab]  = useState('quellen');
   const [sonstOpen,setSonstOpen]= useState(false);
   const [gesamtHover,setGesamtHover]= useState(false);
-  const [openAcct,setOpenAcct]= useState(null);    // Konto-Accordion auf Startseite
+  const [openAcct,setOpenAcct]= useState('unter');    // Konto-Accordion auf Startseite (Unternehmen standardmäßig offen)
   const [invEdit,setInvEdit]= useState(null);      // Rechnung im Editor (Entwurf)
   const [custEdit,setCustEdit]= useState(null);    // Kunde im Editor
   const [invAiBusy,setInvAiBusy]= useState(false);  // KI-Assistent Rechnung
@@ -1806,8 +1806,8 @@ function App({session}) {
             const ICONS={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
             const iconFor=(key,def)=>ICONS[(names.propIcon&&names.propIcon[key])||def]||P.house;
             const konten=[
-              ...PROPS.map((p,i)=>{ const r=calcProp(md.props?.[p],yr,mo); return {key:p,kind:'prop',pid:p,name:names[p],onName:e=>setNames(n=>({...n,[p]:e.target.value})),icon:iconFor(p,'house'),inc:r.netto,exp:r.exp,ci:i}; }),
               {key:'unter',kind:'tab',tab:'unter',name:names.unternehmen,onName:e=>setNames(n=>({...n,unternehmen:e.target.value})),icon:iconFor('unter','brief'),inc:tot.unterInc,exp:tot.unterExp,ci:3},
+              ...PROPS.map((p,i)=>{ const r=calcProp(md.props?.[p],yr,mo); return {key:p,kind:'prop',pid:p,name:names[p],onName:e=>setNames(n=>({...n,[p]:e.target.value})),icon:iconFor(p,'house'),inc:r.netto,exp:r.exp,ci:i}; }),
               {key:'privat',kind:'tab',tab:'privat',name:(names.privatLabel||'Privat'),onName:e=>setNames(n=>({...n,privatLabel:e.target.value})),icon:iconFor('privat','prson'),inc:sumItems(md.privat?.einnahmen,yr,mo),exp:tot.privatExp,ci:4},
             ];
             const scrollBy=(dir)=>{ const el=quellenScrollRef.current; if(el) el.scrollBy({left:dir*el.clientWidth*0.92,behavior:'smooth'}); };
@@ -1827,10 +1827,10 @@ function App({session}) {
                     </div>
                   </div>
                 </div>
-                {/* Konto-Slider (max. 3 sichtbar, Pfeile außerhalb) */}
-                <div style={{position:'relative',margin:isMobile?'0':'0 52px'}}>
-                  <button onClick={()=>scrollBy(-1)} title="Zurück" style={{...arrowBtn,position:'absolute',left:isMobile?-4:-52,top:'50%',transform:'translateY(-50%)',zIndex:5}}>‹</button>
-                  <button onClick={()=>scrollBy(1)} title="Weiter" style={{...arrowBtn,position:'absolute',right:isMobile?-4:-52,top:'50%',transform:'translateY(-50%)',zIndex:5}}>›</button>
+                {/* Konto-Slider — Karten bündig mit Gesamtvermögen, Pfeile absolut außerhalb */}
+                <div style={{position:'relative'}}>
+                  <button onClick={()=>scrollBy(-1)} title="Zurück" style={{...arrowBtn,position:'absolute',left:-46,top:'50%',transform:'translateY(-50%)',zIndex:5}}>‹</button>
+                  <button onClick={()=>scrollBy(1)} title="Weiter" style={{...arrowBtn,position:'absolute',right:-46,top:'50%',transform:'translateY(-50%)',zIndex:5}}>›</button>
                   <div ref={quellenScrollRef} style={{display:'flex',gap:14,overflowX:'auto',scrollbarWidth:'none',scrollSnapType:'x mandatory',paddingBottom:4}}>
                     {konten.map(k=>{ const erg=k.inc-k.exp; const c=PAL[k.ci], tint=TINT[k.ci], bd=BD[k.ci]; const open=openAcct===k.key; const toggle=()=>{ if(open){ setOpenAcct(null); } else { if(k.kind==='prop')setSp(k.pid); setOpenAcct(k.key); } }; return (
                       <div key={k.key} onClick={toggle} style={{flexShrink:0,width:isMobile?'82%':'calc((100% - 28px)/3)',scrollSnapAlign:'start',background:open?tint:C.surf2,border:'1px solid '+(open?c:'transparent'),borderRadius:18,padding:'18px 20px',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
