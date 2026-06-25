@@ -400,7 +400,7 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
         <div style={{display:'flex',flexWrap:'wrap',gap:5,padding:'0 0 9px 28px',marginTop:-3}}>
           {(hasFrom||hasUntil) && chip(P.cal,C.sub,rangeLabel, ()=>setDlg('range'))}
           {hasNote && chip(P.note,C.mut,'Notiz', ()=>setDlg('note'))}
-          {hasFile && chip(P.clip,C.mut,'Datei', ()=>setDlg('file'))}
+          {hasFile && chip(P.clip,C.mut,'Beleg', ()=>setDlg('file'))}
         </div>
       )}
 
@@ -409,8 +409,9 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
         <div onClick={()=>setMenu(null)} style={{position:'fixed',inset:0,zIndex:110}}>
           <div onClick={e=>e.stopPropagation()} style={{position:'fixed',right:menu.right,top:menu.top!=null?menu.top:undefined,bottom:menu.bottom!=null?menu.bottom:undefined,width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
             {onEditDetails && mItem(P.brief,'Kundendetails…',()=>{setMenu(null);onEditDetails(item.id);},C.pri)}
+            {mItem(P.doc,'Details (Datum, Netto, MwSt)',()=>{setMenu(null);setDlg('details');})}
             {mItem(P.note, hasNote?'Notiz bearbeiten':'Notiz', ()=>{setMenu(null);setDlg('note');})}
-            {mItem(P.clip, hasFile?'Datei':'Datei anhängen', ()=>{setMenu(null);setDlg('file');})}
+            {mItem(P.clip, hasFile?'Beleg':'Beleg anhängen', ()=>{setMenu(null);setDlg('file');})}
             {onSetRange && mItem(P.cal,'Zeitraum (von–bis)',()=>{setMenu(null);setDlg('range');})}
             {onMoveItem && mItem(P.out,'Verschieben…',()=>{setMenu(null);setDlg('move');})}
             <div style={{height:1,background:C.sep,margin:'4px 8px'}}/>
@@ -428,18 +429,46 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
         </Sheet>
       )}
 
-      {/* Datei */}
+      {/* Beleg / Vertrag (Datei) */}
       {dlg==='file' && (
-        <Sheet title={(item.name||'Zeile')+' · Datei'} onClose={()=>setDlg(null)}>
+        <Sheet title={(item.name||'Zeile')+' · Beleg'} onClose={()=>setDlg(null)}>
           {hasFile ? (
             <div style={{display:'flex',alignItems:'center',gap:8,background:C.surf2,borderRadius:8,padding:'10px 12px'}}>
               {item.filePath ? <button onClick={()=>onOpenFile&&onOpenFile(item.filePath,item.fileName)} style={{background:'none',border:'none',color:C.pri,fontSize:14,cursor:'pointer',fontFamily:'inherit',padding:0,flex:1,textAlign:'left',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.fileName}</button>
                 : <a href={item.fileData} download={item.fileName} style={{color:C.pri,fontSize:14,flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.fileName}</a>}
-              <button onClick={()=>{ const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onUpdate(item.id,'__file__',{filePath:null,fileData:null,fileName:''}); setDlg(null); }; askConfirm?askConfirm('Datei „'+item.fileName+'" entfernen? Sie wird auch aus dem Online-Speicher gelöscht.',run):run(); }} style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:18,lineHeight:1}}>×</button>
+              <button onClick={()=>{ const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onUpdate(item.id,'__file__',{filePath:null,fileData:null,fileName:''}); setDlg(null); }; askConfirm?askConfirm('Beleg „'+item.fileName+'" entfernen? Er wird auch aus dem Online-Speicher gelöscht.',run):run(); }} style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:18,lineHeight:1}}>×</button>
             </div>
           ) : (
-            <button onClick={()=>fileRef.current.click()} style={{...menuBtn,marginTop:0,justifyContent:'center',color:C.pri,background:C.priL,fontWeight:600}}>+ Datei anhängen</button>
+            <button onClick={()=>fileRef.current.click()} style={{...menuBtn,marginTop:0,justifyContent:'center',color:C.pri,background:C.priL,fontWeight:600}}>+ Beleg anhängen</button>
           )}
+        </Sheet>
+      )}
+
+      {/* Details: Datum, Belegnummer, Netto, MwSt */}
+      {dlg==='details' && (
+        <Sheet title={(item.name||'Zeile')+' · Details'} onClose={()=>setDlg(null)}>
+          <div style={{fontSize:12,color:C.mut,marginBottom:12,lineHeight:1.5}}>Brutto ist der Betrag in der Zeile. Hier zusätzliche Angaben für den Steuerberater.</div>
+          <div style={{display:'flex',gap:8,marginBottom:10}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Datum</div>
+              <input value={item.datum||''} onChange={e=>onUpdate(item.id,'datum',e.target.value)} placeholder="TT.MM.JJJJ" style={{...SS,textAlign:'left'}} />
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Belegnummer</div>
+              <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} style={{...SS,textAlign:'left'}} />
+            </div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Netto (€)</div>
+              <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" style={{...SS,textAlign:'left',...NUM}} />
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,color:C.sub,marginBottom:6}}>MwSt (%)</div>
+              <input value={item.mwst||''} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} inputMode="decimal" style={{...SS,textAlign:'left',...NUM}} />
+            </div>
+          </div>
+          <button onClick={()=>setDlg(null)} style={{...menuBtn,justifyContent:'center',background:C.priL,color:C.pri,fontWeight:600,marginTop:14}}>Fertig</button>
         </Sheet>
       )}
 
@@ -1758,7 +1787,7 @@ function App({session}) {
                   <div style={{fontSize:34,fontWeight:800,color:tot.net>=0?C.grn:C.txt,...NUM,lineHeight:1.05}}>{tot.net>=0?'+':''}{fmt(tot.net)}</div>
                   <div style={{display:'flex',gap:16,marginTop:8,fontSize:12,color:C.sub}}>
                     <span>Einnahmen <b style={{color:C.grn,...NUM}}>{fmt(tot.totalInc)}</b></span>
-                    <span>Ausgaben <b style={{color:C.txt,...NUM}}>{fmtN(tot.totalExp)}</b></span>
+                    <span>Ausgaben <b style={{color:'#FFB37A',...NUM}}>{fmtN(tot.totalExp)}</b></span>
                   </div>
                 </div>
                 {/* Konto-Karten */}
@@ -1776,7 +1805,7 @@ function App({session}) {
                         </div>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:16,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.label}</div>
-                          <div style={{fontSize:12,color:C.sub,marginTop:2}}>Ein {fmt(k.inc)} · Aus {fmtN(k.exp)}</div>
+                          <div style={{fontSize:12,color:C.sub,marginTop:2}}>Ein <b style={{color:C.grn,...NUM}}>{fmt(k.inc)}</b> · Aus <b style={{color:'#FFB37A',...NUM}}>{fmtN(k.exp)}</b></div>
                         </div>
                         <div style={{textAlign:'right',flexShrink:0}}>
                           <div style={{fontSize:18,fontWeight:800,color:erg>=0?C.grn:C.txt,...NUM}}>{erg>=0?'+':''}{fmt(erg)}</div>
@@ -2119,7 +2148,7 @@ function App({session}) {
                 {drafts.length>0 ? (
                   <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
                     {col('Einnahmen', ein, C.grn)}
-                    {col('Ausgaben', aus, C.txt)}
+                    {col('Ausgaben', aus, '#FFB37A')}
                   </div>
                 ) : (
                   <div style={{...SC,textAlign:'center',color:C.mut,fontSize:14,padding:'30px 24px'}}>Noch keine Entwürfe. Lade oben einen Bankauszug als PDF hoch.</div>
