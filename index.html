@@ -322,6 +322,52 @@ function KPI({label,val,color,sub}) {
   );
 }
 
+/* ══ Datums-Auswahl im App-Design (statt nativem Kalender) ══ */
+function DateField({value, onChange, style, accent, placeholder='Datum wählen'}){
+  const acc = accent || C.pri;
+  const [open,setOpen]=useState(false);
+  const btnRef=useRef(null);
+  const [pos,setPos]=useState({top:0,left:0});
+  const iso = (()=>{ if(!value) return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(value)) return value; const m=String(value).match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})$/); if(m){ let dd=m[1],mm=m[2],yy=m[3]; if(yy.length===2)yy='20'+yy; return yy+'-'+mm.padStart(2,'0')+'-'+dd.padStart(2,'0'); } return ''; })();
+  const selDate = iso ? new Date(iso+'T00:00:00') : null;
+  const [view,setView]=useState(()=>{ const d=selDate||new Date(); return {y:d.getFullYear(), m:d.getMonth()}; });
+  useEffect(()=>{ if(open){ const d=selDate||new Date(); setView({y:d.getFullYear(),m:d.getMonth()}); const r=btnRef.current&&btnRef.current.getBoundingClientRect(); if(r){ const w=288; let left=r.left, top=r.bottom+6; if(left+w>window.innerWidth-10) left=window.innerWidth-10-w; if(left<10)left=10; if(top+360>window.innerHeight) top=Math.max(10,r.top-366); setPos({top,left}); } } },[open]);
+  const fmt = iso ? (()=>{const a=iso.split('-');return a[2]+'.'+a[1]+'.'+a[0];})() : '';
+  const navBtn={background:C.surf2,border:'none',color:C.txt,borderRadius:8,width:30,height:30,cursor:'pointer',fontFamily:'inherit',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'};
+  const first=new Date(view.y,view.m,1); const startDow=(first.getDay()+6)%7; const days=new Date(view.y,view.m+1,0).getDate();
+  const cells=[]; for(let i=0;i<startDow;i++)cells.push(null); for(let d=1;d<=days;d++)cells.push(d);
+  const t=new Date(); const todayIso=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+  const pick=(d)=>{ onChange(view.y+'-'+String(view.m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0')); setOpen(false); };
+  return (<>
+    <button ref={btnRef} type="button" onClick={(e)=>{e.stopPropagation();setOpen(o=>!o);}} style={{...style,display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,cursor:'pointer',textAlign:'left'}}>
+      <span style={{color:fmt?C.txt:C.mut,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{fmt||placeholder}</span>
+      <Ic p={P.cal} sz={15} col={C.mut}/>
+    </button>
+    {open && ReactDOM.createPortal(
+      <div onClick={()=>setOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
+        <div onClick={e=>e.stopPropagation()} style={{position:'fixed',top:pos.top,left:pos.left,width:288,background:C.surf,border:'1px solid '+C.bdr,borderRadius:16,padding:14,boxShadow:'0 18px 48px rgba(0,0,0,0.55)'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+            <button type="button" onClick={()=>setView(v=>({y:v.m===0?v.y-1:v.y,m:v.m===0?11:v.m-1}))} style={navBtn}>‹</button>
+            <div style={{fontSize:14,fontWeight:700,color:C.txt}}>{MONTHS[view.m]} {view.y}</div>
+            <button type="button" onClick={()=>setView(v=>({y:v.m===11?v.y+1:v.y,m:v.m===11?0:v.m+1}))} style={navBtn}>›</button>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:3,marginBottom:4}}>
+            {['Mo','Di','Mi','Do','Fr','Sa','So'].map(w=><div key={w} style={{textAlign:'center',fontSize:10,fontWeight:600,color:C.mut,padding:'2px 0'}}>{w}</div>)}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:3}}>
+            {cells.map((d,i)=>{ if(d===null) return <div key={i}/>; const cellIso=view.y+'-'+String(view.m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0'); const sel=cellIso===iso; const today=cellIso===todayIso; return (
+              <button key={i} type="button" onClick={()=>pick(d)} style={{aspectRatio:'1',background:sel?acc:'transparent',color:sel?C.priTxt:C.txt,border:(today&&!sel)?'1px solid '+C.bdrM:'1px solid transparent',borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:sel?700:500,display:'flex',alignItems:'center',justifyContent:'center',padding:0}}>{d}</button>
+            ); })}
+          </div>
+          <div style={{display:'flex',gap:8,marginTop:12}}>
+            <button type="button" onClick={()=>{onChange(todayIso);setOpen(false);}} style={{flex:1,background:C.surf2,border:'none',color:C.txt,borderRadius:9,padding:'8px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Heute</button>
+            {iso && <button type="button" onClick={()=>{onChange('');setOpen(false);}} style={{flex:1,background:'none',border:'1px solid '+C.bdr,color:C.sub,borderRadius:9,padding:'8px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Löschen</button>}
+          </div>
+        </div>
+      </div>, document.body)}
+  </>);
+}
+
 /* ══ Kleines Dialog-Fenster (Sheet) ══ */
 function Sheet({title, onClose, children, maxWidth=380}) {
   return (
@@ -362,9 +408,22 @@ function TargetPicker({title, moveTargets, curY, curM, confirmLabel, onClose, on
 }
 
 /* ══ Item row (Name + Betrag + kompaktes ⋮-Dropdown) ══ */
-function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
+function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, askChoice, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
   const acc = accent||C.pri;
   const dateLabel = kind==='aus' ? 'Abbuchungsdatum' : kind==='ein' ? 'Eingangsdatum' : 'Datum';
+  // Löschen anfragen – bei wiederkehrenden Posten: Monat vs. alle Monate
+  const requestDelete = (after) => {
+    const nm = item.name||'ohne Namen';
+    const doDel = (all)=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id, all); if(after) after(); };
+    if(item.recurring && askChoice){
+      askChoice('Wiederkehrenden Posten löschen', '„'+nm+'" ist ein wiederkehrender Posten. Soll er nur in diesem Monat oder in allen Monaten gelöscht werden?', [
+        {label:'Nur für diesen Monat löschen', fn:()=>doDel(false)},
+        {label:'Für alle Monate löschen', fn:()=>doDel(true), danger:true},
+      ]);
+    } else if(askConfirm){
+      askConfirm('Buchung „'+nm+'" wirklich löschen?', ()=>doDel(false));
+    } else doDel(false);
+  };
   const [menu,setMenu]=useState(null);   // {top,bottom,right}
   const [catMenu,setCatMenu]=useState(null); // {left,top,bottom} Kategorie-Dropdown
   const [drawer,setDrawer]=useState(false); // Detail-Drawer (von rechts)
@@ -397,7 +456,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
   const menuBtn={display:'flex',alignItems:'center',gap:8,width:'100%',background:C.surf2,border:'none',borderRadius:10,padding:'10px 12px',fontSize:13,color:C.txt,cursor:'pointer',fontFamily:'inherit',marginTop:8,textAlign:'left'};
   const mItem=(icon,label,onClick,col)=>(<button onClick={onClick} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:col||C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={icon} sz={16} col={col||C.sub}/> <span>{label}</span></button>);
   const dInput=(w)=>({background:C.surf2,border:'none',borderRadius:7,color:C.txt,padding:'6px 8px',fontSize:13,outline:'none',fontFamily:'inherit',width:w,textAlign:'left'});
-  const dcell=(label,node)=>(<label style={{display:'flex',flexDirection:'column',gap:3}}><span style={{fontSize:10,color:C.mut,fontWeight:600}}>{label}</span>{node}</label>);
+  const dcell=(label,node,req)=>(<label style={{display:'flex',flexDirection:'column',gap:3}}><span style={{fontSize:10,color:C.mut,fontWeight:600}}>{label}{req&&<span style={{color:C.red}}> *</span>}</span>{node}</label>);
   const isoDate=(d)=>{ if(!d) return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(d)) return d; const m=String(d).match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})$/); if(m){ let dd=m[1],mm=m[2],yy=m[3]; if(yy.length===2) yy='20'+yy; return yy+'-'+mm.padStart(2,'0')+'-'+dd.padStart(2,'0'); } return ''; };
   const cellInput=(w)=>({background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'8px 9px',fontSize:13,outline:'none',fontFamily:'inherit',width:w,textAlign:'left',flexShrink:0});
 
@@ -413,7 +472,9 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
   };
 
   const money = new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(item.amount)||0);
-  const fLbl=(t)=>(<div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6,letterSpacing:'0.02em'}}>{t}</div>);
+  const fLbl=(t,req)=>(<div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6,letterSpacing:'0.02em'}}>{t}{req&&<span style={{color:C.red}}> *</span>}</div>);
+  // Pflichtfelder einer Buchung (Name, Beleg-Nr, Datum, Betrag, Kategorie)
+  const bookingMissing=(it)=>{ const m=[]; if(!String(it.name||'').trim())m.push('Name'); if(!String(it.belegnr||'').trim())m.push('Beleg-Nr'); if(!isoDate(it.datum))m.push(kind==='aus'?'Abbuchungsdatum':kind==='ein'?'Eingangsdatum':'Datum'); if(!num(it.amount))m.push('Betrag'); if(!String(it.category||'').trim())m.push('Kategorie'); return m; };
 
   return (
     <div onClick={()=>{ if(!selMode) setDrawer(true); }} style={{background:C.surf2,border:'1px solid '+(drawer?acc:C.bdr),borderRadius:14,padding:'12px 14px',cursor:selMode?'default':'pointer',transition:'border-color .14s'}}>
@@ -434,9 +495,10 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
           <input value={item.name} placeholder="Name…" onClick={e=>e.stopPropagation()} onChange={e=>onUpdate(item.id,'name',e.target.value)} style={{background:'transparent',border:'none',outline:'none',fontFamily:'inherit',fontSize:15.5,fontWeight:600,color:C.txt,width:'100%',padding:0,letterSpacing:'-0.01em'}} />
           <div style={{display:'flex',alignItems:'center',gap:9,flexWrap:'wrap'}}>
             <button onClick={e=>{e.stopPropagation();openCat(e);}} style={item.category
-              ? {background:hexA(acc,0.18),border:'1px solid '+hexA(acc,0.5),borderRadius:8,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:600,color:acc,display:'inline-flex',alignItems:'center',gap:5}
-              : {background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',fontSize:13,color:C.mut,display:'inline-flex',alignItems:'center',gap:4}}>{item.category||'Kategorie'} <Ic p={P.down} sz={11} col={item.category?acc:C.mut}/></button>
+              ? {background:C.surf3,border:'1px solid '+C.bdr,borderRadius:8,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:600,color:C.sub,display:'inline-flex',alignItems:'center',gap:5}
+              : {background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',fontSize:13,color:C.mut,display:'inline-flex',alignItems:'center',gap:4}}>{item.category||'Kategorie'} <Ic p={P.down} sz={11} col={C.mut}/></button>
             {isoDate(item.datum) && <span title={dateLabel} style={{fontSize:12,color:C.sub,display:'inline-flex',alignItems:'center',gap:4}}><Ic p={P.cal} sz={11} col={C.mut}/>{(()=>{const iso=isoDate(item.datum);const a=iso.split('-');return a[2]+'.'+a[1]+'.'+a[0].slice(2);})()}</span>}
+            {bookingMissing(item).length>0 && <span title={'Unvollständig: '+bookingMissing(item).join(', ')} style={{fontSize:11,fontWeight:600,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',borderRadius:7,padding:'2px 8px',display:'inline-flex',alignItems:'center',gap:4}}>⚠ Unvollständig</span>}
           </div>
         </div>
         {/* Preis */}
@@ -461,21 +523,28 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
               <button onClick={()=>setDrawer(false)} title="Schließen" style={{background:C.surf2,border:'none',color:C.sub,width:34,height:34,borderRadius:10,cursor:'pointer',fontSize:20,lineHeight:1,fontFamily:'inherit'}}>×</button>
             </div>
 
-            {fLbl('Name')}
+            {bookingMissing(item).length>0 && (
+              <div style={{display:'flex',alignItems:'flex-start',gap:9,fontSize:12.5,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',borderRadius:11,padding:'11px 13px',marginBottom:18,lineHeight:1.5}}>
+                <span style={{fontSize:14,lineHeight:1.2}}>⚠️</span>
+                <span><b>Unvollständig.</b> Bitte ausfüllen: {bookingMissing(item).join(', ')}.</span>
+              </div>
+            )}
+
+            {fLbl('Name',true)}
             <input value={item.name} placeholder="Name…" onChange={e=>onUpdate(item.id,'name',e.target.value)} style={{...dInput('100%'),fontSize:15,padding:'10px 12px',marginBottom:16}} />
 
-            {fLbl('Betrag (Brutto)')}
+            {fLbl('Betrag (Brutto)',true)}
             <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...dInput('100%'),fontSize:18,fontWeight:700,padding:'10px 12px',...NUM,marginBottom:16}} />
 
-            {fLbl('Kategorie')}
+            {fLbl('Kategorie',true)}
             <select value={item.category||''} onChange={e=>onUpdate(item.id,'category',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',marginBottom:16,cursor:'pointer'}}>
               <option value="">— wählen —</option>
               {CATS.map(cat=><option key={cat} value={cat}>{cat}</option>)}
             </select>
 
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
-              {dcell(dateLabel, <input type="date" value={isoDate(item.datum)} onChange={e=>onUpdate(item.id,'datum',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',colorScheme:'dark'}} />)}
-              {dcell('Beleg-Nr', <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={{...dInput('100%'),padding:'10px 12px'}} />)}
+              {dcell(dateLabel, <DateField value={item.datum} onChange={v=>onUpdate(item.id,'datum',v)} accent={acc} style={{...dInput('100%'),padding:'10px 12px'}} />, true)}
+              {dcell('Beleg-Nr', <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={{...dInput('100%'),padding:'10px 12px'}} />, true)}
               {dcell('Netto €', <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="Netto" style={{...dInput('100%'),padding:'10px 12px',...NUM}} />)}
               {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',cursor:'pointer'}}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>)}
             </div>
@@ -495,36 +564,8 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
             {fLbl('Notiz')}
             <textarea value={item.note||''} onChange={e=>onUpdate(item.id,'note',e.target.value)} placeholder="Notiz…" rows={3} style={{...dInput('100%'),padding:'10px 12px',resize:'vertical',marginBottom:16}} />
 
-            {onSetRange && (
-              <button onClick={()=>{setDrawer(false);setDlg('range');}} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:C.surf2,border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',marginBottom:10,textAlign:'left'}}><Ic p={P.cal} sz={15} col={C.sub}/> {rangeLabel?('Zeitraum: '+rangeLabel):'Zeitraum festlegen (Standard: unbegrenzt)'}</button>
-            )}
 
-            {onMakeInvoice && item.recurring && (
-              <div style={{background:C.surf2,borderRadius:12,padding:'14px',marginBottom:10}}>
-                <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',fontSize:14,fontWeight:600,color:C.txt}}>
-                  <input type="checkbox" checked={!!item.autoInvoice} onChange={e=>onUpdate(item.id,'autoInvoice',e.target.checked)} style={{accentColor:acc,width:16,height:16}}/>
-                  <span>Rechnung für diesen Posten erzeugen</span>
-                </label>
-                {item.autoInvoice && (<>
-                  <div style={{fontSize:11,color:C.mut,lineHeight:1.5,margin:'8px 0 10px'}}>Lege Kunde &amp; Kontaktdaten fest – dann kannst du daraus monatlich eine Rechnung erzeugen. Verlauf siehst du unten.</div>
-                  <div style={{marginBottom:10}}><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Kunde</div><CustomerSelect customers={custList||[]} value={item.invCustomerId} onPick={c=>onUpdate(item.id,'invCustomerId', c?c.id:'')}/></div>
-                  <button onClick={()=>{ setDrawer(false); onMakeInvoice(item); }} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:hexA(acc,0.18),border:'none',borderRadius:10,padding:'11px',fontSize:14,fontWeight:700,color:acc,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.brief} sz={15} col={acc}/> Rechnung erstellen</button>
-                  {(()=>{ const hist=recurInvFn?recurInvFn(item.id):[]; return hist.length ? (
-                    <div style={{marginTop:12}}>
-                      <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:7}}>Verlauf · {hist.length}</div>
-                      <div style={{display:'flex',flexDirection:'column',gap:6}}>{hist.map(iv=>(
-                        <div key={iv.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:C.surf3,borderRadius:8,padding:'8px 10px',fontSize:12.5}}>
-                          <span style={{color:C.sub}}>{iv.number} · {iv.sentDate||iv.date}</span>
-                          <span style={{color:C.txt,fontWeight:700,...NUM}}>{fmt(iv.total!=null?iv.total:0)}</span>
-                        </div>
-                      ))}</div>
-                    </div>
-                  ) : <div style={{fontSize:12,color:C.mut,marginTop:10}}>Noch keine Rechnung erzeugt.</div>; })()}
-                </>)}
-              </div>
-            )}
-
-            <button onClick={()=>{ const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id); setDrawer(false); }; askConfirm?askConfirm('Buchung „'+(item.name||'ohne Namen')+'" wirklich löschen?',run):run(); }} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.redL,border:'none',borderRadius:10,padding:'11px',fontSize:14,fontWeight:600,color:C.red,cursor:'pointer',fontFamily:'inherit',marginTop:6}}><Ic p={P.trash} sz={15} col={C.red}/> Buchung löschen</button>
+            <button onClick={()=>requestDelete(()=>setDrawer(false))} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.redL,border:'none',borderRadius:10,padding:'11px',fontSize:14,fontWeight:600,color:C.red,cursor:'pointer',fontFamily:'inherit',marginTop:6}}><Ic p={P.trash} sz={15} col={C.red}/> Buchung löschen</button>
           </div>
         </div>
       )}
@@ -535,7 +576,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
           <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:catMenu.left,top:catMenu.top!=null?catMenu.top:undefined,bottom:catMenu.bottom!=null?catMenu.bottom:undefined,width:200,maxHeight:300,overflowY:'auto',background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
             {CATS.map(cat=>(
               <button key={cat} onClick={()=>{onUpdate(item.id,'category',cat);setCatMenu(null);}} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:item.category===cat?C.surf2:'none',border:'none',borderRadius:8,padding:'10px 12px',fontSize:14,color:item.category===cat?C.txt:C.sub,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
-                <span style={{width:6,height:6,borderRadius:'50%',background:item.category===cat?acc:'transparent',flexShrink:0}}/> {cat}
+                <span style={{width:6,height:6,borderRadius:'50%',background:item.category===cat?C.sub:'transparent',flexShrink:0}}/> {cat}
               </button>
             ))}
           </div>
@@ -553,7 +594,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
             {onMoveUp && !isFirst && mItem(P.up,'Nach oben',()=>{setMenu(null);onMoveUp();})}
             {onMoveDown && !isLast && mItem(P.down,'Nach unten',()=>{setMenu(null);onMoveDown();})}
             <div style={{height:1,background:C.sep,margin:'4px 8px'}}/>
-            {mItem(P.trash,'Löschen',()=>{ setMenu(null); const run=()=>{ if(item.filePath&&onDeleteFile) onDeleteFile(item.filePath); onDelete(item.id); }; askConfirm?askConfirm('Zeile „'+(item.name||'ohne Namen')+'" wirklich löschen?'+(hasFile?' Die angehängte Datei wird ebenfalls entfernt.':''),run):run(); },C.red)}
+            {mItem(P.trash,'Löschen',()=>{ setMenu(null); requestDelete(); },C.red)}
           </div>
         </div>
       )}
@@ -571,7 +612,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
       {dlg==='details' && (
         <Sheet title={(item.name||'Zeile')+' · Details'} onClose={()=>setDlg(null)}>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-            {dcell('Datum', <input type="date" value={isoDate(item.datum)} onChange={e=>onUpdate(item.id,'datum',e.target.value)} style={{...dInput('100%'),colorScheme:'dark'}} />)}
+            {dcell('Datum', <DateField value={item.datum} onChange={v=>onUpdate(item.id,'datum',v)} accent={acc} style={{...dInput('100%'),padding:'6px 8px'}} />)}
             {dcell('Beleg-Nr', <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={dInput('100%')} />)}
             {dcell('Netto €', <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="Netto" style={{...dInput('100%'),...NUM}} />)}
             {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={dInput('100%')}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>)}
@@ -642,7 +683,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
 }
 
 /* ══ Sortier-/Auswahl-Liste (Drag & Drop + Mehrfachauswahl) ══ */
-function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, updFn, delFn, recurFn, rangeFn, editFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, curY, curM, hideRecur}) {
+function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, updFn, delFn, recurFn, rangeFn, editFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, askChoice, curY, curM, hideRecur}) {
   return (
     <div style={{display:'flex',flexDirection:'column',gap:10}}>
         {items.map((item,idx)=>(
@@ -653,7 +694,7 @@ function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn,
             onToggleRecurring={()=>recurFn&&recurFn(item)}
             onSetRange={rangeFn?(range)=>rangeFn(item,range):null}
             curY={curY} curM={curM}
-            askConfirm={askConfirm}
+            askConfirm={askConfirm} askChoice={askChoice}
             onEditDetails={editFn}
             moveTargets={moveTargets} onMoveItem={moveItemFn?((destKey,ty,tm)=>moveItemFn(srcKey,item,destKey,ty,tm)):null}
             selMode={selMode} selected={selIds&&selIds.includes(item.id)} onToggleSelect={()=>onToggleSel&&onToggleSel(item.id)}
@@ -667,7 +708,7 @@ function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn,
 }
 
 /* ══ Add form ══ */
-function AddForm({onAdd, placeholder='Name'}) {
+function AddForm({onAdd, placeholder='Name', addLabel='Zeile hinzufügen', onClickOverride}) {
   const [open,setOpen]=useState(false);
   const [name,setName]=useState('');
   const [amount,setAmount]=useState('');
@@ -675,11 +716,11 @@ function AddForm({onAdd, placeholder='Name'}) {
   const reset=()=>{setOpen(false);setName('');setAmount('');setRecur(false);};
   const commit=()=>{if(name||amount){onAdd(name,evalAmount(amount),recur);reset();}};
   if(!open) return (
-    <button onClick={()=>setOpen(true)} style={{
+    <button onClick={()=>{ if(onClickOverride){onClickOverride();return;} setOpen(true); }} style={{
       background:'none',border:'1px dashed '+C.surf3,color:C.mut,
       borderRadius:8,padding:'7px 14px',fontSize:13,cursor:'pointer',
       fontFamily:'inherit',width:'100%',marginTop:6,
-    }}>+ Zeile hinzufügen</button>
+    }}>+ {addLabel}</button>
   );
   return (
     <div style={{marginTop:8,padding:'12px 14px',background:C.surf2,borderRadius:12}}>
@@ -859,11 +900,11 @@ function ClientDetail({client, onUpdate, onClose, onUploadFile, onOpenFile, onDe
       <div style={{display:'flex',gap:10}}>
         <div style={{flex:1}}>
           <label style={lbl}>von</label>
-          <input type="date" value={client.contractStart||''} onChange={e=>set('contractStart',e.target.value)} style={inp}/>
+          <DateField value={client.contractStart||''} onChange={v=>set('contractStart',v)} style={inp}/>
         </div>
         <div style={{flex:1}}>
           <label style={lbl}>bis</label>
-          <input type="date" value={client.contractEnd||''} onChange={e=>set('contractEnd',e.target.value)} style={inp}/>
+          <DateField value={client.contractEnd||''} onChange={v=>set('contractEnd',v)} style={inp}/>
         </div>
       </div>
       <div style={{marginTop:12}}>
@@ -970,9 +1011,12 @@ function App({session}) {
   const [invAiText,setInvAiText]= useState('');
   const [recOn,setRecOn]= useState(false);          // Sprachmemo aktiv
   const [recText,setRecText]= useState('');         // Transkript
+  const [aiCap,setAiCap]= useState(null);           // KI-Erfassung Popup {parsed}
   const recRef = useRef(null);
   const [invSearch,setInvSearch]= useState('');     // Rechnungssuche
   const [invDomain,setInvDomain]= useState('unter'); // Rechnungen/Kunden: Unternehmen vs. Immobilien
+  const [invKind,setInvKind]= useState('einzel');    // Rechnungsart: einzel | wied
+  const [recInvEdit,setRecInvEdit]= useState(null);  // Editor wiederkehrende Rechnung
   const [yrView,setYrView]= useState('monat');       // Jahres- vs Monatsübersicht (Analytics, Standard=Monat)
   const [invPreview,setInvPreview]= useState(false); // große Rechnungsvorschau (Popup)
   const importDragRef = useRef(null);                // Import: Drag&Drop zwischen Ein/Aus
@@ -1057,6 +1101,7 @@ function App({session}) {
     if((window.location.hash||'').replace(/^#\/?/,'')!==route) window.history.replaceState(null,'','#/'+route);
   }catch(e){} },[tab,openAcct,unterTab,privTab,immoView,sp,names]);
   const askConfirm = (message, onConfirm, title) => setConfirmState({message, onConfirm, title: title||'Wirklich löschen?'});
+  const askChoice = (title, message, choices) => setConfirmState({title, message, choices});
   const savedRef  = useRef(true);
   const lastSigRef = useRef('');
 
@@ -1322,7 +1367,7 @@ function App({session}) {
   /* Generische Listen-Handler pro Standort (einnahmen | expenses) */
   const addPropSub=(pid,sub,name,amount,recur)=>{ const item={...newItem(name),amount:num(amount),recurring:recur,id:uid()}; const fn=md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,[sub]:[...(p[sub]||[]),{...item}]}}};}; recur?updAll(fn):upd(fn); };
   const updPropSub=(pid,sub,id,fld,val)=>{ const cur=(md.props?.[pid]?.[sub]||[]).find(i=>i.id===id); const prop=cur&&cur.recurring&&fld!=='__file__'; const fn=md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,[sub]:(p[sub]||[]).map(i=>i.id!==id?i:((fld==='__file__'||fld==='__merge__')?{...i,...val}:{...i,[fld]:fld==='amount'?num(val):val}))}}};}; prop?updAll(fn):upd(fn); };
-  const delPropSub=(pid,sub,id)=>upd(md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,[sub]:(p[sub]||[]).filter(i=>i.id!==id)}}};});
+  const delPropSub=(pid,sub,id,all)=>{const fn=md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,[sub]:(p[sub]||[]).filter(i=>i.id!==id)}}};}; all?updAll(fn):upd(fn);};
   const movePropSub=(pid,sub,id,dir)=>upd(md=>{const p=md.props?.[pid]||emptyProp();const arr=[...(p[sub]||[])];const idx=arr.findIndex(i=>i.id===id);const ni=idx+dir;if(ni<0||ni>=arr.length)return md;[arr[idx],arr[ni]]=[arr[ni],arr[idx]];return{...md,props:{...md.props,[pid]:{...p,[sub]:arr}}};});
   const setPropSubRange=(pid,sub,item,range)=>{ const hasRange=!!((range.from&&range.from.y!=null)||(range.until&&range.until.y!=null)); const recur=hasRange||!!item.recurring; updAll(md=>{const p=md.props?.[pid]||emptyProp();const arr=[...(p[sub]||[])];const idx=arr.findIndex(i=>i.id===item.id);const patch=base=>({...base,from:range.from||null,until:range.until||null,recurring:recur});if(idx>=0)arr[idx]=patch(arr[idx]);else if(recur)arr.push(patch({...item,filePath:null,fileName:'',fileData:null}));return{...md,props:{...md.props,[pid]:{...p,[sub]:arr}}};}); };
   const copyPrevPropExp=pid=>{
@@ -1346,7 +1391,7 @@ function App({session}) {
     };
     propagate?updAll(fn):upd(fn);
   };
-  const delSec=(sec,sub,id)=>upd(md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:(s[sub]||[]).filter(i=>i.id!==id)}};});
+  const delSec=(sec,sub,id,all)=>{const fn=md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:(s[sub]||[]).filter(i=>i.id!==id)}};}; all?updAll(fn):upd(fn);};
   const addSec=(sec,sub,name,amount,recur)=>{
     const item={...newItem(name),amount:num(amount),recurring:recur,id:uid()};
     const fn=md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:[...(s[sub]||[]),{...item}]}};};
@@ -1691,10 +1736,41 @@ function App({session}) {
   const nextCustNo = (dom)=>{ const nums=(data.customers||[]).filter(c=>(c.domain||'unter')===(dom||'unter')).map(c=>parseInt(c.custNo,10)).filter(n=>!isNaN(n)); return String(nums.length?Math.max(...nums)+1:1001); };
   const defMwstFor = (dom)=>{ const co=companyFor(dom||'unter'); return co&&co.defMwst!=null&&co.defMwst!=='' ? num(co.defMwst) : 7; };
   const newInvoice = (dom)=>({ id:uid(), number:nextInvNo(), domain:dom||'unter', customerId:'', custName:'', custAddress:'', custEmail:'', saveCust:true, account:(dom==='immo'?(PROPS[0]||'p1'):'unter'), date:new Date().toISOString().slice(0,10), due:'', items:[{desc:'',qty:1,price:0,mwst:defMwstFor(dom)}], note:'' });
-  const invCustomer = (inv)=>{ const c=customers.find(x=>x.id===inv.customerId); if(c) return c; return {name:inv.custName||'', address:inv.custAddress||'', email:inv.custEmail||''}; };
+  const invCustomer = (inv)=>{ const c=customers.find(x=>x.id===inv.customerId); if(c) return c; return {name:inv.custName||'', address:inv.custAddress||'', email:inv.custEmail||'', firstName:inv.firstName||'', lastName:inv.lastName||'', company:inv.company||'', anrede:inv.anrede||''}; };
   // Aus einem wiederkehrenden Posten eine Rechnung vorbereiten (öffnet den Editor)
   const makeRecurInvoice = (item, dom)=>{ const domain=dom||'unter'; const inv=newInvoice(domain); inv.fromRecurId=item.id; if(item.invCustomerId){ const c=customers.find(x=>x.id===item.invCustomerId); if(c){ inv.customerId=c.id; inv.custName=c.name||''; inv.custAddress=c.address||''; inv.custEmail=c.email||''; inv.saveCust=false; } } inv.items=[{desc:item.name||'Leistung', qty:1, price:num(item.amount), mwst:defMwstFor(domain)}]; setInvDomain(domain); setTab('rechnung'); setInvEdit(inv); setToast('Rechnung aus „'+(item.name||'Posten')+'" vorbereitet'); };
   const recurInvoicesFor = (id)=> (data.invoices||[]).filter(iv=>iv.fromRecurId===id);
+  // ── Wiederkehrende Rechnungen (Vorlagen → monatliche Auto-Erstellung) ──
+  const recInvoices = data.recurInvoices || [];
+  const setRecInvoices = updater => setData(prev=>{ const cur=prev.recurInvoices||[]; const next=typeof updater==='function'?updater(cur):updater; return {...prev, recurInvoices:next}; });
+  const newRecInvoice = (dom,acct)=>({ id:uid(), domain:dom||'unter', account:(acct||(dom==='immo'?(PROPS[0]||'p1'):'unter')), customerId:'', custName:'', custAddress:'', custEmail:'', firstName:'', lastName:'', company:'', anrede:'', saveCust:true, fromY:now.getFullYear(), fromM:now.getMonth(), toY:now.getFullYear(), toM:11, items:[{desc:'',qty:1,price:0,mwst:defMwstFor(dom)}], note:'', headerText:undefined, footerText:undefined, active:true });
+  const startRecurInvoice = (dom,acct)=>{ setInvDomain(dom||'unter'); setInvKind('wied'); setRecInvEdit(newRecInvoice(dom,acct)); setTab('rechnung'); };
+  const delRecInvoice = (id)=> setRecInvoices(list=>list.filter(r=>r.id!==id));
+  const ymK=(y,m)=>y*12+m;
+  const _bookInto = (M, account, item)=>{ if(account==='unter'){ const s=M.unternehmen||{}; M.unternehmen={...s,clients:[...(s.clients||[]),item]}; } else if(account==='privat'){ const s=M.privat||{}; M.privat={...s,einnahmen:[...(s.einnahmen||[]),item]}; } else { if(!M.props)M.props={}; const s=M.props[account]||{}; M.props[account]={...s,einnahmen:[...(s.einnahmen||[]),item]}; } };
+  const genRecInvoices = ()=>{ const nowK=ymK(now.getFullYear(), now.getMonth()); let created=0;
+    setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const recs=nd.recurInvoices||[]; const invs=nd.invoices||(nd.invoices=[]);
+      recs.forEach(r=>{ if(r.active===false) return; const fromK=ymK(r.fromY,r.fromM), toK=Math.min(ymK(r.toY,r.toM), nowK);
+        for(let k=fromK;k<=toK;k++){ if(invs.find(iv=>iv.recurTemplateId===r.id && iv.genYM===k)) continue;
+          const y=Math.floor(k/12), m=k%12; const tot=invTotals(r.items);
+          const cnt=invs.filter(iv=>String(iv.number||'').startsWith(String(y))).length; const number=String(y)+'-'+String(cnt+1).padStart(3,'0');
+          const dstr=y+'-'+String(m+1).padStart(2,'0')+'-01';
+          const cust=customers.find(c=>c.id===r.customerId);
+          const inv={ id:uid(), number, domain:r.domain, account:r.account, customerId:r.customerId, custName:(cust?cust.name:r.custName)||'', custAddress:(cust?cust.address:r.custAddress)||'', custEmail:(cust?cust.email:r.custEmail)||'', firstName:r.firstName,lastName:r.lastName,company:r.company,anrede:r.anrede, date:dstr, items:r.items, note:r.note, headerText:r.headerText, footerText:r.footerText, total:tot.gross, sentDate:dstr, booked:true, recurTemplateId:r.id, genYM:k, fromRecurId:r.id };
+          invs.push(inv);
+          if(!nd[y])nd[y]={}; if(!nd[y][m])nd[y][m]=emptyMonth(); const item={...newItem('Rechnung '+number+((cust&&cust.name)?(' · '+cust.name):'')),amount:Math.abs(tot.gross),belegnr:number,datum:dstr,netto:Math.abs(tot.net),category:'Allgemein',note:'Wiederkehrende Rechnung',invId:inv.id}; _bookInto(nd[y][m], r.account, item);
+          created++;
+        }
+      });
+      return nd; });
+    if(created) setToast(created+' wiederkehrende Rechnung(en) automatisch erzeugt');
+  };
+  const saveRecInvoice = ()=>{ const r=recInvEdit; if(!r) return;
+    let rr={...r}; if(!rr.customerId && rr.saveCust && (rr.company||rr.lastName||rr.custName||'').trim()){ const nm=(rr.company||[rr.firstName,rr.lastName].filter(Boolean).join(' ')||rr.custName||'').trim(); const newC={id:uid(),name:nm,company:rr.company||'',firstName:rr.firstName||'',lastName:rr.lastName||'',anrede:rr.anrede||'',address:rr.custAddress||'',email:rr.custEmail||'',custNo:nextCustNo(rr.domain||'unter'),domain:rr.domain||'unter'}; saveCustomer(newC); rr.customerId=newC.id; }
+    setRecInvoices(list=>{ const i=list.findIndex(x=>x.id===rr.id); if(i>=0){const c=[...list];c[i]=rr;return c;} return [...list,rr]; });
+    setRecInvEdit(null); setToast('Wiederkehrende Rechnung gespeichert'); setTimeout(()=>genRecInvoices(),60);
+  };
+  useEffect(()=>{ if(ready && (data.recurInvoices||[]).length) genRecInvoices(); },[ready]);
   // Standard-Kopf-/Footertext (pro Rechnung überschreibbar, Default bleibt erhalten)
   const defaultHeader = (co)=> (co&&co.invHeaderDefault!=null&&co.invHeaderDefault!=='') ? co.invHeaderDefault : DEF_INV_HEADER;
   const defaultFooter = (co)=> (co&&co.invFooterDefault!=null&&co.invFooterDefault!=='') ? co.invFooterDefault : (DEF_INV_FOOTER+'\n'+[ (co&&co.contactName)||'', (co&&co.name)||'', (co&&co.contactEmail)||'' ].filter(Boolean).join('\n'));
@@ -1785,8 +1861,9 @@ function App({session}) {
   const saveInvoice = async ()=>{ let inv=invEdit; if(!inv) return; const tot=invTotals(inv.items); const dt=new Date(inv.date); const ty=isNaN(dt)?yr:dt.getFullYear(); const tm=isNaN(dt)?mo:dt.getMonth();
     const account=inv.account||'unter'; const isExpense=tot.gross<0;
     // Kunde ggf. automatisch anlegen (mit auto Kundennr)
-    if(!inv.customerId && inv.saveCust && (inv.custName||'').trim()){
-      const newC={id:uid(), name:inv.custName.trim(), address:inv.custAddress||'', email:inv.custEmail||'', custNo:nextCustNo(inv.domain||'unter'), domain:inv.domain||'unter'};
+    const cName=(inv.custName||inv.company||[inv.firstName,inv.lastName].filter(Boolean).join(' ')||'').trim();
+    if(!inv.customerId && inv.saveCust && cName){
+      const newC={id:uid(), name:cName, firstName:inv.firstName||'', lastName:inv.lastName||'', company:inv.company||'', anrede:inv.anrede||'', address:inv.custAddress||'', email:inv.custEmail||'', custNo:nextCustNo(inv.domain||'unter'), domain:inv.domain||'unter'};
       saveCustomer(newC); inv={...inv, customerId:newC.id};
     }
     const cust=invCustomer(inv);
@@ -1862,24 +1939,33 @@ function App({session}) {
     r.onend = ()=>{ setRecOn(false); };
     recRef.current=r; try{ r.start(); setRecOn(true); }catch(_){ setToast('Aufnahme konnte nicht gestartet werden.'); }
   };
-  // Transkript → Rechnungspositionen + Kunde/Konto (lokal, ohne KI)
-  const voiceParse = ()=>{
-    const t=(recText||'').trim(); if(!t){ setToast('Bitte zuerst etwas einsprechen.'); return; }
+  // Transkript → Rechnungspositionen + Kunde/Konto (lokal, ohne externe KI)
+  const parseInvoiceVoice = (raw)=>{
+    const t=(raw||'').trim(); if(!t) return null;
     const items=[]; const re=/([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-]{1,60}?)\s*(?:für|:|kostet|à|a)?\s*(\d+(?:[.,]\d{1,2})?)\s*(?:euro|eur|€)/gi; let m;
-    while((m=re.exec(t))!==null){ const desc=m[1].replace(/\b(und|der|die|das|ein|eine|für|den|dem)\b/gi,'').trim(); const price=Math.abs(parseFloat(m[2].replace(',','.'))||0); if(price>0) items.push({desc:desc||'Position',qty:1,price,mwst:7}); }
+    while((m=re.exec(t))!==null){ const desc=m[1].replace(/\b(und|der|die|das|ein|eine|für|den|dem|kunde)\b/gi,'').trim(); const price=Math.abs(parseFloat(m[2].replace(',','.'))||0); if(price>0) items.push({desc:desc||'Position',qty:1,price,mwst:7}); }
     const patch={};
     if(items.length) patch.items=items;
     // Kunde erkennen
-    const ck=t.match(/kunde\s+([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-&]{1,40})/i);
-    if(ck){ const name=ck[1].trim(); const found=customers.find(c=>(c.name||'').toLowerCase().includes(name.toLowerCase().split(' ')[0])); if(found) patch.customerId=found.id; }
+    const ck=t.match(/kunde[n]?\s+([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-&]{1,40})/i);
+    if(ck){ const name=ck[1].trim(); const found=customers.find(c=>(c.name||'').toLowerCase().includes(name.toLowerCase().split(' ')[0])); if(found){ patch.customerId=found.id; patch._custLabel=found.name; } else { patch.custName=name; patch._custLabel=name; } }
     // Konto erkennen
     const lc=t.toLowerCase();
     let acct=null; if(/\bprivat/.test(lc))acct='privat'; else if(/unternehm|firma|business/.test(lc))acct='unter'; else { PROPS.forEach(p=>{ if((names[p]||'').toLowerCase() && lc.includes((names[p]||'').toLowerCase()))acct=p; }); }
-    if(acct) patch.account=acct;
-    if(!items.length && !patch.customerId && !patch.account){ setToast('Konnte nichts erkennen. Sag z. B. „Webdesign 1500 Euro, Wartung 200 Euro".'); return; }
-    setInvEdit(e=>({...e, ...patch}));
-    setToast((items.length?items.length+' Positionen':'Felder')+' aus Sprachmemo übernommen');
+    if(acct){ patch.account=acct; patch._acctLabel=(acct==='unter'?(names.unternehmen||'Firma'):acct==='privat'?(names.privatLabel||'Privat'):(names[acct]||acct)); }
+    if(!items.length && !patch.customerId && !patch.custName && !patch.account) return null;
+    return patch;
   };
+  const voiceParse = ()=>{
+    const patch=parseInvoiceVoice(recText);
+    if(!patch){ setToast('Konnte nichts erkennen. Sag z. B. „Kunde Müller, Webdesign 1500 Euro, Wartung 200 Euro".'); return; }
+    const {_custLabel,_acctLabel,...clean}=patch;
+    setInvEdit(e=>({...e, ...clean}));
+    setToast((clean.items?clean.items.length+' Positionen':'Felder')+' übernommen');
+  };
+  // KI-Erfassung (Voice → erkannt → bestätigen → übernehmen)
+  const runAiCapture = ()=>{ const patch=parseInvoiceVoice(recText); if(!patch){ setToast('Konnte nichts erkennen. Sprich z. B. „Kunde Müller, Webdesign 1500 Euro".'); return; } setAiCap({parsed:patch}); };
+  const applyAiCapture = ()=>{ if(!aiCap||!aiCap.parsed) return; const {_custLabel,_acctLabel,...clean}=aiCap.parsed; setInvEdit(e=>({...e, ...clean})); setAiCap(null); setRecText(''); setToast('Aus KI-Erfassung übernommen'); };
 
   /* Alle Daten als Datei exportieren (zur Auswertung) */
   const exportData = () => {
@@ -2117,7 +2203,7 @@ function App({session}) {
           moveFn={moveFn}
           selMode={inSel} selIds={selIds} onToggleSel={toggleSel}
           onOpenFile={openFile} onUploadFile={uploadFile} onDeleteFile={deleteFile}
-          askConfirm={askConfirm} curY={yr} curM={mo} hideRecur={hideRecur} />
+          askConfirm={askConfirm} askChoice={askChoice} curY={yr} curM={mo} hideRecur={hideRecur} />
       </>
     );
   };
@@ -2485,12 +2571,12 @@ function App({session}) {
                   {renderItems(
                     (pd.einnahmen||[]).filter(i=>!i.recurring),
                     (id,fld,val)=>updPropSub(sp,'einnahmen',id,fld,val),
-                    id=>delPropSub(sp,'einnahmen',id),
+                    (id,all)=>delPropSub(sp,'einnahmen',id,all),
                     (id,dir)=>movePropSub(sp,'einnahmen',id,dir),
                     ['Immobilien',names[sp],'Einnahmen'],
                     undefined, undefined, undefined, sp, true, undefined, {inc:pc.netto, exp:pc.exp}
                   )}
-                  <AddForm onAdd={(n,a)=>addPropSub(sp,'einnahmen',n,a,false)} />
+                  <AddForm addLabel="Einnahme hinzufügen" onAdd={(n,a)=>addPropSub(sp,'einnahmen',n,a,false)} />
                   <VoiceAdd accent={secAccent} onAdd={(n,a)=>addPropSub(sp,'einnahmen',n,a,false)} />
                 </div>
               )}
@@ -2500,19 +2586,18 @@ function App({session}) {
                   {renderItems(
                     (pd.expenses||[]).filter(i=>!i.recurring),
                     (id,fld,val)=>updPropSub(sp,'expenses',id,fld,val),
-                    id=>delPropSub(sp,'expenses',id),
+                    (id,all)=>delPropSub(sp,'expenses',id,all),
                     (id,dir)=>movePropSub(sp,'expenses',id,dir),
                     ['Immobilien',names[sp]],
                     undefined, undefined, undefined, sp, true, undefined, {inc:pc.netto, exp:pc.exp}
                   )}
-                  <AddForm onAdd={(n,a)=>addPropSub(sp,'expenses',n,a,false)} />
+                  <AddForm addLabel="Ausgabe hinzufügen" onAdd={(n,a)=>addPropSub(sp,'expenses',n,a,false)} />
                   <VoiceAdd accent={secAccent} onAdd={(n,a)=>addPropSub(sp,'expenses',n,a,false)} />
                 </div>
               )}
 
               {immoView==='wied' && (
                 <>
-                  <div style={{fontSize:12,color:C.mut,marginBottom:12,lineHeight:1.5}}>Wiederkehrende Posten gelten für alle Monate (z. B. Kredit, Versicherung, Strom). Vertrag/Beleg im ⋮-Menü anhängen, Zeitraum optional.</div>
                   <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
                     <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
                       <div style={{fontSize:12,fontWeight:600,color:C.grn,marginBottom:10}}>Wiederkehrende Einnahmen</div>
@@ -2533,28 +2618,28 @@ function App({session}) {
                       {renderItems(
                         (pd.einnahmen||[]).filter(i=>i.recurring),
                         (id,fld,val)=>updPropSub(sp,'einnahmen',id,fld,val),
-                        id=>delPropSub(sp,'einnahmen',id),
+                        (id,all)=>delPropSub(sp,'einnahmen',id,all),
                         ()=>{},
                         ['Immobilien',names[sp],'Einnahmen'],
                         undefined, undefined,
                         (it,range)=>setPropSubRange(sp,'einnahmen',it,range),
                         null, true
                       )}
-                      <AddForm onAdd={(n,a)=>addPropSub(sp,'einnahmen',n,a,true)} />
+                      <AddForm addLabel="Wiederkehrende Einnahme hinzufügen" onClickOverride={()=>startRecurInvoice('immo',sp)} onAdd={(n,a)=>addPropSub(sp,'einnahmen',n,a,true)} />
                     </div>
                     <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
                       <div style={{fontSize:12,fontWeight:600,color:'#FFB37A',marginBottom:10}}>Wiederkehrende Ausgaben</div>
                       {renderItems(
                         (pd.expenses||[]).filter(i=>i.recurring),
                         (id,fld,val)=>updPropSub(sp,'expenses',id,fld,val),
-                        id=>delPropSub(sp,'expenses',id),
+                        (id,all)=>delPropSub(sp,'expenses',id,all),
                         ()=>{},
                         ['Immobilien',names[sp]],
                         undefined, undefined,
                         (it,range)=>setPropSubRange(sp,'expenses',it,range),
                         null, true
                       )}
-                      <AddForm onAdd={(n,a)=>addPropSub(sp,'expenses',n,a,true)} />
+                      <AddForm addLabel="Wiederkehrende Ausgabe hinzufügen" onAdd={(n,a)=>addPropSub(sp,'expenses',n,a,true)} />
                     </div>
                   </div>
                 </>
@@ -2622,12 +2707,12 @@ function App({session}) {
                 {renderItems(
                   (md.unternehmen?.clients||[]).filter(i=>!i.recurring),
                   (id,fld,val)=>updSec('unternehmen','clients',id,fld,val),
-                  id=>delSec('unternehmen','clients',id),
+                  (id,all)=>delSec('unternehmen','clients',id,all),
                   (id,dir)=>moveSec('unternehmen','clients',id,dir),
                   ['Unternehmen','Einnahmen'],
                   undefined, undefined, undefined, 'unterInc', true, undefined, {inc:tot.unterInc, exp:tot.unterExp}
                 )}
-                <AddForm placeholder="Name" onAdd={(n,a)=>addSec('unternehmen','clients',n,a,false)} />
+                <AddForm addLabel="Einnahme hinzufügen" placeholder="Name" onAdd={(n,a)=>addSec('unternehmen','clients',n,a,false)} />
                 <VoiceAdd accent={secAccent} onAdd={(n,a)=>addSec('unternehmen','clients',n,a,false)} />
               </div>
             )}
@@ -2637,47 +2722,46 @@ function App({session}) {
                 {renderItems(
                   (md.unternehmen?.items||[]).filter(i=>!i.recurring),
                   (id,fld,val)=>updSec('unternehmen','items',id,fld,val),
-                  id=>delSec('unternehmen','items',id),
+                  (id,all)=>delSec('unternehmen','items',id,all),
                   (id,dir)=>moveSec('unternehmen','items',id,dir),
                   ['Unternehmen','Ausgaben'],
                   undefined, undefined, undefined, 'unterExp', true, undefined, {inc:tot.unterInc, exp:tot.unterExp}
                 )}
-                <AddForm onAdd={(n,a)=>addSec('unternehmen','items',n,a,false)} />
+                <AddForm addLabel="Ausgabe hinzufügen" onAdd={(n,a)=>addSec('unternehmen','items',n,a,false)} />
                 <VoiceAdd accent={secAccent} onAdd={(n,a)=>addSec('unternehmen','items',n,a,false)} />
               </div>
             )}
 
             {unterTab==='wied' && (
               <>
-                <div style={{fontSize:12,color:C.mut,marginBottom:12,lineHeight:1.5}}>Wiederkehrende Posten gelten für alle Monate (z. B. Verträge, Versicherungen, Löhne). Vertrag/Beleg im ⋮-Menü anhängen, Zeitraum optional.</div>
                 <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
                   <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
                     <div style={{fontSize:12,fontWeight:600,color:C.grn,marginBottom:10}}>Wiederkehrende Einnahmen</div>
                     {renderItems(
                       (md.unternehmen?.clients||[]).filter(i=>i.recurring),
                       (id,fld,val)=>updSec('unternehmen','clients',id,fld,val),
-                      id=>delSec('unternehmen','clients',id),
+                      (id,all)=>delSec('unternehmen','clients',id,all),
                       ()=>{},
                       ['Unternehmen','Einnahmen'],
                       undefined, undefined,
                       (it,range)=>setSecRange('unternehmen','clients',it,range),
                       null, true
                     )}
-                    <AddForm placeholder="Name" onAdd={(n,a)=>addSec('unternehmen','clients',n,a,true)} />
+                    <AddForm addLabel="Wiederkehrende Einnahme hinzufügen" onClickOverride={()=>startRecurInvoice('unter')} placeholder="Name" onAdd={(n,a)=>addSec('unternehmen','clients',n,a,true)} />
                   </div>
                   <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
                     <div style={{fontSize:12,fontWeight:600,color:'#FFB37A',marginBottom:10}}>Wiederkehrende Ausgaben</div>
                     {renderItems(
                       (md.unternehmen?.items||[]).filter(i=>i.recurring),
                       (id,fld,val)=>updSec('unternehmen','items',id,fld,val),
-                      id=>delSec('unternehmen','items',id),
+                      (id,all)=>delSec('unternehmen','items',id,all),
                       ()=>{},
                       ['Unternehmen','Ausgaben'],
                       undefined, undefined,
                       (it,range)=>setSecRange('unternehmen','items',it,range),
                       null, true
                     )}
-                    <AddForm onAdd={(n,a)=>addSec('unternehmen','items',n,a,true)} />
+                    <AddForm addLabel="Wiederkehrende Ausgabe hinzufügen" onAdd={(n,a)=>addSec('unternehmen','items',n,a,true)} />
                   </div>
                 </div>
               </>
@@ -2712,12 +2796,12 @@ function App({session}) {
                 {renderItems(
                   (md.privat?.einnahmen||[]).filter(i=>!i.recurring),
                   (id,fld,val)=>updSec('privat','einnahmen',id,fld,val),
-                  id=>delSec('privat','einnahmen',id),
+                  (id,all)=>delSec('privat','einnahmen',id,all),
                   (id,dir)=>moveSec('privat','einnahmen',id,dir),
                   ['Privat','Einnahmen'],
                   undefined, undefined, undefined, 'privat', true, undefined, {inc:sumItems(md.privat?.einnahmen,yr,mo), exp:tot.privatExp}
                 )}
-                <AddForm onAdd={(n,a)=>addSec('privat','einnahmen',n,a,false)} />
+                <AddForm addLabel="Einnahme hinzufügen" onAdd={(n,a)=>addSec('privat','einnahmen',n,a,false)} />
                 <VoiceAdd accent={secAccent} onAdd={(n,a)=>addSec('privat','einnahmen',n,a,false)} />
               </div>
             )}
@@ -2727,47 +2811,46 @@ function App({session}) {
                 {renderItems(
                   (md.privat?.items||[]).filter(i=>!i.recurring),
                   (id,fld,val)=>updSec('privat','items',id,fld,val),
-                  id=>delSec('privat','items',id),
+                  (id,all)=>delSec('privat','items',id,all),
                   (id,dir)=>moveSec('privat','items',id,dir),
                   ['Privat'],
                   undefined, undefined, undefined, 'privat', true, undefined, {inc:sumItems(md.privat?.einnahmen,yr,mo), exp:tot.privatExp}
                 )}
-                <AddForm onAdd={(n,a)=>addSec('privat','items',n,a,false)} />
+                <AddForm addLabel="Ausgabe hinzufügen" onAdd={(n,a)=>addSec('privat','items',n,a,false)} />
                 <VoiceAdd accent={secAccent} onAdd={(n,a)=>addSec('privat','items',n,a,false)} />
               </div>
             )}
 
             {privTab==='wied' && (
               <>
-                <div style={{fontSize:12,color:C.mut,marginBottom:12,lineHeight:1.5}}>Wiederkehrende Posten gelten für alle Monate. Vertrag/Beleg im ⋮-Menü anhängen, Zeitraum optional.</div>
                 <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
                   <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
                     <div style={{fontSize:12,fontWeight:600,color:C.grn,marginBottom:10}}>Wiederkehrende Einnahmen</div>
                     {renderItems(
                       (md.privat?.einnahmen||[]).filter(i=>i.recurring),
                       (id,fld,val)=>updSec('privat','einnahmen',id,fld,val),
-                      id=>delSec('privat','einnahmen',id),
+                      (id,all)=>delSec('privat','einnahmen',id,all),
                       ()=>{},
                       ['Privat','Einnahmen'],
                       undefined, undefined,
                       (it,range)=>setSecRange('privat','einnahmen',it,range),
                       null, true
                     )}
-                    <AddForm onAdd={(n,a)=>addSec('privat','einnahmen',n,a,true)} />
+                    <AddForm addLabel="Wiederkehrende Einnahme hinzufügen" onAdd={(n,a)=>addSec('privat','einnahmen',n,a,true)} />
                   </div>
                   <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
                     <div style={{fontSize:12,fontWeight:600,color:'#FFB37A',marginBottom:10}}>Wiederkehrende Ausgaben</div>
                     {renderItems(
                       (md.privat?.items||[]).filter(i=>i.recurring),
                       (id,fld,val)=>updSec('privat','items',id,fld,val),
-                      id=>delSec('privat','items',id),
+                      (id,all)=>delSec('privat','items',id,all),
                       ()=>{},
                       ['Privat'],
                       undefined, undefined,
                       (it,range)=>setSecRange('privat','items',it,range),
                       null, true
                     )}
-                    <AddForm onAdd={(n,a)=>addSec('privat','items',n,a,true)} />
+                    <AddForm addLabel="Wiederkehrende Ausgabe hinzufügen" onAdd={(n,a)=>addSec('privat','items',n,a,true)} />
                   </div>
                 </div>
               </>
@@ -2868,7 +2951,7 @@ function App({session}) {
                         </div>
                         <div>{lbl('Kategorie')}<select value={d.category||''} onChange={e=>updateDraft(d.id,{category:e.target.value})} style={{...dInp,cursor:'pointer'}}><option value="">— wählen —</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
                         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-                          <div style={{flex:1,minWidth:140}}>{lbl('Datum')}<input type="date" value={d.datum||''} onChange={e=>updateDraft(d.id,{datum:e.target.value})} style={{...dInp,colorScheme:'dark'}}/></div>
+                          <div style={{flex:1,minWidth:140}}>{lbl('Datum')}<DateField value={d.datum||''} onChange={v=>updateDraft(d.id,{datum:v})} style={dInp}/></div>
                           <div style={{flex:1,minWidth:140}}>{lbl('Beleg-/Rechnungsnr.')}<input value={d.belegnr||''} onChange={e=>updateDraft(d.id,{belegnr:e.target.value})} placeholder="Nr." style={dInp}/></div>
                         </div>
                         <div>{lbl('Beleg')}
@@ -2951,18 +3034,82 @@ function App({session}) {
             const fld={...SS,textAlign:'left'};
             const primBtn={display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'};
             const tot = invEdit ? invTotals(invEdit.items) : null;
+            const acctOptsAll=[{k:'unter',label:names.unternehmen||'Firma'},...PROPS.map(p=>({k:p,label:names[p]||p})),{k:'privat',label:names.privatLabel||'Privat'}];
+            const recYears=[]; for(let yy=now.getFullYear()-1; yy<=now.getFullYear()+3; yy++) recYears.push(yy);
+
+            if(recInvEdit){
+              const r=recInvEdit; const setR=patch=>setRecInvEdit({...r,...patch}); const setRItem=(i,patch)=>setRecInvEdit({...r, items:r.items.map((it,ix)=>ix===i?{...it,...patch}:it)});
+              const rtot=invTotals(r.items); const A=KONTO_COLORS.unter;
+              const valid = (r.firstName||r.lastName||r.company||r.custName||'').trim() && (r.custAddress||'').trim() && r.account;
+              return (
+                <>
+                  <button onClick={()=>setRecInvEdit(null)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:10}}>‹ Rechnungen</button>
+                  <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap'}}>
+                    <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em'}}>Wiederkehrende Rechnung</div>
+                    <span style={{fontSize:12,fontWeight:600,color:A.c,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),borderRadius:8,padding:'4px 11px'}}>{(r.domain||'unter')==='immo'?'Immobilien':'Firma'}</span>
+                  </div>
+                  <div style={{maxWidth:680,display:'flex',flexDirection:'column',gap:14}}>
+                    <div style={{...SC,display:'flex',flexDirection:'column',gap:12}}>
+                      <div><div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.red}}>*</span></div><CustomerSelect customers={customersFor(r.domain||'unter')} value={r.customerId} onPick={c=>{ if(c){ setR({customerId:c.id, custName:c.name||'', custAddress:c.address||'', custEmail:c.email||'', firstName:c.firstName||'', lastName:c.lastName||'', company:c.company||'', anrede:c.anrede||'', saveCust:false}); } else setR({customerId:'',firstName:'',lastName:'',company:'',custName:'',saveCust:true}); }}/></div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                        <div style={{width:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Anrede</div><select value={r.anrede||''} onChange={e=>setR({anrede:e.target.value,customerId:''})} style={fld}><option value="">—</option><option value="herr">Herr</option><option value="frau">Frau</option></select></div>
+                        <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Vorname</div><input value={r.firstName||''} onChange={e=>setR({firstName:e.target.value,customerId:'',custName:(r.company||[e.target.value,r.lastName].filter(Boolean).join(' ')),saveCust:true})} style={fld}/></div>
+                        <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Nachname</div><input value={r.lastName||''} onChange={e=>setR({lastName:e.target.value,customerId:'',custName:(r.company||[r.firstName,e.target.value].filter(Boolean).join(' ')),saveCust:true})} style={fld}/></div>
+                      </div>
+                      <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Firma <span style={{color:C.mut}}>(optional)</span></div><input value={r.company||''} onChange={e=>setR({company:e.target.value,customerId:'',custName:(e.target.value||[r.firstName,r.lastName].filter(Boolean).join(' ')),saveCust:true})} style={fld}/></div>
+                      <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse <span style={{color:C.red}}>*</span></div><textarea value={r.custAddress||''} onChange={e=>setR({custAddress:e.target.value})} rows={2} style={{...fld,resize:'vertical'}}/></div>
+                    </div>
+                    <div style={{...SC}}>
+                      <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:12}}>Zeitraum <span style={{fontWeight:400,color:C.mut,fontSize:12}}>· Rechnung wird monatlich am Monatsanfang erstellt</span></div>
+                      <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
+                        <div><div style={{fontSize:11,color:C.sub,marginBottom:5}}>Von</div><div style={{display:'flex',gap:6}}><select value={r.fromM} onChange={e=>setR({fromM:+e.target.value})} style={{...fld,width:120}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select><select value={r.fromY} onChange={e=>setR({fromY:+e.target.value})} style={{...fld,width:90}}>{recYears.map(y=><option key={y} value={y}>{y}</option>)}</select></div></div>
+                        <div><div style={{fontSize:11,color:C.sub,marginBottom:5}}>Bis</div><div style={{display:'flex',gap:6}}><select value={r.toM} onChange={e=>setR({toM:+e.target.value})} style={{...fld,width:120}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select><select value={r.toY} onChange={e=>setR({toY:+e.target.value})} style={{...fld,width:90}}>{recYears.map(y=><option key={y} value={y}>{y}</option>)}</select></div></div>
+                      </div>
+                    </div>
+                    <div style={{...SC}}>
+                      <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:6}}>Konto <span style={{color:C.red}}>*</span></div>
+                      <select value={r.account||''} onChange={e=>setR({account:e.target.value})} style={fld}>{acctOptsAll.map(o=><option key={o.k} value={o.k}>{o.label}</option>)}</select>
+                    </div>
+                    <div style={{...SC,padding:'18px'}}>
+                      <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:14}}>Positionen</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                      {r.items.map((it,i)=>(
+                        <div key={i} style={{background:C.surf2,borderRadius:12,padding:'14px'}}>
+                          <input value={it.desc} onChange={e=>setRItem(i,{desc:e.target.value})} placeholder="Beschreibung" style={{...fld,background:C.surf3,marginBottom:10}}/>
+                          <div style={{display:'flex',gap:10,alignItems:'flex-end'}}>
+                            <div style={{width:64}}><div style={{fontSize:10,color:C.mut,marginBottom:5}}>Menge</div><input value={it.qty} onChange={e=>setRItem(i,{qty:e.target.value})} inputMode="decimal" style={{...fld,background:C.surf3,...NUM}}/></div>
+                            <div style={{flex:1}}><div style={{fontSize:10,color:C.mut,marginBottom:5}}>Einzelpreis €</div><input value={it.price} onChange={e=>setRItem(i,{price:e.target.value})} inputMode="decimal" style={{...fld,background:C.surf3,...NUM}}/></div>
+                            <div style={{width:82}}><div style={{fontSize:10,color:C.mut,marginBottom:5}}>MwSt</div><select value={String(it.mwst!=null?it.mwst:7)} onChange={e=>setRItem(i,{mwst:e.target.value})} style={{...SS,background:C.surf3}}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select></div>
+                            {r.items.length>1 && <button onClick={()=>setR({items:r.items.filter((_,ix)=>ix!==i)})} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:20,padding:'0 4px',lineHeight:1}}>×</button>}
+                          </div>
+                        </div>
+                      ))}
+                      </div>
+                      <button onClick={()=>setR({items:[...r.items,{desc:'',qty:1,price:0,mwst:defMwstFor(r.domain)}]})} style={{background:'none',border:'1px dashed '+C.surf3,color:C.sub,borderRadius:10,padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',width:'100%',marginTop:12}}>+ Position hinzufügen</button>
+                      <div style={{marginTop:14,paddingTop:14,borderTop:'1px solid '+C.sep,display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:14,fontWeight:700,color:C.txt}}>Gesamt / Monat</span><span style={{fontSize:20,fontWeight:800,...NUM,color:C.txt}}>{fmt(rtot.gross)}</span></div>
+                    </div>
+                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Kopftext</div><textarea value={invHeader(r)} onChange={e=>setR({headerText:e.target.value})} rows={3} style={{...fld,resize:'vertical'}}/></div>
+                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Footertext</div><textarea value={invFooter(r)} onChange={e=>setR({footerText:e.target.value})} rows={3} style={{...fld,resize:'vertical'}}/></div>
+                    {!valid && <div style={{fontSize:12,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',borderRadius:10,padding:'10px 12px'}}>Pflichtfelder: Kunde (Name), Adresse und Konto.</div>}
+                    <button onClick={saveRecInvoice} disabled={!valid} style={{...primBtn,opacity:valid?1:0.5,cursor:valid?'pointer':'default'}}>Wiederkehrende Rechnung speichern &amp; aktivieren</button>
+                  </div>
+                </>
+              );
+            }
 
             if(invEdit){
               const setI=patch=>setInvEdit({...invEdit,...patch});
               const setItem=(i,patch)=>setInvEdit({...invEdit, items:invEdit.items.map((it,ix)=>ix===i?{...it,...patch}:it)});
-              const acctOpts=[{k:'unter',label:names.unternehmen||'Unternehmen'},...PROPS.map(p=>({k:p,label:names[p]||p})),{k:'privat',label:names.privatLabel||'Privat'}];
+              const acctOpts=[{k:'unter',label:names.unternehmen||'Firma'},...PROPS.map(p=>({k:p,label:names[p]||p})),{k:'privat',label:names.privatLabel||'Privat'}];
               const A=KONTO_COLORS.unter;
+              const invValid = (invEdit.firstName||invEdit.lastName||invEdit.company||invEdit.custName||'').trim() && (invEdit.custAddress||'').trim() && (invEdit.account||'unter');
               return (
                 <>
                   <button onClick={()=>setInvEdit(null)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:10}}>‹ Rechnungen</button>
                   <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap'}}>
                     <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em'}}>Rechnung {invEdit.number}</div>
                     <span style={{fontSize:12,fontWeight:600,color:A.c,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),borderRadius:8,padding:'4px 11px'}}>{(invEdit.domain||'unter')==='immo'?'Immobilien':'Firma'}</span>
+                    <button onClick={()=>{ setRecText(''); setAiCap({parsed:null}); }} style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:7,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),color:A.c,borderRadius:10,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><span style={{fontSize:15}}>✨</span> Mit KI erfassen</button>
                   </div>
                   {(
                     <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:16,alignItems:'flex-start'}}>
@@ -2970,13 +3117,18 @@ function App({session}) {
                       <div style={{flex:1,minWidth:0,width:isMobile?'100%':'auto'}}>
                       <div style={{...SC,marginBottom:14,display:'flex',flexDirection:'column',gap:12}}>
                         <div>
-                          <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kunde</div>
-                          <CustomerSelect customers={customersFor(invEdit.domain||'unter')} value={invEdit.customerId} onPick={c=>{ if(c){ setI({customerId:c.id, custName:c.name||'', custAddress:c.address||'', custEmail:c.email||'', saveCust:false}); } else { setI({customerId:'', custName:'', custAddress:'', custEmail:'', saveCust:true}); } }} />
+                          <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.red}}>*</span></div>
+                          <CustomerSelect customers={customersFor(invEdit.domain||'unter')} value={invEdit.customerId} onPick={c=>{ if(c){ setI({customerId:c.id, custName:c.name||'', custAddress:c.address||'', custEmail:c.email||'', firstName:c.firstName||'', lastName:c.lastName||'', company:c.company||'', anrede:c.anrede||'', saveCust:false}); } else { setI({customerId:'', custName:'', custAddress:'', custEmail:'', firstName:'', lastName:'', company:'', anrede:'', saveCust:true}); } }} />
                         </div>
-                        <input value={invEdit.custName||''} onChange={e=>setI({custName:e.target.value, customerId:'', saveCust:true})} placeholder="Name / Firma" style={fld}/>
-                        <textarea value={invEdit.custAddress||''} onChange={e=>setI({custAddress:e.target.value})} placeholder="Adresse (optional)" rows={2} style={{...fld,resize:'vertical'}}/>
+                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                          <div style={{width:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Anrede</div><select value={invEdit.anrede||''} onChange={e=>setI({anrede:e.target.value,customerId:''})} style={fld}><option value="">—</option><option value="herr">Herr</option><option value="frau">Frau</option></select></div>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Vorname</div><input value={invEdit.firstName||''} onChange={e=>setI({firstName:e.target.value,customerId:'',custName:(invEdit.company||[e.target.value,invEdit.lastName].filter(Boolean).join(' ')),saveCust:true})} style={fld}/></div>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Nachname</div><input value={invEdit.lastName||''} onChange={e=>setI({lastName:e.target.value,customerId:'',custName:(invEdit.company||[invEdit.firstName,e.target.value].filter(Boolean).join(' ')),saveCust:true})} style={fld}/></div>
+                        </div>
+                        <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Firma <span style={{color:C.mut}}>(optional)</span></div><input value={invEdit.company||''} onChange={e=>setI({company:e.target.value,customerId:'',custName:(e.target.value||[invEdit.firstName,invEdit.lastName].filter(Boolean).join(' ')),saveCust:true})} style={fld}/></div>
+                        <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse <span style={{color:C.red}}>*</span></div><textarea value={invEdit.custAddress||''} onChange={e=>setI({custAddress:e.target.value})} placeholder="Straße, PLZ Ort" rows={2} style={{...fld,resize:'vertical'}}/></div>
                         <input value={invEdit.custEmail||''} onChange={e=>setI({custEmail:e.target.value})} placeholder="E-Mail (optional)" style={fld}/>
-                        {!invEdit.customerId && (invEdit.custName||'').trim() && (
+                        {!invEdit.customerId && (invEdit.firstName||invEdit.lastName||invEdit.company||invEdit.custName||'').trim() && (
                           <label style={{display:'flex',alignItems:'center',gap:9,cursor:'pointer',fontSize:13,color:C.sub,background:hexA(A.c,0.10),border:'1px solid '+A.bd,borderRadius:10,padding:'10px 12px'}}>
                             <input type="checkbox" checked={invEdit.saveCust!==false} onChange={e=>setI({saveCust:e.target.checked})} style={{accentColor:A.c,width:16,height:16}}/>
                             <span>Diese Person als Kunde speichern <span style={{color:C.mut}}>(Kundennr. {nextCustNo()} wird automatisch vergeben)</span></span>
@@ -2984,21 +3136,8 @@ function App({session}) {
                         )}
                         <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
                           <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Rechnungsnr.</div><input value={invEdit.number} onChange={e=>setI({number:e.target.value})} style={fld}/></div>
-                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Datum</div><input type="date" value={invEdit.date} onChange={e=>setI({date:e.target.value})} style={{...fld,colorScheme:'dark'}}/></div>
-                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Fällig</div><input type="date" value={invEdit.due} onChange={e=>setI({due:e.target.value})} style={{...fld,colorScheme:'dark'}}/></div>
-                        </div>
-                      </div>
-                      <div style={{...SC,marginBottom:12,border:'1px solid '+A.bd,background:A.tint}}>
-                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
-                          <div style={{fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:7}}><span style={{fontSize:15}}>🎤</span> Sprachmemo</div>
-                          {recOn && <span style={{fontSize:11,color:C.red,display:'flex',alignItems:'center',gap:5}}><span style={{width:8,height:8,borderRadius:'50%',background:C.red,display:'inline-block'}}/>Aufnahme läuft…</span>}
-                        </div>
-                        <div style={{fontSize:12,color:C.mut,marginBottom:8,lineHeight:1.5}}>Sprich einfach rein, z. B.: „Kunde Müller, Webdesign 1500 Euro, Wartung 200 Euro" – Positionen, Kunde &amp; Konto werden automatisch übernommen. Kostenlos, ohne KI.</div>
-                        <textarea value={recText} onChange={e=>setRecText(e.target.value)} rows={2} placeholder="Transkript erscheint hier… (oder selbst tippen)" style={{...fld,resize:'vertical',marginBottom:8}}/>
-                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                          <button onClick={toggleRec} style={{...primBtn,flex:1,minWidth:130,background:recOn?C.red:C.surf2,color:recOn?'#fff':C.txt}}>{recOn?'■ Stoppen':'🎤 Aufnahme'}</button>
-                          <button onClick={voiceParse} style={{...primBtn,flex:1,minWidth:130,background:A.c,color:'#0A0A0A'}}>Übernehmen</button>
-                          {recText && <button onClick={()=>setRecText('')} title="Transkript leeren" style={{...primBtn,width:'auto',padding:'12px 14px',background:'none',color:C.mut}}>×</button>}
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Datum</div><DateField value={invEdit.date} onChange={v=>setI({date:v})} style={fld}/></div>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Fällig</div><DateField value={invEdit.due} onChange={v=>setI({due:v})} placeholder="—" style={fld}/></div>
                         </div>
                       </div>
                       <div style={{...SC,marginBottom:14,padding:'18px 18px'}}>
@@ -3031,11 +3170,12 @@ function App({session}) {
                       <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Footertext (Abschluss)</div><textarea value={invFooter(invEdit)} onChange={e=>setI({footerText:e.target.value})} rows={3} style={{...fld,resize:'vertical'}}/></div>
                       {/* Konto-Zuordnung */}
                       <div style={{...SC,marginBottom:12}}>
-                        <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:6}}>Diese Rechnung gehört zu Konto</div>
+                        <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:6}}>Diese Rechnung gehört zu Konto <span style={{color:C.red}}>*</span></div>
                         <select value={invEdit.account||'unter'} onChange={e=>setI({account:e.target.value})} style={SS}>{acctOpts.map(o=><option key={o.k} value={o.k}>{o.label}</option>)}</select>
                       </div>
+                      {!invValid && <div style={{fontSize:12,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',borderRadius:10,padding:'10px 12px',marginBottom:12}}>Pflichtfelder: Kunde (Name), Adresse und Konto.</div>}
                       <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
-                        <button onClick={saveInvoice} style={{...primBtn,flex:2,minWidth:180}}>Buchen</button>
+                        <button onClick={saveInvoice} disabled={!invValid} style={{...primBtn,flex:2,minWidth:180,opacity:invValid?1:0.5,cursor:invValid?'pointer':'default'}}>Buchen</button>
                         <button onClick={()=>setInvPreview(true)} style={{...primBtn,background:C.surf2,color:C.txt,flex:1,minWidth:130}}><Ic p={P.eye} sz={16} col={C.txt}/> Vorschau</button>
                         <button onClick={()=>downloadInvoicePDF(invEdit)} style={{...primBtn,background:C.surf2,color:C.txt,flex:1,minWidth:130}}><Ic p={P.upload} sz={16} col={C.txt}/> Herunterladen</button>
                       </div>
@@ -3081,6 +3221,27 @@ function App({session}) {
                     <button key={k} onClick={()=>{setInvDomain(k);setInvSearch('');}} style={{background:on?hexA(KONTO_COLORS.unter.c,0.16):C.surf,border:'1px solid '+(on?hexA(KONTO_COLORS.unter.c,0.45):'transparent'),color:on?KONTO_COLORS.unter.c:C.sub,borderRadius:10,padding:'8px 18px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
                   ); })}
                 </div>
+                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+                  {[['einzel','Einzelrechnung'],['wied','Wiederkehrend']].map(([k,label])=>{ const on=invKind===k; return (
+                    <button key={k} onClick={()=>setInvKind(k)} style={{background:on?C.surf2:'none',border:'1px solid '+(on?C.bdrM:'transparent'),color:on?C.txt:C.sub,borderRadius:9,padding:'7px 15px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
+                  ); })}
+                </div>
+                {invKind==='wied' ? (
+                  <>
+                    <button onClick={()=>setRecInvEdit(newRecInvoice(invDomain))} style={{...primBtn,width:'auto',padding:'12px 18px',marginBottom:16}}>+ Neue wiederkehrende Rechnung</button>
+                    {(()=>{ const list=recInvoices.filter(r=>(r.domain||'unter')===invDomain); if(!list.length) return <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>Noch keine wiederkehrenden Rechnungen. Lege eine an – sie wird dann automatisch jeden Monat erzeugt.</div>; return <div style={{display:'flex',flexDirection:'column',gap:10}}>{list.map(r=>{ const c=customers.find(x=>x.id===r.customerId); const nm=(c&&c.name)||r.company||[r.firstName,r.lastName].filter(Boolean).join(' ')||r.custName||'—'; const cnt=recurInvoicesFor(r.id).length; const t=invTotals(r.items); return (
+                      <div key={r.id} onClick={()=>setRecInvEdit(r)} style={{display:'flex',alignItems:'center',gap:13,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',cursor:'pointer'}}>
+                        <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:hexA(KONTO_COLORS.unter.c,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.repeat} sz={20} col={KONTO_COLORS.unter.c}/></div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:15.5,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nm}</div>
+                          <div style={{fontSize:12.5,color:C.sub,marginTop:2}}>{MONTHS[r.fromM].slice(0,3)} {r.fromY} – {MONTHS[r.toM].slice(0,3)} {r.toY} · {cnt} erzeugt{r.active===false?' · pausiert':''}</div>
+                        </div>
+                        <div style={{fontSize:16,fontWeight:800,...NUM,color:C.grn,whiteSpace:'nowrap'}}>{fmt(t.gross)}/Mon.</div>
+                        <button onClick={e=>{e.stopPropagation();askConfirm('Wiederkehrende Rechnung löschen? Bereits erzeugte Rechnungen bleiben erhalten.',()=>delRecInvoice(r.id));}} title="Löschen" style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:18,flexShrink:0,padding:'4px 6px'}}>×</button>
+                      </div>
+                    ); })}</div>; })()}
+                  </>
+                ) : (<>
                 <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}>
                   <div style={{flex:1,minWidth:180,position:'relative'}}>
                     <span style={{position:'absolute',left:13,top:'50%',transform:'translateY(-50%)',pointerEvents:'none',display:'inline-flex'}}><Ic p={P.search} sz={15} col={C.mut}/></span>
@@ -3121,7 +3282,8 @@ function App({session}) {
                     </div>
                   ));
                 })()}
-                <button onClick={()=>setTab('kunden')} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'14px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:14,fontWeight:600,textAlign:'left'}}><Ic p={P.prson} sz={17} col={C.sub}/> <span style={{flex:1}}>Kunden verwalten</span> <span style={{color:C.mut}}>{customersFor(invDomain).length} ›</span></button>
+                </>)}
+                <button onClick={()=>setTab('kunden')} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'14px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:14,fontWeight:600,textAlign:'left',marginTop:14}}><Ic p={P.prson} sz={17} col={C.sub}/> <span style={{flex:1}}>Kunden verwalten</span> <span style={{color:C.mut}}>{customersFor(invDomain).length} ›</span></button>
               </>
             );
           })()}
@@ -3751,6 +3913,32 @@ function App({session}) {
           onConfirm={(dest,ty,tm)=>{ assignDrafts(draftSel,dest,ty,tm); setAssignOpen(false); }} />
       )}
 
+      {aiCap && (()=>{ const p=aiCap.parsed; const A=KONTO_COLORS.unter; return (
+        <div onClick={()=>setAiCap(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:160,padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'24px',maxWidth:460,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)',maxHeight:'88vh',overflowY:'auto'}}>
+            <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:6}}><span style={{fontSize:20}}>✨</span><div style={{fontSize:18,fontWeight:800}}>Mit KI erfassen</div>{recOn && <span style={{marginLeft:'auto',fontSize:11,color:C.red,display:'flex',alignItems:'center',gap:5}}><span style={{width:8,height:8,borderRadius:'50%',background:C.red,display:'inline-block'}}/>Aufnahme…</span>}</div>
+            <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:16}}>Sprich Kunde, Positionen &amp; Konto ein – z. B. „Kunde Müller, Webdesign 1500 Euro, Wartung 200 Euro, Konto Firma". Die KI erkennt die Felder, du bestätigst sie.</div>
+            <textarea value={recText} onChange={e=>setRecText(e.target.value)} rows={3} placeholder="Transkript erscheint hier… (oder selbst tippen)" style={{...SS,textAlign:'left',resize:'vertical',marginBottom:10}}/>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+              <button onClick={toggleRec} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:1,minWidth:140,background:recOn?C.red:C.surf2,color:recOn?'#fff':C.txt,border:'none',borderRadius:11,padding:'12px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{recOn?'■ Stoppen':'🎤 Aufnahme'}</button>
+              <button onClick={runAiCapture} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:1,minWidth:140,background:A.c,color:'#0A0A0A',border:'none',borderRadius:11,padding:'12px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>KI auswerten</button>
+            </div>
+            {p && (
+              <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px',marginBottom:16}}>
+                <div style={{fontSize:12,fontWeight:700,color:C.sub,textTransform:'uppercase',letterSpacing:'0.04em',marginBottom:10}}>Erkannt</div>
+                {(p._custLabel) && <div style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:13,marginBottom:7}}><span style={{color:C.sub}}>Kunde</span><b style={{color:C.txt}}>{p._custLabel}</b></div>}
+                {(p._acctLabel) && <div style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:13,marginBottom:7}}><span style={{color:C.sub}}>Konto</span><b style={{color:C.txt}}>{p._acctLabel}</b></div>}
+                {p.items && p.items.length>0 && (<div style={{marginTop:4}}><div style={{fontSize:13,color:C.sub,marginBottom:6}}>Positionen</div><div style={{display:'flex',flexDirection:'column',gap:6}}>{p.items.map((it,i)=>(<div key={i} style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:13,background:C.surf3,borderRadius:9,padding:'8px 11px'}}><span style={{color:C.txt}}>{it.desc}</span><b style={{...NUM,color:C.txt}}>{fmt(it.price)}</b></div>))}</div></div>)}
+              </div>
+            )}
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setAiCap(null)} style={{flex:1,background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:11,padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+              <button onClick={applyAiCapture} disabled={!p} style={{flex:2,background:p?C.act:C.surf2,border:'none',color:p?C.actTxt:C.mut,borderRadius:11,padding:'11px',fontSize:13,fontWeight:700,cursor:p?'pointer':'default',fontFamily:'inherit',opacity:p?1:0.6}}>Übernehmen</button>
+            </div>
+          </div>
+        </div>
+      );})()}
+
       {dupPopup && (()=>{ const m=dupPopup.match; const inv=m&&m.invoice; const it=m&&m.it; const betrag=inv?(inv.total!=null?inv.total:0):num(it&&it.amount); const datum=inv?inv.date:(it&&it.datum); const konto=inv?(names.unternehmen):(m&&m.acct); const fp=it&&(it.filePath||it.fileData); return (
         <div onClick={()=>setDupPopup(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:150,padding:20}}>
           <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'24px',maxWidth:420,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
@@ -3778,10 +3966,19 @@ function App({session}) {
           <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'22px 24px',maxWidth:380,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
             <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>{confirmState.title}</div>
             <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:22}}>{confirmState.message}</div>
+            {confirmState.choices ? (
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                {confirmState.choices.map((ch,ci)=>(
+                  <button key={ci} onClick={()=>{ const f=ch.fn; setConfirmState(null); if(f) f(); }} style={{background:ch.danger?C.red:C.surf2,border:ch.danger?'none':'1px solid '+C.bdr,color:ch.danger?'#fff':C.txt,borderRadius:10,padding:'11px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>{ch.label}</button>
+                ))}
+                <button onClick={()=>setConfirmState(null)} style={{background:'none',border:'none',color:C.sub,borderRadius:10,padding:'6px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+              </div>
+            ) : (
             <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
               <button onClick={()=>setConfirmState(null)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:10,padding:'8px 16px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
               <button onClick={()=>{ const a=confirmState.onConfirm; setConfirmState(null); if(a) a(); }} style={{background:C.red,border:'none',color:'#fff',borderRadius:10,padding:'8px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Löschen</button>
             </div>
+            )}
           </div>
         </div>
       )}
