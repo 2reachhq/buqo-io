@@ -167,6 +167,9 @@ const safeName = s => {
   return t || 'Unbenannt';
 };
 const stripBlobs = obj => JSON.parse(JSON.stringify(obj, (k,v)=> k==='fileData'? null : v));
+// Beleg-Dateiname aus Name + Belegnr bilden: „Berliner Döner" + 3029 → berliner-doener-3029.jpg
+const slugify = s => { const map={'ä':'ae','ö':'oe','ü':'ue','Ä':'ae','Ö':'oe','Ü':'ue','ß':'ss'}; return String(s||'').toLowerCase().replace(/[äöüÄÖÜß]/g,m=>map[m]||m).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,80); };
+const belegFileName = (name, belegnr, origName)=>{ const ext=((String(origName||'').match(/\.([a-z0-9]+)$/i)||[])[1]||'jpg').toLowerCase(); const base=[slugify(name), belegnr?slugify(belegnr):''].filter(Boolean).join('-')||'beleg'; return base+'.'+ext; };
 
 /* ══ Konten-Pastellfarben (N26-Stil) ══ */
 const KONTO_COLORS = {
@@ -386,7 +389,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
     e.target.value='';
     setUploading(true);
     try{
-      if(onUploadFile&&folderPath) await onUploadFile(f, folderPath, filePath=>onUpdate(item.id,'__file__',{filePath,fileName:f.name,fileData:null}));
+      if(onUploadFile&&folderPath){ const desired=belegFileName(item.name, item.belegnr, f.name); await onUploadFile(f, folderPath, (filePath,fname)=>onUpdate(item.id,'__file__',{filePath,fileName:fname||desired,fileData:null}), desired); }
       if(onExtract) await onExtract(f, item, onUpdate);
     } finally { setUploading(false); }
   };
@@ -1198,13 +1201,15 @@ function App({session}) {
   });
 
   /* ── Dateien: Upload / Öffnen / Löschen (Supabase Storage) ── */
-  const uploadFile = async (file, folderPath, setItemFile) => {
+  const uploadFile = async (file, folderPath, setItemFile, desiredName) => {
     setToast('⬆️ Lädt hoch…');
     const monthFolder = String(mo+1).padStart(2,'0')+' '+MONTHS[mo];
-    const path = [...folderPath, String(yr), monthFolder, file.name].map(safeName).join('/');
+    const ext=((String(file.name||'').match(/\.([a-z0-9]+)$/i)||[])[1]||'').toLowerCase();
+    let fname = desiredName || file.name; if(desiredName && ext && !new RegExp('\\.'+ext+'$','i').test(fname)) fname=fname.replace(/\.[a-z0-9]+$/i,'')+'.'+ext;
+    const path = [...folderPath, String(yr), monthFolder, fname].map(safeName).join('/');
     const {error}=await sb.storage.from('belege').upload(path, file, {upsert:true, contentType:file.type||'application/octet-stream'});
     if(error){ setToast('Upload fehlgeschlagen: '+error.message); return; }
-    setItemFile(path);
+    setItemFile(path, fname);
     setToast('✅ Hochgeladen: '+folderPath.join(' / '));
   };
   const openFile = async (path) => {
@@ -1482,7 +1487,7 @@ function App({session}) {
   const drafts = data.drafts || [];
   const setDrafts = updater => setData(prev=>({...prev, drafts: updater(prev.drafts||[])}));
   const updateDraft = (id,patch) => setDrafts(ds=>ds.map(d=>d.id===id?{...d,...patch}:d));
-  const draftFile = async (id,f) => { if(!f) return; try{ let blob=f; try{ blob=await compressImage(f,1500,0.6); }catch(_){} const b64=await fileToB64(blob); updateDraft(id,{fileData:'data:image/jpeg;base64,'+b64, fileName:f.name}); setToast('Beleg angehängt'); }catch(e){ setToast('Beleg-Fehler: '+(e.message||e)); } };
+  const draftFile = async (id,f) => { if(!f) return; try{ const dr=(drafts||[]).find(x=>x.id===id)||{}; let blob=f; try{ blob=await compressImage(f,1500,0.6); }catch(_){} const b64=await fileToB64(blob); const fname=belegFileName(dr.name, dr.belegnr, f.name).replace(/\.[a-z0-9]+$/i,'.jpg'); updateDraft(id,{fileData:'data:image/jpeg;base64,'+b64, fileName:fname}); setToast('Beleg angehängt'); }catch(e){ setToast('Beleg-Fehler: '+(e.message||e)); } };
   const delDraft = id => { setDrafts(ds=>ds.filter(d=>d.id!==id)); setDraftSel(s=>s.filter(x=>x!==id)); };
   const fileToB64 = file => new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result).split(',')[1]); r.onerror=()=>rej(new Error('Datei lesen fehlgeschlagen')); r.readAsDataURL(file); });
   // Alle vorhandenen Buchungen einsammeln (für Dubletten-/Wiederkehrend-Erkennung)
@@ -1632,7 +1637,7 @@ function App({session}) {
     try{
       const meta=belegMetaRef.current;
       const monthFolder=String(belegM+1).padStart(2,'0')+' '+MONTHS[belegM];
-      const fname=uid()+'-'+(meta.name||'beleg.jpg');
+      const fname=belegFileName(belegRes.name, belegRes.belegnr, meta.name||(meta.isPdf?'beleg.pdf':'beleg.jpg'));
       const path=[...folderFor(belegDest), String(belegY), monthFolder, fname].map(safeName).join('/');
       const { error:upErr } = await sb.storage.from('belege').upload(path, belegBlobRef.current, { upsert:true, contentType: meta.isPdf?'application/pdf':'image/jpeg' });
       if(upErr) throw upErr;
