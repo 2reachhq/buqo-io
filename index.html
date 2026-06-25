@@ -138,6 +138,7 @@ const evalAmount = s => {
 };
 const uid  = () => Math.random().toString(36).slice(2,9);
 const newItem = (name='') => ({id:uid(), name, amount:0, recurring:false, note:'', filePath:null, fileName:'', fileData:null});
+const CATS = ['Allgemein','Miete','Nebenkosten','Versicherung','Material','Personal','Steuern','Software','Marketing','Reise','Bewirtung','Bank & Gebühren','Sonstiges'];
 const mkItems  = names => names.map(n=>newItem(n));
 const safeName = s => {
   const map = {'ä':'ae','ö':'oe','ü':'ue','Ä':'Ae','Ö':'Oe','Ü':'Ue','ß':'ss'};
@@ -338,7 +339,8 @@ function TargetPicker({title, moveTargets, curY, curM, confirmLabel, onClose, on
 /* ══ Item row (Name + Betrag + kompaktes ⋮-Dropdown) ══ */
 function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
   const [menu,setMenu]=useState(null);   // {top,bottom,right}
-  const [dlg,setDlg]=useState(null);     // 'note'|'file'|'range'|'move'
+  const [catMenu,setCatMenu]=useState(null); // {left,top,bottom} Kategorie-Dropdown
+  const [dlg,setDlg]=useState(null);     // 'note'|'file'|'range'|'move'|'details'
   const [mvDest,setMvDest]=useState((moveTargets&&moveTargets[0]&&moveTargets[0].key)||'');
   const [mvY,setMvY]=useState(curY);
   const [mvM,setMvM]=useState(curM);
@@ -371,31 +373,54 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
     const up=(r.bottom+300)>window.innerHeight;
     setMenu({ right:Math.max(8, window.innerWidth-r.right), top:up?null:(r.bottom+6), bottom:up?(window.innerHeight-r.top+6):null });
   };
+  const openCat=(e)=>{
+    const r=e.currentTarget.getBoundingClientRect();
+    const up=(r.bottom+320)>window.innerHeight;
+    setCatMenu({ left:r.left, top:up?null:(r.bottom+6), bottom:up?(window.innerHeight-r.top+6):null });
+  };
 
   return (
     <div style={{borderBottom:'1px solid '+C.sep}}>
-      <div style={{display:'flex',gap:8,alignItems:'center',padding:'8px 0',minWidth:'max-content'}}>
+      <div style={{display:'flex',gap:14,alignItems:'center',padding:'13px 4px'}}>
         {selMode && (
           <button onClick={()=>onToggleSelect&&onToggleSelect()} title="Auswählen" style={{width:24,height:24,flexShrink:0,borderRadius:6,border:'1.5px solid '+(selected?C.pri:C.bdrM),background:selected?C.pri:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>
             {selected && <Ic p={P.check} sz={14} col={C.priTxt}/>}
           </button>
         )}
-        <input value={item.name} placeholder="Bezeichnung…" onChange={e=>onUpdate(item.id,'name',e.target.value)} style={{...cellInput(160),fontSize:14}} />
-        <input type="date" value={isoDate(item.datum)} onChange={e=>onUpdate(item.id,'datum',e.target.value)} style={{...cellInput(138),colorScheme:'dark'}} />
-        <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={cellInput(104)} />
-        <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="Netto" style={{...cellInput(84),...NUM}} />
-        <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...cellInput(88),...NUM}} />
-        <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={cellInput(66)}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>
+        {/* Upload-Kachel ganz links — Beleg direkt hochladen/ansehen */}
+        <button onClick={hasFile?()=>setDlg('file'):()=>fileRef.current.click()} title={hasFile?'Beleg ansehen':'Beleg hochladen'} style={{position:'relative',width:46,height:46,flexShrink:0,borderRadius:14,background:hasFile?C.priL:C.surf2,border:'1px solid '+(hasFile?'transparent':C.sep),display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
+          <Ic p={hasFile?P.clip:P.upload} sz={18} col={hasFile?C.pri:C.sub}/>
+          {hasFile && <span style={{position:'absolute',right:-3,bottom:-3,width:15,height:15,borderRadius:'50%',background:C.grn,border:'2px solid '+C.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.check} sz={8} col={'#06281C'}/></span>}
+        </button>
+        {/* Name + Kategorie */}
+        <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',gap:2}}>
+          <input value={item.name} placeholder="Bezeichnung…" onChange={e=>onUpdate(item.id,'name',e.target.value)} style={{background:'transparent',border:'none',outline:'none',fontFamily:'inherit',fontSize:15.5,fontWeight:600,color:C.txt,width:'100%',padding:0,letterSpacing:'-0.01em'}} />
+          <button onClick={openCat} style={{alignSelf:'flex-start',background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',fontSize:13,color:item.category?C.sub:C.mut,display:'inline-flex',alignItems:'center',gap:4}}>{item.category||'Kategorie'} <Ic p={P.down} sz={11} col={C.mut}/></button>
+        </div>
+        {/* Preis ganz rechts */}
+        <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{background:'transparent',border:'none',outline:'none',fontFamily:'inherit',fontSize:16,fontWeight:700,color:C.txt,width:118,textAlign:'right',padding:0,...NUM}} />
         {!selMode && (
           <button onClick={openMenu} title="Optionen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,width:26,height:26,borderRadius:6,fontSize:18,lineHeight:1,fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center'}}>⋮</button>
         )}
         <input type="file" ref={fileRef} onChange={handleFile} style={{display:'none'}} accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt" />
       </div>
-      {(hasFrom||hasUntil||hasNote||hasFile) && !selMode && (
-        <div style={{display:'flex',flexWrap:'wrap',gap:5,padding:'0 0 9px 28px',marginTop:-3}}>
+      {(hasFrom||hasUntil||hasNote) && !selMode && (
+        <div style={{display:'flex',flexWrap:'wrap',gap:5,padding:'0 0 10px 60px',marginTop:-4}}>
           {(hasFrom||hasUntil) && chip(P.cal,C.sub,rangeLabel, ()=>setDlg('range'))}
           {hasNote && chip(P.note,C.mut,'Notiz', ()=>setDlg('note'))}
-          {hasFile && chip(P.clip,C.mut,'Beleg', ()=>setDlg('file'))}
+        </div>
+      )}
+
+      {/* Kategorie-Dropdown (kompakt, gleicher Stil wie das ⋮-Menü) */}
+      {catMenu && (
+        <div onClick={()=>setCatMenu(null)} style={{position:'fixed',inset:0,zIndex:110}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:catMenu.left,top:catMenu.top!=null?catMenu.top:undefined,bottom:catMenu.bottom!=null?catMenu.bottom:undefined,width:200,maxHeight:300,overflowY:'auto',background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+            {CATS.map(cat=>(
+              <button key={cat} onClick={()=>{onUpdate(item.id,'category',cat);setCatMenu(null);}} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:item.category===cat?C.surf2:'none',border:'none',borderRadius:8,padding:'10px 12px',fontSize:14,color:item.category===cat?C.txt:C.sub,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                <span style={{width:6,height:6,borderRadius:'50%',background:item.category===cat?C.pri:'transparent',flexShrink:0}}/> {cat}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -404,6 +429,7 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
         <div onClick={()=>setMenu(null)} style={{position:'fixed',inset:0,zIndex:110}}>
           <div onClick={e=>e.stopPropagation()} style={{position:'fixed',right:menu.right,top:menu.top!=null?menu.top:undefined,bottom:menu.bottom!=null?menu.bottom:undefined,width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
             {onEditDetails && mItem(P.brief,'Kundendetails…',()=>{setMenu(null);onEditDetails(item.id);},C.pri)}
+            {mItem(P.doc,'Details (Datum, Beleg-Nr, Netto, MwSt)',()=>{setMenu(null);setDlg('details');})}
             {mItem(P.note, hasNote?'Notiz bearbeiten':'Notiz', ()=>{setMenu(null);setDlg('note');})}
             {mItem(P.clip, hasFile?'Beleg':'Beleg anhängen', ()=>{setMenu(null);setDlg('file');})}
             {onSetRange && mItem(P.cal,'Zeitraum (von–bis)',()=>{setMenu(null);setDlg('range');})}
@@ -422,6 +448,19 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
           <textarea autoFocus value={item.note||''} onChange={e=>onUpdate(item.id,'note',e.target.value)} placeholder="Notiz…" rows={4}
             style={{width:'100%',background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit',resize:'vertical'}} />
           <button onClick={()=>setDlg(null)} style={{...menuBtn,justifyContent:'center',background:C.priL,color:C.pri,fontWeight:600,marginTop:12}}>Fertig</button>
+        </Sheet>
+      )}
+
+      {/* Details: Datum, Beleg-Nr, Netto, MwSt */}
+      {dlg==='details' && (
+        <Sheet title={(item.name||'Zeile')+' · Details'} onClose={()=>setDlg(null)}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            {dcell('Datum', <input type="date" value={isoDate(item.datum)} onChange={e=>onUpdate(item.id,'datum',e.target.value)} style={{...dInput('100%'),colorScheme:'dark'}} />)}
+            {dcell('Beleg-Nr', <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={dInput('100%')} />)}
+            {dcell('Netto €', <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="Netto" style={{...dInput('100%'),...NUM}} />)}
+            {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={dInput('100%')}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>)}
+          </div>
+          <button onClick={()=>setDlg(null)} style={{...menuBtn,justifyContent:'center',background:C.priL,color:C.pri,fontWeight:600,marginTop:14}}>Fertig</button>
         </Sheet>
       )}
 
@@ -488,16 +527,9 @@ function ItemRow({item, onUpdate, onDelete, folderPath, onUploadFile, onOpenFile
 
 /* ══ Sortier-/Auswahl-Liste (Drag & Drop + Mehrfachauswahl) ══ */
 function ItemList({items, srcKey, updFn, delFn, recurFn, rangeFn, editFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, curY, curM, hideRecur}) {
-  const hcell=(label,w)=>(<div style={{width:w,flexShrink:0,fontSize:10,color:C.mut,fontWeight:700}}>{label}</div>);
   return (
-    <div style={{overflowX:'auto'}}>
-      <div style={{minWidth:'max-content'}}>
-        {items.length>0 && (
-          <div style={{display:'flex',gap:8,alignItems:'center',padding:'2px 0 6px',borderBottom:'1px solid '+C.sep,marginBottom:2}}>
-            {selMode && <div style={{width:24,flexShrink:0}}/>}
-            {hcell('Bezeichnung',160)}{hcell('Datum',138)}{hcell('Beleg-Nr',104)}{hcell('Netto €',84)}{hcell('Brutto €',88)}{hcell('MwSt',66)}
-          </div>
-        )}
+    <div>
+      <div>
         {items.map((item,idx)=>(
           <ItemRow key={item.id} item={item}
             onUpdate={updFn} onDelete={delFn}
