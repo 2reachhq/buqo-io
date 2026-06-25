@@ -724,6 +724,10 @@ function App({session}) {
   const [tab,  setTab]  = useState('quellen');
   const [sonstOpen,setSonstOpen]= useState(false);
   const [gesamtHover,setGesamtHover]= useState(false);
+  const [invEdit,setInvEdit]= useState(null);      // Rechnung im Editor (Entwurf)
+  const [custEdit,setCustEdit]= useState(null);    // Kunde im Editor
+  const [invAiBusy,setInvAiBusy]= useState(false);  // KI-Assistent Rechnung
+  const [invAiText,setInvAiText]= useState('');
   const [sp,   setSp]   = useState('p1');
   const [data, setData] = useState({});
   const [names,setNames]= useState({p1:'Immobilie 1',p2:'Immobilie 2',p3:'Immobilie 3',unternehmen:'Unternehmen'});
@@ -772,7 +776,7 @@ function App({session}) {
   const exitSel = () => { setSelKey(null); setSelIds([]); };
   /* Eigene URL pro Bereich (Hash-Routing) */
   useEffect(()=>{
-    const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','mehr','settings']);
+    const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','mehr','settings','rechnung']);
     const apply=()=>{ const h=(window.location.hash||'').replace(/^#\/?/,''); if(valid.has(h)) setTab(h); };
     apply();
     window.addEventListener('hashchange',apply);
@@ -1334,6 +1338,50 @@ function App({session}) {
     setToast(dlist.length+' → '+moveLabel(destKey)+' · '+MONTHS[tm]+' '+ty);
   };
 
+  /* ── Rechnungen ── */
+  const company = data.company || {};
+  const customers = data.customers || [];
+  const invoices = data.invoices || [];
+  const setCompany = patch => setData(prev=>({...prev, company:{...(prev.company||{}), ...patch}}));
+  const saveCustomer = (c) => setData(prev=>{ const list=[...(prev.customers||[])]; const i=list.findIndex(x=>x.id===c.id); if(i>=0)list[i]=c; else list.push(c); return {...prev, customers:list}; });
+  const delCustomer = (id) => setData(prev=>({...prev, customers:(prev.customers||[]).filter(c=>c.id!==id)}));
+  const invTotals = (items)=>{ let net=0,tax=0; (items||[]).forEach(it=>{ const n=num(it.qty||1)*num(it.price); net+=n; tax+=n*(num(it.mwst!=null?it.mwst:19)/100); }); return {net, tax, gross:net+tax}; };
+  const nextInvNo = ()=>{ const y=new Date().getFullYear(); const n=(data.invoices||[]).filter(i=>String(i.number||'').startsWith(String(y))).length+1; return y+'-'+String(n).padStart(3,'0'); };
+  const newInvoice = ()=>({ id:uid(), number:nextInvNo(), customerId:(customers[0]&&customers[0].id)||'', date:new Date().toISOString().slice(0,10), due:'', items:[{desc:'',qty:1,price:0,mwst:19}], note:'' });
+  const aiInvoice = async ()=>{ const t=invAiText.trim(); if(!t||invAiBusy) return; setInvAiBusy(true);
+    try{
+      const prompt="Erzeuge Rechnungspositionen aus dieser Beschreibung (Deutschland). Antworte AUSSCHLIESSLICH mit minifiziertem JSON: {\"p\":[{\"d\":\"Beschreibung\",\"q\":1,\"e\":100,\"m\":19}]} . d=Leistung, q=Menge, e=Einzelpreis netto (Punkt als Dezimaltrennzeichen), m=MwSt-% (19 oder 7). Kein Text drumherum. Beschreibung: "+t;
+      const {data:resp,error}=await sb.functions.invoke('ai',{body:{model:'claude-haiku-4-5',max_tokens:1200,messages:[{role:'user',content:prompt}]}});
+      if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
+      let txt=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; txt=txt.replace(/```json|```/g,'').trim(); const mm=txt.match(/\{[\s\S]*\}/); if(mm)txt=mm[0];
+      const p=JSON.parse(txt); const items=(p.p||[]).map(x=>({desc:String(x.d||''),qty:num(x.q)||1,price:Math.abs(parseFloat(String(x.e).replace(',','.'))||0),mwst:num(x.m)||19}));
+      if(items.length){ setInvEdit(e=>({...e, items})); setInvAiText(''); setToast(items.length+' Positionen erstellt'); } else setToast('Keine Positionen erkannt.');
+    }catch(e){ setToast('KI-Fehler: '+(e.message||e)); }
+    setInvAiBusy(false);
+  };
+  const saveInvoice = ()=>{ const inv=invEdit; if(!inv) return; const tot=invTotals(inv.items); const cust=customers.find(c=>c.id===inv.customerId); const dt=new Date(inv.date); const ty=isNaN(dt)?yr:dt.getFullYear(); const tm=isNaN(dt)?mo:dt.getMonth();
+    setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const list=[...(nd.invoices||[])]; const i=list.findIndex(x=>x.id===inv.id); const saved={...inv,total:tot.gross}; const isNew=i<0; if(isNew)list.push(saved); else list[i]=saved; nd.invoices=list;
+      if(isNew){ if(!nd[ty])nd[ty]={}; if(!nd[ty][tm])nd[ty][tm]=emptyMonth(); const s=nd[ty][tm].unternehmen||{}; const item={...newItem('Rechnung '+inv.number+(cust?(' · '+cust.name):'')),amount:tot.gross,belegnr:inv.number,datum:inv.date,netto:tot.net,note:'Rechnung'}; nd[ty][tm].unternehmen={...s,clients:[...(s.clients||[]),item]}; }
+      return nd; });
+    setToast('Rechnung '+inv.number+' gespeichert + als Einnahme gebucht'); setInvEdit(null);
+  };
+  const uploadLogo = async (file)=>{ try{ let blob=file; try{ blob=await compressImage(file,400,0.8); }catch(_){} const b64=await fileToB64(blob); setCompany({logoData:'data:image/jpeg;base64,'+b64}); setToast('Logo gespeichert'); }catch(e){ setToast('Logo-Upload fehlgeschlagen: '+(e.message||e)); } };
+  const printInvoice = (inv)=>{ const cust=customers.find(c=>c.id===inv.customerId)||{}; const tot=invTotals(inv.items); const co=company||{};
+    const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
+    const rows=(inv.items||[]).map(it=>{ const n=num(it.qty||1)*num(it.price); return '<tr><td>'+esc(it.desc)+'</td><td class=r>'+(num(it.qty)||1)+'</td><td class=r>'+fmt(num(it.price))+'</td><td class=r>'+(num(it.mwst!=null?it.mwst:19))+'%</td><td class=r>'+fmt(n)+'</td></tr>'; }).join('');
+    const html='<html><head><meta charset="utf-8"><title>Rechnung '+esc(inv.number)+'</title><style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:40px;max-width:820px;margin:0 auto}h1{font-size:26px;margin:0}table{width:100%;border-collapse:collapse;margin-top:22px}th,td{padding:8px;border-bottom:1px solid #e2e2e2;font-size:13px}th{text-align:left;color:#777}.r{text-align:right}.tot{margin-top:16px;text-align:right}.muted{color:#777;font-size:12px;line-height:1.5}</style></head><body>'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+      +'<div>'+(co.logoData?'<img src="'+co.logoData+'" style="max-height:74px;margin-bottom:10px"><br>':'')+'<b>'+esc(co.name)+'</b><br><span class=muted>'+esc(co.address)+'</span></div>'
+      +'<div style="text-align:right"><h1>Rechnung</h1><div class=muted style="margin-top:6px">Nr. '+esc(inv.number)+'<br>Datum: '+esc(inv.date)+(inv.due?('<br>Fällig: '+esc(inv.due)):'')+'</div></div></div>'
+      +'<div style="margin-top:24px"><span class=muted>Rechnung an</span><br><b>'+esc(cust.name)+'</b><br><span class=muted>'+esc(cust.address)+'</span></div>'
+      +'<table><thead><tr><th>Beschreibung</th><th class=r>Menge</th><th class=r>Einzelpreis</th><th class=r>MwSt</th><th class=r>Netto</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      +'<div class=tot><div class=muted>Netto: '+fmt(tot.net)+'</div><div class=muted>MwSt: '+fmt(tot.tax)+'</div><div style="font-size:19px;font-weight:bold;margin-top:6px">Gesamt: '+fmt(tot.gross)+'</div></div>'
+      +((co.iban||co.taxId||co.ustId)?('<div class=muted style="margin-top:28px">'+(co.iban?('Zahlbar an: '+esc(co.iban)+(co.bic?(' · '+esc(co.bic)):'')+'<br>'):'')+(co.taxId?('Steuernr.: '+esc(co.taxId)+' '):'')+(co.ustId?('USt-IdNr.: '+esc(co.ustId)):'')+'</div>'):'')
+      +(inv.note?('<div class=muted style="margin-top:16px">'+esc(inv.note)+'</div>'):'')
+      +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);}</scr'+'ipt></body></html>';
+    const w=window.open('','_blank'); if(w){ w.document.write(html); w.document.close(); } else setToast('Bitte Pop-ups erlauben, um die Rechnung zu drucken.');
+  };
+
   /* Alle Daten als Datei exportieren (zur Auswertung) */
   const exportData = () => {
     try{
@@ -1516,6 +1564,7 @@ function App({session}) {
     {id:'berater',label:'KI-Berater',   icon:P.spark},
   ];
   const SONSTIGES = [
+    {id:'rechnung',label:'Rechnungen',  icon:P.brief},
     {id:'kal',    label:'Events',       icon:P.bed},
     {id:'yr',     label:'Jahresübersicht', icon:P.cal},
     {id:'steuer', label:'Steuer',       icon:P.doc},
@@ -1815,6 +1864,38 @@ function App({session}) {
               <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Einstellungen</div>
               <div style={{fontSize:13,color:C.sub}}>{(session&&session.user&&session.user.email)||''}</div>
             </div>
+            {/* Unternehmensdetails (für Rechnungen) */}
+            <div style={{...SC,marginBottom:12}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:12}}>Unternehmensdetails (für Rechnungen)</div>
+              <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
+                <div style={{width:70,height:70,borderRadius:14,background:C.surf2,display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',flexShrink:0}}>
+                  {company.logoData ? <img src={company.logoData} style={{maxWidth:'100%',maxHeight:'100%'}}/> : <Ic p={P.brief} sz={24} col={C.mut}/>}
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                  <label style={{display:'inline-flex',alignItems:'center',gap:7,background:C.priL,color:C.pri,borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:600,cursor:'pointer'}}>
+                    <Ic p={P.upload} sz={14} col={C.pri}/> Logo hochladen
+                    <input type="file" accept="image/*" onChange={e=>{const f=e.target.files[0]; e.target.value=''; if(f)uploadLogo(f);}} style={{display:'none'}}/>
+                  </label>
+                  {company.logoData && <button onClick={()=>setCompany({logoData:''})} style={{background:'none',border:'none',color:C.mut,fontSize:12,cursor:'pointer',fontFamily:'inherit',textAlign:'left',padding:0}}>Logo entfernen</button>}
+                </div>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Firmenname</div><input value={company.name||''} onChange={e=>setCompany({name:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
+                <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse</div><textarea value={company.address||''} onChange={e=>setCompany({address:e.target.value})} rows={3} style={{...SS,textAlign:'left',resize:'vertical'}}/></div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                  <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Steuernummer</div><input value={company.taxId||''} onChange={e=>setCompany({taxId:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
+                  <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>USt-IdNr.</div><input value={company.ustId||''} onChange={e=>setCompany({ustId:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
+                </div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                  <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>IBAN</div><input value={company.iban||''} onChange={e=>setCompany({iban:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
+                  <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>BIC</div><input value={company.bic||''} onChange={e=>setCompany({bic:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
+                </div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                  <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={company.email||''} onChange={e=>setCompany({email:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
+                  <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Telefon</div><input value={company.phone||''} onChange={e=>setCompany({phone:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
+                </div>
+              </div>
+            </div>
             {/* Online-Speicher */}
             <div style={{...SC,marginBottom:12}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
@@ -1853,7 +1934,7 @@ function App({session}) {
                 <div style={{fontSize:13,color:C.sub}}>Weitere Bereiche</div>
               </div>
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                {[{id:'kal',label:'Events',icon:P.bed},{id:'yr',label:'Jahresübersicht',icon:P.cal},{id:'steuer',label:'Steuer',icon:P.doc},{id:'settings',label:'Einstellungen',icon:P.doc}].map(m=>(
+                {[{id:'rechnung',label:'Rechnungen',icon:P.brief},{id:'kal',label:'Events',icon:P.bed},{id:'yr',label:'Jahresübersicht',icon:P.cal},{id:'steuer',label:'Steuer',icon:P.doc},{id:'settings',label:'Einstellungen',icon:P.doc}].map(m=>(
                   <button key={m.id} onClick={()=>setTab(m.id)} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
                   </button>
@@ -2347,6 +2428,120 @@ function App({session}) {
             </>
           )}
 
+          {/* ══ RECHNUNGEN ══ */}
+          {tab==='rechnung' && (()=>{
+            const fld={...SS,textAlign:'left'};
+            const primBtn={display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'};
+            const tot = invEdit ? invTotals(invEdit.items) : null;
+
+            if(custEdit){
+              return (
+                <>
+                  <button onClick={()=>setCustEdit(null)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:10}}>‹ Rechnungen</button>
+                  <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em',marginBottom:16}}>{customers.some(c=>c.id===custEdit.id)?'Kunde bearbeiten':'Neuer Kunde'}</div>
+                  <div style={{...SC,display:'flex',flexDirection:'column',gap:10}}>
+                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Name / Firma</div><input value={custEdit.name||''} onChange={e=>setCustEdit({...custEdit,name:e.target.value})} style={fld}/></div>
+                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse</div><textarea value={custEdit.address||''} onChange={e=>setCustEdit({...custEdit,address:e.target.value})} rows={3} style={{...fld,resize:'vertical'}}/></div>
+                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={custEdit.email||''} onChange={e=>setCustEdit({...custEdit,email:e.target.value})} style={fld}/></div>
+                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Kundennr. (optional)</div><input value={custEdit.custNo||''} onChange={e=>setCustEdit({...custEdit,custNo:e.target.value})} style={fld}/></div>
+                    <button onClick={()=>{ saveCustomer(custEdit); setCustEdit(null); setToast('Kunde gespeichert'); }} style={primBtn}>Speichern</button>
+                  </div>
+                </>
+              );
+            }
+
+            if(invEdit){
+              const setI=patch=>setInvEdit({...invEdit,...patch});
+              const setItem=(i,patch)=>setInvEdit({...invEdit, items:invEdit.items.map((it,ix)=>ix===i?{...it,...patch}:it)});
+              return (
+                <>
+                  <button onClick={()=>setInvEdit(null)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:10}}>‹ Rechnungen</button>
+                  <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em',marginBottom:16}}>Rechnung {invEdit.number}</div>
+                  {customers.length===0 ? (
+                    <div style={{...SC,fontSize:14,color:C.sub}}>Lege zuerst einen Kunden an.<br/><button onClick={()=>setCustEdit({id:uid(),name:'',address:'',email:'',custNo:''})} style={{...primBtn,marginTop:12}}>+ Kunde anlegen</button></div>
+                  ) : (
+                    <>
+                      <div style={{...SC,marginBottom:12,display:'flex',flexDirection:'column',gap:10}}>
+                        <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Kunde</div>
+                          <select value={invEdit.customerId} onChange={e=>setI({customerId:e.target.value})} style={SS}>{customers.map(c=><option key={c.id} value={c.id}>{c.name||'(ohne Name)'}</option>)}</select>
+                        </div>
+                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Rechnungsnr.</div><input value={invEdit.number} onChange={e=>setI({number:e.target.value})} style={fld}/></div>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Datum</div><input type="date" value={invEdit.date} onChange={e=>setI({date:e.target.value})} style={{...fld,colorScheme:'dark'}}/></div>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Fällig</div><input type="date" value={invEdit.due} onChange={e=>setI({due:e.target.value})} style={{...fld,colorScheme:'dark'}}/></div>
+                        </div>
+                      </div>
+                      <div style={{...SC,marginBottom:12,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint}}>
+                        <div style={{fontSize:13,fontWeight:700,display:'flex',alignItems:'center',gap:7,marginBottom:8}}><Ic p={P.spark} sz={15} col={KONTO_COLORS.unter.c}/> KI-Assistent</div>
+                        <div style={{fontSize:12,color:C.mut,marginBottom:8,lineHeight:1.5}}>Kurz beschreiben, was du in Rechnung stellst – die KI erstellt die Positionen.</div>
+                        <textarea value={invAiText} onChange={e=>setInvAiText(e.target.value)} rows={2} placeholder="z. B. Webdesign 1.500 €, Wartung 200 €/Monat" style={{...fld,resize:'vertical',marginBottom:8}}/>
+                        <button onClick={aiInvoice} disabled={invAiBusy} style={{...primBtn,background:KONTO_COLORS.unter.c,color:'#0A0A0A',opacity:invAiBusy?0.6:1}}>{invAiBusy?'Erstellt…':'Positionen erstellen'}</button>
+                      </div>
+                      <div style={{...SC,marginBottom:12}}>
+                        <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:10}}>Positionen</div>
+                        {invEdit.items.map((it,i)=>(
+                          <div key={i} style={{borderBottom:'1px solid '+C.sep,paddingBottom:10,marginBottom:10}}>
+                            <input value={it.desc} onChange={e=>setItem(i,{desc:e.target.value})} placeholder="Beschreibung" style={{...fld,marginBottom:8}}/>
+                            <div style={{display:'flex',gap:8,alignItems:'flex-end'}}>
+                              <div style={{width:60}}><div style={{fontSize:10,color:C.mut,marginBottom:4}}>Menge</div><input value={it.qty} onChange={e=>setItem(i,{qty:e.target.value})} inputMode="decimal" style={{...fld,...NUM}}/></div>
+                              <div style={{flex:1}}><div style={{fontSize:10,color:C.mut,marginBottom:4}}>Einzelpreis €</div><input value={it.price} onChange={e=>setItem(i,{price:e.target.value})} inputMode="decimal" style={{...fld,...NUM}}/></div>
+                              <div style={{width:78}}><div style={{fontSize:10,color:C.mut,marginBottom:4}}>MwSt</div><select value={String(it.mwst!=null?it.mwst:19)} onChange={e=>setItem(i,{mwst:e.target.value})} style={SS}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select></div>
+                              <button onClick={()=>setI({items:invEdit.items.filter((_,ix)=>ix!==i)})} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:18,padding:'0 4px'}}>×</button>
+                            </div>
+                          </div>
+                        ))}
+                        <button onClick={()=>setI({items:[...invEdit.items,{desc:'',qty:1,price:0,mwst:19}]})} style={{background:'none',border:'1px dashed '+C.surf3,color:C.mut,borderRadius:8,padding:'7px 14px',fontSize:13,cursor:'pointer',fontFamily:'inherit',width:'100%'}}>+ Position</button>
+                        <div style={{marginTop:14,textAlign:'right'}}>
+                          <div style={{fontSize:12,color:C.sub}}>Netto: {fmt(tot.net)}</div>
+                          <div style={{fontSize:12,color:C.sub}}>MwSt: {fmt(tot.tax)}</div>
+                          <div style={{fontSize:20,fontWeight:800,...NUM,marginTop:4}}>Gesamt: {fmt(tot.gross)}</div>
+                        </div>
+                      </div>
+                      <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Notiz (optional, erscheint auf der Rechnung)</div><textarea value={invEdit.note||''} onChange={e=>setI({note:e.target.value})} rows={2} style={{...fld,resize:'vertical',marginBottom:12}}/></div>
+                      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                        <button onClick={saveInvoice} style={{...primBtn,flex:2,minWidth:200}}>Speichern + als Einnahme buchen</button>
+                        <button onClick={()=>printInvoice(invEdit)} style={{...primBtn,background:C.surf2,color:C.txt,flex:1,minWidth:130}}>Als PDF</button>
+                      </div>
+                    </>
+                  )}
+                </>
+              );
+            }
+
+            return (
+              <>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16,flexWrap:'wrap',gap:10}}>
+                  <div><div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Rechnungen</div><div style={{fontSize:13,color:C.sub}}>Kunden anlegen, Rechnungen erstellen</div></div>
+                  <button onClick={()=>setInvEdit(newInvoice())} style={{...primBtn,width:'auto',padding:'10px 16px'}}>+ Neue Rechnung</button>
+                </div>
+                {!company.name && <div style={{...SC,marginBottom:12,fontSize:13,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',lineHeight:1.5}}>Tipp: Hinterlege unter <b>Einstellungen</b> deine Firmendaten + Logo für den Rechnungskopf.</div>}
+                <div style={{...SC,marginBottom:14}}>
+                  <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:8}}>Deine Rechnungen</div>
+                  {invoices.length? [...invoices].reverse().map(inv=>{ const c=customers.find(x=>x.id===inv.customerId); return (
+                    <div key={inv.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
+                      <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:600}}>{inv.number}</div><div style={{fontSize:12,color:C.sub}}>{(c&&c.name)||'—'} · {inv.date}</div></div>
+                      <div style={{fontSize:15,fontWeight:700,...NUM,color:C.grn}}>{fmt(inv.total||invTotals(inv.items).gross)}</div>
+                      <button onClick={()=>printInvoice(inv)} title="Als PDF" style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'7px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:12}}>PDF</button>
+                      <button onClick={()=>setInvEdit(inv)} title="Öffnen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:16}}>›</button>
+                    </div>
+                  ); }) : <div style={{fontSize:13,color:C.mut}}>Noch keine Rechnungen.</div>}
+                </div>
+                <div style={SC}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                    <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Kunden</div>
+                    <button onClick={()=>setCustEdit({id:uid(),name:'',address:'',email:'',custNo:''})} style={BVm}>+ Kunde</button>
+                  </div>
+                  {customers.length? customers.map(c=>(
+                    <div key={c.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:'1px solid '+C.sep}}>
+                      <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:600}}>{c.name||'(ohne Name)'}</div>{c.email&&<div style={{fontSize:12,color:C.sub}}>{c.email}</div>}</div>
+                      <button onClick={()=>setCustEdit(c)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>Bearbeiten</button>
+                      <button onClick={()=>askConfirm('Kunde „'+(c.name||'')+'" löschen?',()=>delCustomer(c.id))} style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:16}}>×</button>
+                    </div>
+                  )) : <div style={{fontSize:13,color:C.mut}}>Noch keine Kunden.</div>}
+                </div>
+              </>
+            );
+          })()}
           {/* ══ JAHRESÜBERSICHT ══ */}
           {tab==='yr' && <>
             <div style={{marginBottom:24}}>
