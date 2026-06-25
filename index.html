@@ -156,7 +156,7 @@ const newItem = (name='') => ({id:uid(), name, amount:0, recurring:false, note:'
 const CATS = ['Allgemein','Miete','Nebenkosten','Versicherung','Material','Personal','Steuern','Software','Marketing','Reise','Bewirtung','Bank & Gebühren','Sonstiges'];
 const DEF_INV_BODY = 'vielen Dank für Ihr Vertrauen. Für die erbrachten Leistungen erlaube ich mir, Ihnen folgende Positionen in Rechnung zu stellen:';
 const DEF_INV_HEADER = 'Sehr geehrte Damen und Herren,\n\n'+DEF_INV_BODY;
-const greetingFor = (cust)=>{ const nm=String((cust&&cust.name)||'').trim(); const isCompany=/\b(gmbh|ag|ug|kg|ohg|gbr|mbh|e\.?k\.?|e\.?v\.?|co\.?|ltd|inc|se)\b/i.test(nm); const last=(nm&&!isCompany)?nm.split(/\s+/).pop():''; if(cust&&cust.anrede==='herr'&&last) return 'Sehr geehrter Herr '+last+','; if(cust&&cust.anrede==='frau'&&last) return 'Sehr geehrte Frau '+last+','; return 'Sehr geehrte Damen und Herren,'; };
+const greetingFor = (cust)=>{ let last=(cust&&cust.lastName)?String(cust.lastName).trim():''; if(!last){ const nm=String((cust&&cust.name)||'').trim(); const isCompany=/\b(gmbh|ag|ug|kg|ohg|gbr|mbh|e\.?k\.?|e\.?v\.?|co\.?|ltd|inc|se)\b/i.test(nm); last=(nm&&!isCompany)?nm.split(/\s+/).pop():''; } if(cust&&cust.anrede==='herr'&&last) return 'Sehr geehrter Herr '+last+','; if(cust&&cust.anrede==='frau'&&last) return 'Sehr geehrte Frau '+last+','; return 'Sehr geehrte Damen und Herren,'; };
 const DEF_INV_FOOTER = 'Bitte überweisen Sie den Rechnungsbetrag innerhalb von 14 Tagen ohne Abzug auf das unten genannte Konto.\n\nMit freundlichen Grüßen';
 const mkItems  = names => names.map(n=>newItem(n));
 const safeName = s => {
@@ -1697,7 +1697,7 @@ function App({session}) {
   const recurInvoicesFor = (id)=> (data.invoices||[]).filter(iv=>iv.fromRecurId===id);
   // Standard-Kopf-/Footertext (pro Rechnung überschreibbar, Default bleibt erhalten)
   const defaultHeader = (co)=> (co&&co.invHeaderDefault!=null&&co.invHeaderDefault!=='') ? co.invHeaderDefault : DEF_INV_HEADER;
-  const defaultFooter = (co)=> (co&&co.invFooterDefault!=null&&co.invFooterDefault!=='') ? co.invFooterDefault : (DEF_INV_FOOTER+'\n'+((co&&co.name)||''));
+  const defaultFooter = (co)=> (co&&co.invFooterDefault!=null&&co.invFooterDefault!=='') ? co.invFooterDefault : (DEF_INV_FOOTER+'\n'+[ (co&&co.contactName)||'', (co&&co.name)||'', (co&&co.contactEmail)||'' ].filter(Boolean).join('\n'));
   const invHeader = (inv)=>{ if(inv.headerText!=null) return inv.headerText; const co=companyFor(inv.domain||'unter'); if(co&&co.invHeaderDefault!=null&&co.invHeaderDefault!=='') return co.invHeaderDefault; return greetingFor(invCustomer(inv))+'\n\n'+DEF_INV_BODY; };
   const invFooter = (inv)=> inv.footerText!=null ? inv.footerText : defaultFooter(companyFor(inv.domain||'unter'));
   const openInvoice = (inv)=>{ let v={...inv}; if(v.customerId && !v.custName){ const c=customers.find(x=>x.id===v.customerId); if(c){ v.custName=c.name||''; v.custAddress=c.address||''; v.custEmail=c.email||''; v.saveCust=false; } } if(v.account==null) v.account='unter'; setInvEdit(v); };
@@ -1832,7 +1832,7 @@ function App({session}) {
         +'<div style="text-align:right">'+(co.logoData?'<img src="'+co.logoData+'" style="max-height:84px;max-width:230px">':'<div style="font-size:20px;font-weight:800;color:'+A+'">'+esc(co.name||'')+'</div>')+'</div>'
       +'</div>'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:40px;margin-top:24px">'
-        +'<div style="max-width:330px">'+(senderLine?'<div class=sender>'+esc(senderLine)+'</div>':'')+'<div><b>'+esc(cust.name||'—')+'</b>'+(cust.address?'<br>'+esc(cust.address):'')+'</div></div>'
+        +'<div style="max-width:330px">'+(senderLine?'<div class=sender>'+esc(senderLine)+'</div>':'')+'<div><b>'+esc(cust.company||cust.name||'—')+'</b>'+((cust.company&&[cust.firstName,cust.lastName].filter(Boolean).join(' '))?'<br>z. Hd. '+esc([cust.firstName,cust.lastName].filter(Boolean).join(' ')):'')+(cust.address?'<br>'+esc(cust.address):'')+'</div></div>'
         +'<table class=meta><tr><td class=k>Rechnungs-Nr.</td><td>'+esc(inv.number)+'</td></tr><tr><td class=k>Rechnungsdatum</td><td>'+esc(inv.date)+'</td></tr>'+(inv.due?'<tr><td class=k>Fällig am</td><td>'+esc(inv.due)+'</td></tr>':'')+(cust.custNo?'<tr><td class=k>Kundennummer</td><td>'+esc(cust.custNo)+'</td></tr>':'')+'</table>'
       +'</div>'
       +'<h1 style="margin-top:34px">Rechnung Nr. '+esc(inv.number)+'</h1>'
@@ -2385,6 +2385,13 @@ function App({session}) {
                 <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
                   <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={co.email||''} onChange={e=>setCompanyFor(dom,{email:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
                   <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Telefon</div><input value={co.phone||''} onChange={e=>setCompanyFor(dom,{phone:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
+                </div>
+                <div style={{height:1,background:C.sep,margin:'4px 0'}}/>
+                <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Ansprechpartner</div>
+                <div style={{fontSize:11,color:C.mut,lineHeight:1.5,marginTop:-4}}>Erscheint auf der Rechnung unter „Mit freundlichen Grüßen" (Name + E-Mail).</div>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                  <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Name</div><input value={co.contactName||''} onChange={e=>setCompanyFor(dom,{contactName:e.target.value})} placeholder="z. B. Max Mustermann" style={{...SS,textAlign:'left'}}/></div>
+                  <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={co.contactEmail||''} onChange={e=>setCompanyFor(dom,{contactEmail:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
                 </div>
                 <div style={{height:1,background:C.sep,margin:'4px 0'}}/>
                 <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Rechnungs-Standardtexte &amp; Standardwerte</div>
@@ -3157,10 +3164,14 @@ function App({session}) {
                   {custTab==='details' && (<>
                     <div style={{...SC,display:'flex',flexDirection:'column',gap:12,marginBottom:14}}>
                       <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:2}}>Kontaktdaten</div>
+                      {(()=>{ const dname=(comp,fn,ln)=>((comp&&comp.trim())|| [fn,ln].filter(Boolean).map(s=>String(s).trim()).filter(Boolean).join(' '))||''; return (<>
                       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                        <div style={{width:160}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Anrede</div><select value={c.anrede||''} onChange={e=>set({anrede:e.target.value})} style={fld}><option value="">— keine —</option><option value="herr">Herr</option><option value="frau">Frau</option></select></div>
-                        <div style={{flex:1,minWidth:180}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Name / Firma</div><input value={c.name||''} onChange={e=>set({name:e.target.value})} style={fld}/></div>
+                        <div style={{width:130}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Anrede</div><select value={c.anrede||''} onChange={e=>set({anrede:e.target.value})} style={fld}><option value="">— keine —</option><option value="herr">Herr</option><option value="frau">Frau</option></select></div>
+                        <div style={{flex:1,minWidth:130}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Vorname</div><input value={c.firstName||''} onChange={e=>{const v=e.target.value; set({firstName:v, name:dname(c.company,v,c.lastName)});}} style={fld}/></div>
+                        <div style={{flex:1,minWidth:130}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Nachname</div><input value={c.lastName||''} onChange={e=>{const v=e.target.value; set({lastName:v, name:dname(c.company,c.firstName,v)});}} style={fld}/></div>
                       </div>
+                      <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Unternehmen / Firma</div><input value={c.company||''} onChange={e=>{const v=e.target.value; set({company:v, name:dname(v,c.firstName,c.lastName)});}} placeholder="optional" style={fld}/></div>
+                      </>); })()}
                       <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse</div><textarea value={c.address||''} onChange={e=>set({address:e.target.value})} rows={3} style={{...fld,resize:'vertical'}}/></div>
                       <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
                         <div style={{flex:1,minWidth:160}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Telefon</div><input value={c.phone||''} onChange={e=>set({phone:e.target.value})} style={fld}/></div>
