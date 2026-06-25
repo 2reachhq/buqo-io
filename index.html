@@ -3065,8 +3065,8 @@ function App({session}) {
               return (
                 <>
                   <button onClick={()=>{setCustEdit(null);setCustTab('details');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:14,display:'flex',alignItems:'center',gap:4}}>‹ Kunden</button>
-                  {/* Profil-Kopf (Karten-Stil wie Startseite) */}
-                  <div style={{...SC,display:'flex',alignItems:'center',gap:16,marginBottom:14,background:hexA(col,0.10),border:'1px solid '+hexA(col,0.3)}}>
+                  {/* Profil-Kopf */}
+                  <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:20}}>
                     <div style={{width:60,height:60,flexShrink:0,borderRadius:16,background:col,display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,fontWeight:800,color:'#0A0A0A'}}>{init}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:24,fontWeight:800,color:C.txt,letterSpacing:'-0.02em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{c.name||'Neuer Kunde'}</div>
@@ -3115,18 +3115,23 @@ function App({session}) {
                       <div style={{fontSize:13,fontWeight:700,color:C.txt}}>Rechnungen & Aktivität</div>
                       <button onClick={()=>{ const nv=newInvoice(cDom); nv.customerId=c.id; nv.custName=c.name||''; nv.custAddress=c.address||''; nv.custEmail=c.email||''; nv.saveCust=false; setInvDomain(cDom); setCustEdit(null); setTab('rechnung'); setInvEdit(nv); }} style={{...primBtn,width:'auto',padding:'9px 15px',fontSize:13}}>+ Neue Rechnung</button>
                     </div>
-                    {rows.length? <div style={{display:'flex',flexDirection:'column',gap:10}}>{rows.map(r=>(
-                      <div key={r.key} style={{display:'flex',alignItems:'center',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px'}}>
-                        <div style={{width:42,height:42,flexShrink:0,borderRadius:12,background:hexA(col,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={r.inv?P.doc:P.clip} sz={18} col={col}/></div>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:15,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.title}</div>
-                          <div style={{fontSize:12.5,color:C.sub,marginTop:2}}>{[r.tag, r.date&&(toISO(r.date)||r.date)].filter(Boolean).join(' · ')}</div>
-                        </div>
-                        <div style={{fontSize:16,fontWeight:800,...NUM,color:r.amount<0?'#FFB37A':C.grn,whiteSpace:'nowrap'}}>{r.amount<0?'-':''}{fmt(Math.abs(r.amount))}</div>
-                        {r.inv && <button onClick={()=>{ setCustEdit(null); openInvoice(r.inv); setTab('rechnung'); }} title="Öffnen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:18,flexShrink:0}}>›</button>}
-                        {!r.inv && r.pdf && <button onClick={()=>openFile(r.pdf)} title="Beleg ansehen" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'6px 10px',fontSize:12,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>Beleg</button>}
+                    {rows.length? (()=>{ const groups={}; rows.forEach(r=>{ const iso=toISO(r.date); const key=iso?iso.slice(0,7):'0000-99'; (groups[key]=groups[key]||[]).push(r); }); const keys=Object.keys(groups).sort().reverse(); const mLbl=k=>{ if(k==='0000-99')return 'Ohne Datum'; const [y,m]=k.split('-'); return MONTHS[(+m)-1]+' '+y; }; return keys.map(key=>(
+                      <div key={key} style={{marginBottom:18}}>
+                        <div style={{fontSize:13,fontWeight:700,color:C.sub,marginBottom:10}}>{mLbl(key)}</div>
+                        <div style={{display:'flex',flexDirection:'column',gap:10}}>{groups[key].map(r=>(
+                          <div key={r.key} style={{display:'flex',alignItems:'center',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px'}}>
+                            <div style={{width:42,height:42,flexShrink:0,borderRadius:12,background:hexA(col,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={r.inv?P.doc:P.clip} sz={18} col={col}/></div>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{fontSize:15,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.title}</div>
+                              <div style={{fontSize:12.5,color:C.sub,marginTop:2}}>{[r.tag, r.date&&(toISO(r.date)||r.date)].filter(Boolean).join(' · ')}</div>
+                            </div>
+                            <div style={{fontSize:16,fontWeight:800,...NUM,color:r.amount<0?'#FFB37A':C.grn,whiteSpace:'nowrap'}}>{r.amount<0?'-':''}{fmt(Math.abs(r.amount))}</div>
+                            {r.inv && <button onClick={()=>{ setCustEdit(null); openInvoice(r.inv); setTab('rechnung'); }} title="Öffnen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:18,flexShrink:0}}>›</button>}
+                            {!r.inv && r.pdf && <button onClick={()=>openFile(r.pdf)} title="Beleg ansehen" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'6px 10px',fontSize:12,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>Beleg</button>}
+                          </div>
+                        ))}</div>
                       </div>
-                    ))}</div> : <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>Noch keine Rechnungen oder Belege für diesen Kunden.</div>}
+                    )); })() : <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>Noch keine Rechnungen oder Belege für diesen Kunden.</div>}
                   </>)}
                 </>
               );
