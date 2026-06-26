@@ -1076,6 +1076,8 @@ function App({session}) {
   const [invCtx,setInvCtx]= useState(null);          // Rechts-Klick-Menü auf Rechnung {x,y,inv}
   const [recExpand,setRecExpand]= useState({});      // welche wiederkehrenden Rechnungen aufgeklappt sind
   const [costYm,setCostYm]= useState(()=>{ try{ return new Date().toISOString().slice(0,7); }catch(e){ return yr+'-01'; } }); // Kosten-Dashboard Monat
+  const [supaBusy,setSupaBusy]= useState(false);     // Supabase-Speicher wird gelesen
+  const [supaStore,setSupaStore]= useState(null);    // {bytes, files, ts}
   const importDragRef = useRef(null);                // Import: Drag&Drop zwischen Ein/Aus
   const [taxOpen,setTaxOpen]= useState({});          // ausklappbare Steuer-Hinweise
   const [advOpen,setAdvOpen]= useState(true);        // Steuerberater-Bereich ein-/ausklappen
@@ -1629,6 +1631,8 @@ function App({session}) {
   /* ── KI-Kosten: Token-Verbrauch je Monat & Modell mitschreiben ── */
   const logAiUsage = (model, usage)=>{ try{ if(!usage) return; const inT=usage.input_tokens||usage.inputTokens||0, outT=usage.output_tokens||usage.outputTokens||0; if(!inT&&!outT) return; const ym=new Date().toISOString().slice(0,7); const md2=String(model||'unbekannt'); setData(prev=>{ const au={...(prev.aiUsage||{})}; const m={...(au[ym]||{})}; const cur=m[md2]||{in:0,out:0,calls:0}; m[md2]={in:cur.in+inT, out:cur.out+outT, calls:cur.calls+1}; au[ym]=m; return {...prev, aiUsage:au}; }); }catch(e){} };
   const aiInvoke = async (opts)=>{ const r = await sb.functions.invoke('ai', opts); try{ const u = r && r.data && (r.data.usage || (r.data.message&&r.data.message.usage)); if(u) logAiUsage(opts&&opts.body&&opts.body.model, u); }catch(e){} return r; };
+  /* ── Supabase-Speichernutzung (Belege-Bucket) live ermitteln ── */
+  const calcSupaStorage = async ()=>{ setSupaBusy(true); try{ let bytes=0, files=0; const walk = async (prefix)=>{ const {data,error}=await sb.storage.from('belege').list(prefix,{limit:1000,sortBy:{column:'name',order:'asc'}}); if(error||!data) return; for(const it of data){ const path=prefix?prefix+'/'+it.name:it.name; if(it.id===null && it.metadata==null){ await walk(path); } else { bytes += (it.metadata&&(it.metadata.size||it.metadata.contentLength))||0; files++; } } }; await walk(''); setSupaStore({bytes,files,ts:new Date().toISOString()}); }catch(e){ setToast('Speicher konnte nicht gelesen werden: '+(e.message||e)); } setSupaBusy(false); };
 
   const importPdf = async file => {
     setImportBusy(true);
@@ -3698,6 +3702,25 @@ function App({session}) {
                     </div>
                   </details>
                 </div>
+                {/* Supabase-Nutzung (Verbrauch) */}
+                {(()=>{ const callsM=Object.values(monthUsage).reduce((s,u)=>s+(u.calls||0),0); const mb=supaStore?supaStore.bytes/1048576:0; const pct=supaStore?Math.min(100,supaStore.bytes/1073741824*100):0; return (
+                <div style={{...SC,marginBottom:14}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:4,display:'flex',alignItems:'center',gap:7}}><Ic p={P.grid} sz={15} col={C.pri}/> Supabase · Nutzung</div>
+                  <div style={{fontSize:12,color:C.mut,marginBottom:12,lineHeight:1.5}}>Datenbank, Speicher & Funktionen. Tarif ist pauschal (Free 0 € / Pro ~25 €) – hier siehst du den realen Verbrauch.</div>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'8px 0',borderBottom:'1px solid '+C.sep}}>
+                    <span style={{color:C.sub}}>Funktions-Aufrufe (KI) · {ymLabel}</span>
+                    <b style={{color:C.txt,...NUM}}>{callsM}</b>
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,fontSize:13,padding:'10px 0 4px',flexWrap:'wrap'}}>
+                    <span style={{color:C.sub}}>Belege-Speicher</span>
+                    {supaStore
+                      ? <span style={{color:C.txt}}><b style={{...NUM}}>{mb.toFixed(1)} MB</b> <span style={{color:C.mut}}>· {supaStore.files} Dateien · {pct.toFixed(1)}% von 1 GB (Free)</span></span>
+                      : <button onClick={calcSupaStorage} disabled={supaBusy} style={{...BVm,opacity:supaBusy?0.6:1}}>{supaBusy?'Prüft…':'Speicher prüfen'}</button>}
+                  </div>
+                  {supaStore && <div style={{height:6,borderRadius:4,background:C.surf3,overflow:'hidden',marginTop:8}}><div style={{height:'100%',width:Math.max(2,pct)+'%',background:pct>90?C.red:C.pri,borderRadius:4}}/></div>}
+                  {supaStore && <button onClick={calcSupaStorage} disabled={supaBusy} style={{marginTop:10,background:'none',border:'none',color:C.sub,fontSize:12,cursor:'pointer',fontFamily:'inherit',padding:0}}>{supaBusy?'Prüft…':'Aktualisieren'}</button>}
+                </div>
+                ); })()}
                 {/* Fixkosten */}
                 <div style={{...SC,marginBottom:14}}>
                   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,gap:10,flexWrap:'wrap'}}>
