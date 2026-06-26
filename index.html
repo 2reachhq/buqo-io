@@ -154,6 +154,21 @@ const evalAmount = s => {
 const uid  = () => Math.random().toString(36).slice(2,9);
 const newItem = (name='') => ({id:uid(), name, amount:0, recurring:false, note:'', filePath:null, fileName:'', fileData:null});
 const CATS = ['Allgemein','Miete','Nebenkosten','Versicherung','Material','Personal','Steuern','Software','Marketing','Reise','Bewirtung','Bank & Gebühren','Sonstiges'];
+// Kategorie aus Name/Verwendungszweck automatisch erraten (lokal, keyword-basiert)
+const CAT_RULES = [
+  ['Miete', /miete|kaltmiete|warmmiete|pacht|nettomiete/i],
+  ['Nebenkosten', /nebenkost|\bstrom\b|\bgas\b|wasser|heizung|stadtwerke|grundsteuer|m(ü|ue)ll|abfall|abschlag|hausgeld|hausverwalt/i],
+  ['Versicherung', /versicher|allianz|\bhuk\b|\baxa\b|\bergo\b|haftpflicht|rechtsschutz|gothaer|signal iduna|debeka|provinzial|barmenia/i],
+  ['Steuern', /finanzamt|umsatzsteuer|einkommensteuer|gewerbesteuer|vorauszahlung|elster|\bsteuer/i],
+  ['Personal', /\bgehalt\b|\blohn\b|personal|sozialvers|krankenkasse|\baok\b|\btk\b|barmer|knappschaft|berufsgenoss/i],
+  ['Software', /software|adobe|microsoft|office\s?365|\bgoogle\b|\bapple\b|icloud|\babo\b|subscription|\bsaas\b|lizenz|notion|figma|github|gitlab|\baws\b|amazon web|hosting|domain|\bserver\b|openai|anthropic|spotify|netflix|dropbox|slack|\bzoom\b|vercel|jetbrains|canva/i],
+  ['Marketing', /marketing|werbung|\bads\b|facebook|\bmeta\b|instagram|linkedin|tiktok|flyer|\bdruck|kampagne|\bseo\b|google ads/i],
+  ['Reise', /\bbahn\b|\bdb\b|deutsche bahn|\bflug\b|lufthansa|eurowings|ryanair|\bhotel\b|airbnb|booking|\btaxi\b|\buber\b|tankstelle|\baral\b|\bshell\b|\besso\b|\bjet\b|\btotal\b|benzin|sprit|diesel|parkhaus|parken|\bmaut\b|\bbolt\b/i],
+  ['Bewirtung', /restaurant|caf(é|e)|bewirtung|lieferando|\bwolt\b|mcdonald|burger|d(ö|oe)ner|\bedeka\b|\brewe\b|\baldi\b|\blidl\b|kaufland|\bnetto\b|\bpenny\b|getr(ä|ae)nke|b(ä|ae)cker|\bmetro\b|trinkgut|\bbar\b|imbiss|pizz/i],
+  ['Bank & Gebühren', /geb(ü|ue)hr|sparkasse|volksbank|paypal|kontof(ü|ue)hr|\bzinsen\b|kreditkarte|\bn26\b|\bdkb\b|\bstripe\b|comdirect|\bing\b|\bbank\b|\bsumup\b/i],
+  ['Material', /material|baumarkt|\bobi\b|hornbach|bauhaus|\btoom\b|werkzeug|baustoff|\bikea\b|conrad|\breichelt\b/i],
+];
+const guessCategory = (text)=>{ const t=String(text||''); if(!t.trim()) return ''; for(const [cat,re] of CAT_RULES){ if(re.test(t)) return cat; } return ''; };
 const DEF_INV_BODY = 'vielen Dank für Ihr Vertrauen. Für die erbrachten Leistungen erlaube ich mir, Ihnen folgende Positionen in Rechnung zu stellen:';
 const DEF_INV_HEADER = 'Sehr geehrte Damen und Herren,\n\n'+DEF_INV_BODY;
 const greetingFor = (cust)=>{ let last=(cust&&cust.lastName)?String(cust.lastName).trim():''; if(!last){ const nm=String((cust&&cust.name)||'').trim(); const isCompany=/\b(gmbh|ag|ug|kg|ohg|gbr|mbh|e\.?k\.?|e\.?v\.?|co\.?|ltd|inc|se)\b/i.test(nm); last=(nm&&!isCompany)?nm.split(/\s+/).pop():''; } if(cust&&cust.anrede==='herr'&&last) return 'Sehr geehrter Herr '+last+','; if(cust&&cust.anrede==='frau'&&last) return 'Sehr geehrte Frau '+last+','; return 'Sehr geehrte Damen und Herren,'; };
@@ -1639,7 +1654,7 @@ function App({session}) {
         name:String(p.b||p.beschreibung||'Posten').slice(0,70),
         amount:Math.abs(parseFloat(String(p.a!=null?p.a:p.betrag).replace(',','.'))||0),
         kind:((p.k||p.art)==='e'||(p.k||p.art)==='einnahme'?'ein':'aus'),
-        belegnr, datum, category:String(p.c||''),
+        belegnr, datum, category:(String(p.c||'')||guessCategory(String(p.b||'')+' '+String(p.z||p.verwendungszweck||''))),
         note:String(p.z||p.verwendungszweck||''),
         netto:(p.nt!=null&&p.nt!=='')?Math.abs(parseFloat(String(p.nt).replace(',','.'))||0):'',
         mwst:(p.mw!=null&&p.mw!=='')?String(p.mw).replace('%','').trim():'',
@@ -1746,7 +1761,7 @@ function App({session}) {
         if(!nd[belegY]) nd[belegY]={};
         if(!nd[belegY][belegM]) nd[belegY][belegM]=emptyMonth();
         const noteParts=[]; if(belegRes.belegnr)noteParts.push('Nr. '+belegRes.belegnr); if(belegRes.datum)noteParts.push(belegRes.datum); if(num(belegRes.netto))noteParts.push('Netto '+fmt(num(belegRes.netto))); if(num(belegRes.mwst))noteParts.push('MwSt '+num(belegRes.mwst)+'%');
-        const item={ ...newItem(belegRes.name), amount:num(belegRes.amount), note:noteParts.join(' · '), datum:belegRes.datum||'', belegnr:belegRes.belegnr||'', netto:num(belegRes.netto), mwst:num(belegRes.mwst), filePath:path, fileName:meta.name };
+        const item={ ...newItem(belegRes.name), amount:num(belegRes.amount), category:(belegRes.category||guessCategory(String(belegRes.name||'')+' '+noteParts.join(' '))), note:noteParts.join(' · '), datum:belegRes.datum||'', belegnr:belegRes.belegnr||'', netto:num(belegRes.netto), mwst:num(belegRes.mwst), filePath:path, fileName:meta.name };
         setListAt(nd[belegY][belegM], loc, [...getListAt(nd[belegY][belegM],loc), item]);
         return nd;
       });
@@ -2083,6 +2098,21 @@ function App({session}) {
   const botReply = (raw)=>{
     const q=String(raw||'').toLowerCase().trim();
     const go=(t,label)=>{ setTab(t); return 'Öffne '+label+'.'; };
+    // Import: Buchungen/Entwürfe auswählen ("wähle alle an, die mit X anfangen")
+    if(/\b(w(ä|ae)hl|markier|select|ausw(ä|ae)hl|anw(ä|ae)hl)/i.test(raw) && (tab==='import' || /\bimport\b|buchung|posten|beleg|entw(ü|ue)rf/i.test(q))){
+      const list=data.drafts||[];
+      if(/\b(keine|aufheben|abw(ä|ae)hl|zur(ü|ue)cksetzen|nichts)\b/i.test(q)){ setDraftSel([]); setTab('import'); return 'Auswahl aufgehoben.'; }
+      let term=null, mode='contains';
+      let m=raw.match(/mit\s+["„]?([^"“]+?)["“]?\s+(?:anfangen|beginnen|starten)/i); if(m){ term=m[1].trim(); mode='prefix'; }
+      if(!term){ m=raw.match(/["„]([^"“]+)["“]/); if(m) term=m[1].trim(); }
+      if(!term){ m=raw.match(/(?:enthalten|enthält|beinhalten|mit|nach)\s+([\wäöüß.&\-]{2,})/i); if(m) term=m[1].trim(); }
+      setTab('import');
+      if(!term){ const ids=list.map(d=>d.id); setDraftSel(ids); return ids.length+' Buchung'+(ids.length!==1?'en':'')+' ausgewählt.'; }
+      const tl=term.toLowerCase();
+      const ids=list.filter(d=>{ const n=String(d.name||'').toLowerCase(); const nt=String(d.note||'').toLowerCase(); return mode==='prefix'? n.startsWith(tl) : (n.includes(tl)||nt.includes(tl)); }).map(d=>d.id);
+      setDraftSel(ids);
+      return ids.length? (ids.length+' Buchung'+(ids.length!==1?'en':'')+' '+(mode==='prefix'?'die mit':'mit')+' „'+term+'" ausgewählt – du kannst sie jetzt zuordnen oder verwerfen.') : ('Keine Buchung mit „'+term+'" gefunden.');
+    }
     // Neue Objekte anlegen
     const nk=raw.match(/neue[rn]?\s+kunden?\s+(.+)/i);
     if(nk){ const name=nk[1].trim(); const parts=name.split(/\s+/); setCustEdit({id:uid(),anrede:'',name,firstName:parts[0]||'',lastName:parts.slice(1).join(' '),company:'',address:'',phone:'',email:'',website:'',custNo:nextCustNo(invDomain),domain:invDomain}); setCustTab('details'); setTab('kunden'); return 'Ich habe „'+name+'" als neuen Kunden vorbereitet (Nr. '+nextCustNo(invDomain)+'). Ergänze die Details und speichere.'; }
@@ -2104,7 +2134,7 @@ function App({session}) {
     if(/steuer/.test(q)) return go('steuer','die Steuer-Übersicht');
     if(/einstellung|profil|firmendaten|logo/.test(q)) return go('settings','Einstellungen');
     if(/konto|konten|home|start|übersicht/.test(q)) return go('quellen','die Konten');
-    return 'Ich kann lokal in der App: zu Bereichen navigieren (Konten, Import, Rechnungen, Kunden, Analyse, Belege, Steuer, Einstellungen), Kunden & Rechnungen anlegen und Zahlen auswerten – z. B. „Ergebnis Juni", „Bester Monat", „Jahresergebnis", „Neuer Kunde Max Mustermann", „Neue Rechnung". Deine Daten verlassen die App dabei nicht.';
+    return 'Ich kann lokal in der App: zu Bereichen navigieren (Konten, Import, Rechnungen, Kunden, Analyse, Belege, Steuer, Einstellungen), Kunden & Rechnungen anlegen, Zahlen auswerten („Ergebnis Juni", „Bester Monat", „Jahresergebnis") und beim Import Buchungen auswählen (z. B. „Wähle alle Buchungen an, die mit Adobe anfangen"). Deine Daten verlassen die App dabei nicht.';
   };
   const botSend = (text)=>{ const q=(text!=null?text:botInput).trim(); if(!q) return; setBotInput(''); const reply=botReply(q); setBotMsgs(m=>[...m,{role:'user',content:q},{role:'assistant',content:reply}]); };
   const analyzeTax = async () => {
