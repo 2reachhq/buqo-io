@@ -172,6 +172,26 @@ const guessCategory = (text)=>{ const t=String(text||''); if(!t.trim()) return '
 // Standard-Modellpreise (€ je 1 Mio. Tokens) – im Kosten-Dashboard anpassbar
 const AI_PRICE_DEFAULTS = { 'claude-haiku-4-5':{in:1, out:5}, 'claude-sonnet-4-6':{in:3, out:15}, 'claude-opus-4-8':{in:15, out:75} };
 const AI_MODEL_LABEL = { 'claude-haiku-4-5':'Claude Haiku 4.5', 'claude-sonnet-4-6':'Claude Sonnet 4.6', 'claude-opus-4-8':'Claude Opus 4.8' };
+// Buchungskonten (SKR03, gängige Auswahl) – Vorschlag, vom Steuerberater zu prüfen
+const SKR03_ACCTS = [
+  {nr:'8400', name:'Erlöse 19% USt', kind:'ein'},
+  {nr:'8300', name:'Erlöse 7% USt', kind:'ein'},
+  {nr:'8100', name:'Erlöse aus Vermietung/Verpachtung', kind:'ein'},
+  {nr:'4210', name:'Miete / Raumkosten', kind:'aus'},
+  {nr:'4240', name:'Gas, Strom, Wasser', kind:'aus'},
+  {nr:'4360', name:'Versicherungen', kind:'aus'},
+  {nr:'4985', name:'Werkzeuge / Kleingeräte', kind:'aus'},
+  {nr:'4100', name:'Löhne und Gehälter', kind:'aus'},
+  {nr:'4320', name:'Steuern (z. B. Gewerbesteuer)', kind:'aus'},
+  {nr:'4980', name:'Software / sonstiger Betriebsbedarf', kind:'aus'},
+  {nr:'4600', name:'Werbe-/Marketingkosten', kind:'aus'},
+  {nr:'4660', name:'Reisekosten', kind:'aus'},
+  {nr:'4650', name:'Bewirtungskosten', kind:'aus'},
+  {nr:'4970', name:'Bankgebühren / Geldverkehr', kind:'aus'},
+  {nr:'4900', name:'Sonstige betriebliche Aufwendungen', kind:'aus'},
+];
+const CAT_TO_SKR = { Miete:'4210', Nebenkosten:'4240', Versicherung:'4360', Material:'4985', Personal:'4100', Steuern:'4320', Software:'4980', Marketing:'4600', Reise:'4660', Bewirtung:'4650', 'Bank & Gebühren':'4970', Sonstiges:'4900', Allgemein:'4900' };
+const suggestSKR = (cat, kind)=> kind==='ein' ? (cat==='Miete'?'8100':'8400') : (CAT_TO_SKR[cat]||'4900');
 const DEF_INV_BODY = 'vielen Dank für Ihr Vertrauen. Für die erbrachten Leistungen erlaube ich mir, Ihnen folgende Positionen in Rechnung zu stellen:';
 const DEF_INV_HEADER = 'Sehr geehrte Damen und Herren,\n\n'+DEF_INV_BODY;
 const greetingFor = (cust)=>{ let last=(cust&&cust.lastName)?String(cust.lastName).trim():''; if(!last){ const nm=String((cust&&cust.name)||'').trim(); const isCompany=/\b(gmbh|ag|ug|kg|ohg|gbr|mbh|e\.?k\.?|e\.?v\.?|co\.?|ltd|inc|se)\b/i.test(nm); last=(nm&&!isCompany)?nm.split(/\s+/).pop():''; } if(cust&&cust.anrede==='herr'&&last) return 'Sehr geehrter Herr '+last+','; if(cust&&cust.anrede==='frau'&&last) return 'Sehr geehrte Frau '+last+','; return 'Sehr geehrte Damen und Herren,'; };
@@ -480,6 +500,12 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
   const dcell=(label,node,req)=>(<label style={{display:'flex',flexDirection:'column',gap:3}}><span style={{fontSize:10,color:C.mut,fontWeight:600}}>{label}{req&&<span style={{color:C.red}}> *</span>}</span>{node}</label>);
   const isoDate=(d)=>{ if(!d) return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(d)) return d; const m=String(d).match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})$/); if(m){ let dd=m[1],mm=m[2],yy=m[3]; if(yy.length===2) yy='20'+yy; return yy+'-'+mm.padStart(2,'0')+'-'+dd.padStart(2,'0'); } return ''; };
   const cellInput=(w)=>({background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'8px 9px',fontSize:13,outline:'none',fontFamily:'inherit',width:w,textAlign:'left',flexShrink:0});
+  // Brutto/Netto/MwSt automatisch ineinander umrechnen
+  const _r2 = v => Math.round((v||0)*100)/100;
+  const _vatRate = () => num(item.mwst!=null&&item.mwst!==''?item.mwst:19);
+  const onBrutto = (v)=>{ const g=num(v); const r=_vatRate(); onUpdate(item.id,'__merge__',{amount:g, netto:r>0?_r2(g/(1+r/100)):g}); };
+  const onNetto  = (v)=>{ const net=num(v); const r=_vatRate(); onUpdate(item.id,'__merge__',{netto:(v===''?'':net), amount:_r2(net*(1+r/100))}); };
+  const onMwst   = (v)=>{ const r=num(v); const g=num(item.amount); onUpdate(item.id,'__merge__',{mwst:v, netto:r>0?_r2(g/(1+r/100)):g}); };
 
   const openMenu=(e)=>{
     const r=e.currentTarget.getBoundingClientRect();
@@ -565,7 +591,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
             <input value={item.name} placeholder="Name…" onChange={e=>onUpdate(item.id,'name',e.target.value)} style={{...dInput('100%'),fontSize:15,padding:'10px 12px',marginBottom:16}} />
 
             {fLbl('Betrag (Brutto)',!isPrivatItem)}
-            <CalcField value={item.amount} onCommit={v=>onUpdate(item.id,'amount',v)} style={{...dInput('100%'),fontSize:18,fontWeight:700,padding:'10px 12px',...NUM,marginBottom:16}} />
+            <CalcField value={item.amount} onCommit={v=>onBrutto(v)} style={{...dInput('100%'),fontSize:18,fontWeight:700,padding:'10px 12px',...NUM,marginBottom:16}} />
 
             {fLbl('Kategorie',!isPrivatItem)}
             <select value={item.category||''} onChange={e=>onUpdate(item.id,'category',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',marginBottom:16,cursor:'pointer'}}>
@@ -573,11 +599,17 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
               {CATS.map(cat=><option key={cat} value={cat}>{cat}</option>)}
             </select>
 
+            {!isPrivatItem && (()=>{ const sug=suggestSKR(item.category||'', kind); const cur=item.skr||sug; const isSug=!item.skr; const opts=SKR03_ACCTS.filter(a=>a.kind===(kind==='ein'?'ein':'aus')); return (<div style={{marginBottom:16}}>
+              <div style={{display:'flex',alignItems:'center',gap:7,fontSize:11,fontWeight:600,color:C.sub,marginBottom:6,letterSpacing:'0.02em'}}>Buchungskonto {isSug && <span style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:10,fontWeight:700,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 7px'}}><Ic p={P.spark} sz={10} col={C.pri}/> KI-Vorschlag</span>}</div>
+              <select value={cur} onChange={e=>onUpdate(item.id,'skr',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',cursor:'pointer'}}>{opts.map(a=><option key={a.nr} value={a.nr}>{a.nr} · {a.name}</option>)}</select>
+              <div style={{fontSize:10.5,color:C.mut,marginTop:6,lineHeight:1.5}}>Vorschlag nach SKR03 anhand der Kategorie – bitte vom Steuerberater prüfen lassen.</div>
+            </div>); })()}
+
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
               {dcell(dateLabel, <DateField value={item.datum} onChange={v=>onUpdate(item.id,'datum',v)} accent={acc} style={{...dInput('100%'),padding:'10px 12px'}} />, !isPrivatItem)}
               {dcell('Beleg-Nr', <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={{...dInput('100%'),padding:'10px 12px'}} />, !isPrivatItem)}
-              {dcell('Netto €', <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="Netto" style={{...dInput('100%'),padding:'10px 12px',...NUM}} />)}
-              {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',cursor:'pointer'}}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>)}
+              {dcell('Netto €', <input value={item.netto||''} onChange={e=>onNetto(e.target.value)} inputMode="decimal" placeholder="Netto" style={{...dInput('100%'),padding:'10px 12px',...NUM}} />)}
+              {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onMwst(e.target.value)} style={{...dInput('100%'),padding:'10px 12px',cursor:'pointer'}}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>)}
             </div>
 
             {fLbl('Beleg')}
@@ -645,8 +677,8 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
             {dcell('Datum', <DateField value={item.datum} onChange={v=>onUpdate(item.id,'datum',v)} accent={acc} style={{...dInput('100%'),padding:'6px 8px'}} />)}
             {dcell('Beleg-Nr', <input value={item.belegnr||''} onChange={e=>onUpdate(item.id,'belegnr',e.target.value)} placeholder="Beleg-Nr" style={dInput('100%')} />)}
-            {dcell('Netto €', <input value={item.netto||''} onChange={e=>onUpdate(item.id,'netto',e.target.value)} inputMode="decimal" placeholder="Netto" style={{...dInput('100%'),...NUM}} />)}
-            {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onUpdate(item.id,'mwst',e.target.value)} style={dInput('100%')}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>)}
+            {dcell('Netto €', <input value={item.netto||''} onChange={e=>onNetto(e.target.value)} inputMode="decimal" placeholder="Netto" style={{...dInput('100%'),...NUM}} />)}
+            {dcell('MwSt', <select value={(item.mwst!=null&&item.mwst!=='')?String(item.mwst):'19'} onChange={e=>onMwst(e.target.value)} style={dInput('100%')}><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select>)}
           </div>
           <button onClick={()=>setDlg(null)} style={{...menuBtn,justifyContent:'center',background:C.priL,color:C.pri,fontWeight:600,marginTop:14}}>Fertig</button>
         </Sheet>
@@ -3130,12 +3162,12 @@ function App({session}) {
                         <div>{reqLbl('Name')}<input value={d.name||''} onChange={e=>updateDraft(d.id,{name:e.target.value})} placeholder="Name…" style={dInp}/></div>
                         <div><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.mut}}>(optional)</span></div><CustomerSelect customers={customersFor(dDom)} value={d.customerId} onPick={c=>{ if(c) updateDraft(d.id,{customerId:c.id,custName:c.name||''}); else updateDraft(d.id,{customerId:'',custName:''}); }} /></div>
                         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-                          <div style={{flex:1,minWidth:120}}>{reqLbl('Betrag € (Brutto)')}<input value={d.amount||''} onChange={e=>updateDraft(d.id,{amount:e.target.value})} inputMode="decimal" style={{...dInp,...NUM}}/></div>
+                          <div style={{flex:1,minWidth:120}}>{reqLbl('Betrag € (Brutto)')}<input value={d.amount||''} onChange={e=>{ const v=e.target.value; const hasR=(d.mwst!=null&&d.mwst!==''); const rate=num(d.mwst); updateDraft(d.id, hasR?{amount:v, netto:String(Math.round(num(v)/(1+rate/100)*100)/100)}:{amount:v}); }} inputMode="decimal" style={{...dInp,...NUM}}/></div>
                           <div style={{flex:1,minWidth:160}}>{reqLbl('Art')}<div style={{display:'flex',alignItems:'center',gap:8,...dInp,cursor:'default'}}><span style={{width:9,height:9,borderRadius:'50%',background:d.kind==='ein'?'#8FD9BD':'#E8A39E',display:'inline-block'}}/><span style={{fontWeight:600,color:d.kind==='ein'?'#8FD9BD':'#E8A39E'}}>{d.kind==='ein'?'Einnahme':'Ausgabe'}</span><span style={{marginLeft:'auto',fontSize:11,color:C.mut}}>autom. erkannt</span></div></div>
                         </div>
                         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
-                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Netto €</div><input value={d.netto||''} onChange={e=>updateDraft(d.id,{netto:e.target.value})} inputMode="decimal" placeholder="Netto" style={{...dInp,...NUM}}/></div>
-                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>MwSt</div><select value={(d.mwst!=null&&d.mwst!=='')?String(d.mwst):''} onChange={e=>updateDraft(d.id,{mwst:e.target.value})} style={{...dInp,cursor:'pointer'}}><option value="">—</option><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select></div>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Netto €</div><input value={d.netto||''} onChange={e=>{ const v=e.target.value; const hasR=(d.mwst!=null&&d.mwst!==''); const rate=num(d.mwst); updateDraft(d.id, hasR?{netto:v, amount:String(Math.round(num(v)*(1+rate/100)*100)/100)}:{netto:v}); }} inputMode="decimal" placeholder="Netto" style={{...dInp,...NUM}}/></div>
+                          <div style={{flex:1,minWidth:120}}><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>MwSt</div><select value={(d.mwst!=null&&d.mwst!=='')?String(d.mwst):''} onChange={e=>{ const v=e.target.value; const rate=num(v); const g=num(d.amount); updateDraft(d.id, v!==''?{mwst:v, netto:String(Math.round(g/(1+rate/100)*100)/100)}:{mwst:v}); }} style={{...dInp,cursor:'pointer'}}><option value="">—</option><option value="19">19%</option><option value="7">7%</option><option value="0">0%</option></select></div>
                         </div>
                         <div><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Verwendungszweck / Notizen <span style={{color:C.mut}}>(optional)</span></div><textarea value={d.note||''} onChange={e=>updateDraft(d.id,{note:e.target.value})} rows={2} placeholder="Verwendungszweck…" style={{...dInp,resize:'vertical'}}/></div>
                         <div>{reqLbl('Kategorie')}<select value={d.category||''} onChange={e=>updateDraft(d.id,{category:e.target.value})} style={{...dInp,cursor:'pointer'}}><option value="">— wählen —</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
