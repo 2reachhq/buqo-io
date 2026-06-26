@@ -449,7 +449,7 @@ function TargetPicker({title, moveTargets, curY, curM, confirmLabel, onClose, on
 }
 
 /* ══ Item row (Name + Betrag + kompaktes ⋮-Dropdown) ══ */
-function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, onUpdate, onDelete, onApplyAll, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, askChoice, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
+function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, onUpdate, onDelete, onApplyAll, onTaxTip, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, askChoice, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
   const acc = accent||C.pri;
   const dateLabel = kind==='aus' ? 'Abbuchungsdatum' : kind==='ein' ? 'Eingangsdatum' : 'Datum';
   // Löschen anfragen – bei wiederkehrenden Posten: Monat vs. alle Monate
@@ -588,13 +588,13 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
             )}
 
             {fLbl('Name',!isPrivatItem)}
-            <input value={item.name} placeholder="Name…" onChange={e=>onUpdate(item.id,'name',e.target.value)} style={{...dInput('100%'),fontSize:15,padding:'10px 12px',marginBottom:16}} />
+            <input value={item.name} placeholder="Name…" onChange={e=>{ const v=e.target.value; if(!String(item.category||'').trim()||item.catAuto){ const g=guessCategory(v+' '+(item.note||'')); onUpdate(item.id,'__merge__', g?{name:v,category:g,catAuto:true}:{name:v}); } else onUpdate(item.id,'name',v); }} style={{...dInput('100%'),fontSize:15,padding:'10px 12px',marginBottom:16}} />
 
             {fLbl('Betrag (Brutto)',!isPrivatItem)}
             <CalcField value={item.amount} onCommit={v=>onBrutto(v)} style={{...dInput('100%'),fontSize:18,fontWeight:700,padding:'10px 12px',...NUM,marginBottom:16}} />
 
-            {fLbl('Kategorie',!isPrivatItem)}
-            <select value={item.category||''} onChange={e=>onUpdate(item.id,'category',e.target.value)} style={{...dInput('100%'),padding:'10px 12px',marginBottom:16,cursor:'pointer'}}>
+            <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6,letterSpacing:'0.02em',display:'flex',alignItems:'center',gap:7}}>Kategorie{!isPrivatItem&&<span style={{color:C.red}}> *</span>}{item.catAuto&&item.category&&<span style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:10,fontWeight:700,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 7px'}}><Ic p={P.spark} sz={10} col={C.pri}/> KI-Vorschlag</span>}</div>
+            <select value={item.category||''} onChange={e=>onUpdate(item.id,'__merge__',{category:e.target.value,catAuto:false})} style={{...dInput('100%'),padding:'10px 12px',marginBottom:16,cursor:'pointer'}}>
               <option value="">— wählen —</option>
               {CATS.map(cat=><option key={cat} value={cat}>{cat}</option>)}
             </select>
@@ -625,7 +625,28 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
             )}
 
             {fLbl('Notiz')}
-            <textarea value={item.note||''} onChange={e=>onUpdate(item.id,'note',e.target.value)} placeholder="Notiz…" rows={3} style={{...dInput('100%'),padding:'10px 12px',resize:'vertical',marginBottom:16}} />
+            <textarea value={item.note||''} onChange={e=>{ const v=e.target.value; if(!String(item.category||'').trim()||item.catAuto){ const g=guessCategory((item.name||'')+' '+v); onUpdate(item.id,'__merge__', g?{note:v,category:g,catAuto:true}:{note:v}); } else onUpdate(item.id,'note',v); }} placeholder="Notiz / Verwendungszweck…" rows={3} style={{...dInput('100%'),padding:'10px 12px',resize:'vertical',marginBottom:16}} />
+
+            {kind==='aus' && !isPrivatItem && num(item.amount)>0 && onTaxTip && (
+              <div style={{marginBottom:16}}>
+                {!item.taxTip && (
+                  <button onClick={()=>onTaxTip(item)} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:hexA(C.pri,0.12),border:'1px solid '+hexA(C.pri,0.25),borderRadius:10,padding:'11px',fontSize:13.5,fontWeight:600,color:C.pri,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.spark} sz={15} col={C.pri}/> Wie setze ich das ab?</button>
+                )}
+                {item.taxTip==='…' && (
+                  <div style={{display:'flex',alignItems:'center',gap:8,padding:'11px 13px',background:hexA(C.pri,0.08),borderRadius:10,fontSize:13,color:C.sub,fontFamily:'inherit'}}><Ic p={P.spark} sz={14} col={C.pri}/> Steuer-Tipp wird erstellt…</div>
+                )}
+                {item.taxTip && item.taxTip!=='…' && (
+                  <div style={{background:hexA(C.pri,0.07),border:'1px solid '+hexA(C.pri,0.18),borderRadius:10,padding:'12px 14px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:7,fontSize:11,fontWeight:700,color:C.pri,letterSpacing:'0.02em'}}><Ic p={P.spark} sz={12} col={C.pri}/> STEUER-HINWEIS</div>
+                    <div style={{fontSize:13.5,lineHeight:1.5,color:C.txt,whiteSpace:'pre-wrap'}}>{item.taxTip}</div>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginTop:9}}>
+                      <span style={{fontSize:10.5,color:C.sub,lineHeight:1.4}}>Orientierung, kein Ersatz für den Steuerberater.</span>
+                      <button onClick={()=>onTaxTip(item)} style={{flexShrink:0,background:'none',border:'none',color:C.sub,fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit',textDecoration:'underline'}}>neu</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
 
             <button onClick={()=>requestDelete(()=>setDrawer(false))} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.redL,border:'none',borderRadius:10,padding:'11px',fontSize:14,fontWeight:600,color:C.red,cursor:'pointer',fontFamily:'inherit',marginTop:6}}><Ic p={P.trash} sz={15} col={C.red}/> Buchung löschen</button>
@@ -767,13 +788,14 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
 }
 
 /* ══ Sortier-/Auswahl-Liste (Drag & Drop + Mehrfachauswahl) ══ */
-function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, updFn, delFn, recurFn, rangeFn, editFn, applyFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, askChoice, curY, curM, hideRecur}) {
+function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, updFn, delFn, recurFn, rangeFn, editFn, applyFn, taxTipFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, askChoice, curY, curM, hideRecur}) {
   return (
     <div style={{display:'flex',flexDirection:'column',gap:10}}>
         {items.map((item,idx)=>(
           <ItemRow key={item.id} item={item} accent={accent} kind={kind} onExtract={onExtract} custList={custList} recurInvFn={recurInvFn} onMakeInvoice={onMakeInvoice}
             onUpdate={updFn} onDelete={delFn}
             onApplyAll={applyFn?((it)=>applyFn(it)):null}
+            onTaxTip={taxTipFn}
             folderPath={folderPath}
             onUploadFile={onUploadFile} onOpenFile={onOpenFile} onDeleteFile={onDeleteFile}
             onToggleRecurring={()=>recurFn&&recurFn(item)}
@@ -1667,6 +1689,15 @@ function App({session}) {
   /* ── KI-Kosten: Token-Verbrauch je Monat & Modell mitschreiben ── */
   const logAiUsage = (model, usage)=>{ try{ if(!usage) return; const inT=usage.input_tokens||usage.inputTokens||0, outT=usage.output_tokens||usage.outputTokens||0; if(!inT&&!outT) return; const ym=new Date().toISOString().slice(0,7); const md2=String(model||'unbekannt'); setData(prev=>{ const au={...(prev.aiUsage||{})}; const m={...(au[ym]||{})}; const cur=m[md2]||{in:0,out:0,calls:0}; m[md2]={in:cur.in+inT, out:cur.out+outT, calls:cur.calls+1}; au[ym]=m; return {...prev, aiUsage:au}; }); }catch(e){} };
   const aiInvoke = async (opts)=>{ const r = await sb.functions.invoke('ai', opts); try{ const u = r && r.data && (r.data.usage || (r.data.message&&r.data.message.usage)); if(u) logAiUsage(opts&&opts.body&&opts.body.model, u); }catch(e){} return r; };
+  // Kurzer Steuer-Hinweis zu einer Ausgabe (wie ein Steuerberater, NRW/DE)
+  const fetchTaxTip = async (item, dom)=>{
+    const bereich = dom==='immo' ? 'private Immobilien-Vermietung (Vermietung & Verpachtung)' : 'Unternehmen/Gewerbe';
+    const sys = "Du bist ein deutscher Steuerberater-Assistent (Standort NRW). Gib in 1–3 KURZEN, konkreten Sätzen, wie diese Ausgabe steuerlich behandelt/abgesetzt wird – nenne die passende Methode (z. B. sofort als Betriebsausgabe/Werbungskosten abziehbar, GWG bis 800 € netto sofort, Abschreibung/AfA über die Nutzungsdauer, anteilig bei privater Mitnutzung, Vorsteuerabzug bei Vorsteuerabzugsberechtigung). Klartext, KEIN Markdown, keine Aufzählungszeichen. Schließe mit einem kurzen Satz, dass der Steuerberater final entscheidet.";
+    const usr = "Ausgabe: „"+(item.name||'—')+"\", Bruttobetrag "+fmt(num(item.amount))+(num(item.netto)?(", netto "+fmt(num(item.netto))):'')+", Kategorie "+(item.category||'unklar')+", Bereich: "+bereich+". Wie kann ich das steuerlich absetzen?";
+    const {data:resp,error}=await aiInvoke({body:{model:'claude-haiku-4-5',max_tokens:350,system:sys,messages:[{role:'user',content:usr}]}});
+    if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
+    return (resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'';
+  };
   /* ── Supabase-Speichernutzung (Belege-Bucket) live ermitteln ── */
   const calcSupaStorage = async ()=>{ setSupaBusy(true); try{ let bytes=0, files=0; const walk = async (prefix)=>{ const {data,error}=await sb.storage.from('belege').list(prefix,{limit:1000,sortBy:{column:'name',order:'asc'}}); if(error||!data) return; for(const it of data){ const path=prefix?prefix+'/'+it.name:it.name; if(it.id===null && it.metadata==null){ await walk(path); } else { bytes += (it.metadata&&(it.metadata.size||it.metadata.contentLength))||0; files++; } } }; await walk(''); setSupaStore({bytes,files,ts:new Date().toISOString()}); }catch(e){ setToast('Speicher konnte nicht gelesen werden: '+(e.message||e)); } setSupaBusy(false); };
 
@@ -2475,6 +2506,7 @@ function App({session}) {
         )}
         <ItemList items={shown} srcKey={srcKey} accent={secAccent} kind={kindEff} onExtract={extractToItem} custList={customers} recurInvFn={recurInvoicesFor} onMakeInvoice={(it)=>makeRecurInvoice(it,(folderPath&&folderPath[0]==='Immobilien')?'immo':'unter')}
           updFn={updFn} delFn={delFn} recurFn={recurFn} rangeFn={rangeFn} editFn={editFn} applyFn={applyFn}
+          taxTipFn={async(it)=>{ try{ updFn(it.id,'taxTip','…'); const dom=(folderPath&&folderPath[0]==='Immobilien')?'immo':'unter'; const tip=await fetchTaxTip(it,dom); updFn(it.id,'taxTip',tip||'(keine Antwort)'); }catch(e){ updFn(it.id,'taxTip',''); setToast('Steuer-Tipp fehlgeschlagen: '+(e.message||e)); } }}
           folderPath={folderPath}
           moveTargets={srcKey?moveTargets:null} moveItemFn={srcKey?moveItem:null}
           moveFn={moveFn}
