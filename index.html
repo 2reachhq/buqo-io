@@ -274,6 +274,8 @@ const P = {
   house: 'M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z M9 22V12h6v10',
   brief: 'M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2m-8-3a2 2 0 00-2 2h4a2 2 0 00-2-2z',
   receipt: 'M5 2h14v20l-3-2-3 2-3-2-3 2z M8 7h8 M8 11h8 M8 15h5',
+  copy: 'M9 9h10a2 2 0 012 2v10a2 2 0 01-2 2H9a2 2 0 01-2-2V11a2 2 0 012-2z M5 15a2 2 0 01-2-2V3a2 2 0 012-2h10a2 2 0 012 2',
+  lock: 'M5 11h14v10H5z M8 11V7a4 4 0 018 0v4',
   prson: 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2 M12 11a4 4 0 100-8 4 4 0 000 8z',
   cal:   'M8 2v4 M16 2v4 M3 10h18 M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z',
   doc:   'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8',
@@ -1050,6 +1052,8 @@ function App({session}) {
   const [recInvEdit,setRecInvEdit]= useState(null);  // Editor wiederkehrende Rechnung
   const [yrView,setYrView]= useState('monat');       // Jahres- vs Monatsübersicht (Analytics, Standard=Monat)
   const [invPreview,setInvPreview]= useState(false); // große Rechnungsvorschau (Popup)
+  const [invView,setInvView]= useState(null);        // gestellte Rechnung als PDF ansehen (read-only)
+  const [invCtx,setInvCtx]= useState(null);          // Rechts-Klick-Menü auf Rechnung {x,y,inv}
   const importDragRef = useRef(null);                // Import: Drag&Drop zwischen Ein/Aus
   const [taxOpen,setTaxOpen]= useState({});          // ausklappbare Steuer-Hinweise
   const [advOpen,setAdvOpen]= useState(true);        // Steuerberater-Bereich ein-/ausklappen
@@ -1830,6 +1834,13 @@ function App({session}) {
   const invHeader = (inv)=>{ if(inv.headerText!=null) return inv.headerText; const co=companyFor(inv.domain||'unter'); if(co&&co.invHeaderDefault!=null&&co.invHeaderDefault!=='') return co.invHeaderDefault; return greetingFor(invCustomer(inv))+'\n\n'+DEF_INV_BODY; };
   const invFooter = (inv)=> inv.footerText!=null ? inv.footerText : defaultFooter(companyFor(inv.domain||'unter'));
   const openInvoice = (inv)=>{ let v={...inv}; if(v.customerId && !v.custName){ const c=customers.find(x=>x.id===v.customerId); if(c){ v.custName=c.name||''; v.custAddress=c.address||''; v.custEmail=c.email||''; v.saveCust=false; } } if(v.account==null) v.account='unter'; setInvEdit(v); };
+  // Zahlungsstatus einer gestellten Rechnung umschalten
+  const setInvPaid = (id, paid)=> setData(prev=>({...prev, invoices:(prev.invoices||[]).map(iv=>iv.id===id?{...iv, paid, paidDate: paid?(iv.paidDate||new Date().toISOString().slice(0,10)):''}:iv)}));
+  // Gestellte Rechnung löschen (inkl. zugehöriger Buchung in allen Monaten)
+  const delInvoice = (inv)=>{ setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); nd.invoices=(nd.invoices||[]).filter(iv=>iv.id!==inv.id); Object.keys(nd).forEach(y=>{ if(!/^\d+$/.test(y))return; Object.keys(nd[y]||{}).forEach(m=>{ const M=nd[y][m]; if(!M)return; const strip=arr=>(arr||[]).filter(it=>it.invId!==inv.id); if(M.unternehmen){M.unternehmen.clients=strip(M.unternehmen.clients);M.unternehmen.items=strip(M.unternehmen.items);} if(M.privat){M.privat.einnahmen=strip(M.privat.einnahmen);M.privat.items=strip(M.privat.items);} if(M.props)Object.keys(M.props).forEach(p=>{M.props[p].einnahmen=strip(M.props[p].einnahmen);M.props[p].expenses=strip(M.props[p].expenses);}); }); }); return nd; }); setToast('Rechnung '+inv.number+' gelöscht'); };
+  // Rechnung als Vorlage für eine NEUE Rechnung übernehmen (alle Daten kopieren, neue Nr.)
+  const invoiceTemplate = (inv)=>{ const v={...inv, id:uid(), number:nextInvNo(), date:new Date().toISOString().slice(0,10), due:'', sentDate:'', booked:false, paid:false, paidDate:'', pdfPath:null, fromRecurId:undefined, recurTemplateId:undefined, genYM:undefined, items:(inv.items||[]).map(it=>({...it})) }; if(v.customerId && !v.custName){ const c=customers.find(x=>x.id===v.customerId); if(c){ v.custName=c.name||''; v.custAddress=c.address||''; v.custEmail=c.email||''; } } v.saveCust=false; return v; };
+  const useInvoiceAsTemplate = (inv)=>{ setInvCtx(null); setInvView(null); setInvKind('einzel'); setInvDomain(inv.domain||'unter'); setInvEdit(invoiceTemplate(inv)); setToast('Vorlage übernommen – passe die neue Rechnung an.'); };
   const aiInvoice = async ()=>{ const t=invAiText.trim(); if(!t||invAiBusy) return; setInvAiBusy(true);
     try{
       const prompt="Erzeuge Rechnungspositionen aus dieser Beschreibung (Deutschland). Antworte AUSSCHLIESSLICH mit minifiziertem JSON: {\"p\":[{\"d\":\"Beschreibung\",\"q\":1,\"e\":100,\"m\":19}]} . d=Leistung, q=Menge, e=Einzelpreis netto (Punkt als Dezimaltrennzeichen), m=MwSt-% (19 oder 7). Kein Text drumherum. Beschreibung: "+t;
@@ -3349,7 +3360,7 @@ function App({session}) {
                             {limited && <><span style={{color:C.sub}}>Bereits bezahlt <b style={{...NUM,color:C.txt}}>{fmt(paidSum)}</b></span><span style={{color:C.sub}}>Noch offen <b style={{...NUM,color:C.txt}}>{fmt(openSum)}</b></span></>}
                           </div>
                           <div style={{display:'flex',flexDirection:'column',gap:6}}>{gen.slice().sort((a,b)=>String(b.sentDate||b.date).localeCompare(String(a.sentDate||a.date))).map(g=>(
-                            <div key={g.id} onClick={()=>{ setInvKind('einzel'); openInvoice(g); }} style={{display:'flex',alignItems:'center',gap:10,fontSize:12.5,background:C.surf3,borderRadius:9,padding:'8px 11px',cursor:'pointer'}}>
+                            <div key={g.id} onClick={()=>setInvView(g)} onContextMenu={e=>{e.preventDefault();setInvCtx({x:e.clientX,y:e.clientY,inv:g});}} style={{display:'flex',alignItems:'center',gap:10,fontSize:12.5,background:C.surf3,borderRadius:9,padding:'8px 11px',cursor:'pointer'}}>
                               <span style={{color:C.txt,fontWeight:600}}>Rechnung {g.number}</span>
                               <span style={{color:C.mut}}>{toISO(g.sentDate||g.date)||'—'}</span>
                               <span style={{marginLeft:'auto',display:'inline-flex',alignItems:'center',gap:5,fontSize:11,fontWeight:700,color:g.paid?C.grn:'#FFB37A',background:hexA(g.paid?C.grn:'#FFB37A',0.14),borderRadius:6,padding:'2px 8px'}}>{g.paid?'Bezahlt':'Offen'}</span>
@@ -3384,17 +3395,17 @@ function App({session}) {
                         {groups[key].slice().sort((a,b)=>String(b.sentDate||b.date).localeCompare(String(a.sentDate||a.date))).map(inv=>{
                           const c=customers.find(x=>x.id===inv.customerId); const name=(c&&c.name)||inv.custName||'—'; const total=inv.total!=null?inv.total:invTotals(inv.items).gross; const sent=inv.sentDate||inv.date;
                           return (
-                            <div key={inv.id} onClick={()=>openInvoice(inv)} style={{display:'flex',alignItems:'center',gap:13,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',cursor:'pointer'}}>
+                            <div key={inv.id} onClick={()=>setInvView(inv)} onContextMenu={e=>{e.preventDefault();setInvCtx({x:e.clientX,y:e.clientY,inv});}} title="Ansehen · Rechtsklick für Optionen" style={{display:'flex',alignItems:'center',gap:13,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',cursor:'pointer'}}>
                               <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:hexA(KONTO_COLORS.unter.c,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.prson} sz={20} col={KONTO_COLORS.unter.c}/></div>
                               <div style={{flex:1,minWidth:0}}>
-                                <div style={{fontSize:15.5,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{name}</div>
+                                <div style={{fontSize:15.5,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:9}}><span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{name}</span><span style={{flexShrink:0,fontSize:11,fontWeight:700,color:inv.paid?C.grn:'#FFB37A',background:hexA(inv.paid?C.grn:'#FFB37A',0.14),borderRadius:6,padding:'2px 8px'}}>{inv.paid?'Bezahlt':'Offen'}</span></div>
                                 <div style={{fontSize:12.5,color:C.sub,display:'flex',alignItems:'center',gap:13,marginTop:3,flexWrap:'wrap'}}>
                                   <span style={{display:'flex',alignItems:'center',gap:4}}><Ic p={P.doc} sz={12} col={C.mut}/>{inv.number}</span>
                                   <span style={{display:'flex',alignItems:'center',gap:4}}><Ic p={P.cal} sz={12} col={C.mut}/>{sent}</span>
                                 </div>
                               </div>
                               <div style={{fontSize:20,fontWeight:800,...NUM,color:total<0?'#FFB37A':C.grn,whiteSpace:'nowrap'}}>{fmt(total)}</div>
-                              {inv.pdfPath && <button onClick={e=>{e.stopPropagation();openFile(inv.pdfPath);}} title="PDF herunterladen" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:9,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:12,flexShrink:0}}>PDF</button>}
+                              <button onClick={e=>{e.stopPropagation();setInvCtx({x:e.clientX,y:e.clientY,inv});}} title="Optionen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,width:26,height:26,borderRadius:6,fontSize:18,lineHeight:1,fontFamily:'inherit'}}>⋮</button>
                             </div>
                           );
                         })}
@@ -3490,7 +3501,7 @@ function App({session}) {
                               <div style={{fontSize:12.5,color:C.sub,marginTop:2}}>{[r.tag, r.date&&(toISO(r.date)||r.date), (r.inv&&r.inv.paid&&r.inv.paidDate)&&('bezahlt am '+toISO(r.inv.paidDate))].filter(Boolean).join(' · ')}</div>
                             </div>
                             <div style={{fontSize:16,fontWeight:800,...NUM,color:r.amount<0?'#FFB37A':C.grn,whiteSpace:'nowrap'}}>{r.amount<0?'-':''}{fmt(Math.abs(r.amount))}</div>
-                            {r.inv && <button onClick={()=>{ setCustEdit(null); openInvoice(r.inv); setTab('rechnung'); }} title="Öffnen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:18,flexShrink:0}}>›</button>}
+                            {r.inv && <button onClick={()=>setInvView(r.inv)} title="Rechnung ansehen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:18,flexShrink:0}}>›</button>}
                             {!r.inv && r.pdf && <button onClick={()=>openFile(r.pdf)} title="Beleg ansehen" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'6px 10px',fontSize:12,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>Beleg</button>}
                           </div>
                         ))}</div>
@@ -4099,6 +4110,37 @@ function App({session}) {
               <button onClick={()=>{ const a=confirmState.onConfirm; setConfirmState(null); if(a) a(); }} style={{background:C.red,border:'none',color:'#fff',borderRadius:10,padding:'8px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Löschen</button>
             </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Rechts-Klick-Menü auf einer gestellten Rechnung ── */}
+      {invCtx && (
+        <div onClick={()=>setInvCtx(null)} onContextMenu={e=>{e.preventDefault();setInvCtx(null);}} style={{position:'fixed',inset:0,zIndex:155}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:Math.min(invCtx.x,window.innerWidth-210),top:Math.min(invCtx.y,window.innerHeight-110),width:200,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+            <button onClick={()=>useInvoiceAsTemplate(invCtx.inv)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.copy||P.doc} sz={15} col={C.sub}/> Als Vorlage nutzen</button>
+            <button onClick={()=>{ const inv=invCtx.inv; setInvCtx(null); askConfirm('Rechnung '+inv.number+' wirklich löschen? Die zugehörige Buchung wird ebenfalls entfernt.',()=>delInvoice(inv)); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.red,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.trash} sz={15} col={C.red}/> Löschen</button>
+          </div>
+        </div>
+      )}
+      {/* ── Gestellte Rechnung ansehen (read-only PDF) ── */}
+      {invView && (
+        <div onClick={()=>setInvView(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:150,display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?10:32}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,width:'min(820px,100%)',maxHeight:'92vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 24px 60px rgba(0,0,0,0.6)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,padding:'14px 18px',borderBottom:'1px solid '+C.sep,flexWrap:'wrap'}}>
+              <div style={{fontSize:16,fontWeight:800,color:C.txt}}>Rechnung {invView.number}</div>
+              <span style={{fontSize:11,fontWeight:700,color:invView.paid?C.grn:'#FFB37A',background:hexA(invView.paid?C.grn:'#FFB37A',0.14),borderRadius:6,padding:'3px 9px'}}>{invView.paid?'Bezahlt':'Offen'}</span>
+              <span style={{fontSize:11,color:C.mut,display:'flex',alignItems:'center',gap:5}}><Ic p={P.lock||P.doc} sz={12} col={C.mut}/> nur Ansicht</span>
+              <button onClick={()=>setInvView(null)} title="Schließen" style={{marginLeft:'auto',background:C.surf2,border:'none',color:C.sub,width:34,height:34,borderRadius:9,cursor:'pointer',fontSize:20,lineHeight:1,fontFamily:'inherit'}}>×</button>
+            </div>
+            <div style={{flex:1,overflow:'auto',background:'#fff'}}>
+              <iframe title="Rechnung" srcDoc={invoiceHTML(invView,true)} style={{width:'100%',height:isMobile?'58vh':'62vh',border:'none',display:'block'}}/>
+            </div>
+            <div style={{display:'flex',gap:9,padding:'13px 18px',borderTop:'1px solid '+C.sep,flexWrap:'wrap'}}>
+              <button onClick={()=>setInvPaid(invView.id,!invView.paid)} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:'1 1 150px',background:invView.paid?C.surf2:hexA(C.grn,0.16),border:'1px solid '+(invView.paid?C.bdr:hexA(C.grn,0.4)),color:invView.paid?C.txt:C.grn,borderRadius:11,padding:'11px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{invView.paid?'Als offen markieren':'Als bezahlt markieren'}</button>
+              <button onClick={()=>downloadInvoicePDF(invView)} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:'1 1 130px',background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:11,padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.upload} sz={15} col={C.txt}/> PDF herunterladen</button>
+              <button onClick={()=>useInvoiceAsTemplate(invView)} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:'1 1 130px',background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:11,padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.copy||P.doc} sz={15} col={C.txt}/> Als Vorlage nutzen</button>
+            </div>
           </div>
         </div>
       )}
