@@ -2222,7 +2222,42 @@ function App({session}) {
     setToast((clean.items?clean.items.length+' Positionen':'Felder')+' übernommen');
   };
   // KI-Erfassung (Voice → erkannt → bestätigen → übernehmen)
-  const runAiCapture = ()=>{ const patch=parseInvoiceVoice(recText); if(!patch){ setToast('Konnte nichts erkennen. Sprich z. B. „Kunde Müller, Webdesign 1500 Euro".'); return; } setAiCap({parsed:patch}); };
+  const runAiCapture = async ()=>{
+    const txt=(recText||'').trim();
+    if(!txt){ setToast('Bitte zuerst beschreiben oder aufnehmen.'); return; }
+    const dom = invEdit?(invEdit.domain||'unter'):'unter';
+    setAiCap({parsed:null, busy:true});
+    try{
+      const co=companyFor(dom)||{};
+      const sys="Du bist Assistent für die Rechnungserstellung eines deutschen Unternehmens. Wandle die freie Beschreibung in vollständige Rechnungsdaten um – inklusive passendem Kopf- und Footertext. Antworte AUSSCHLIESSLICH mit minifiziertem JSON, ohne Text drumherum, ohne Markdown.";
+      const usr="Beschreibung des Nutzers: „"+txt+"\".\n"
+        +"Erzeuge JSON in genau diesem Format:\n"
+        +'{"customer":{"company":"","firstName":"","lastName":"","anrede":"herr|frau|","address":"","email":""},"account":"unter","items":[{"desc":"Leistung","qty":1,"price":1500,"mwst":19}],"headerText":"","footerText":""}\n'
+        +"Regeln: account = \"unter\" (Firma), \"privat\" oder \"p1\"/\"p2\"/\"p3\" (Immobilie); price = Bruttopreis pro Stück (Punkt als Dezimaltrennzeichen); mwst = 19, 7 oder 0. "
+        +"headerText = kurze Anrede + 1–2 Einleitungssätze, die zur genannten Leistung passen (z. B. Bezug auf das Projekt). "
+        +"footerText = kurzer Zahlungs-/Dankeshinweis. Firmenname für den Abschluss: „"+((co.name||names.unternehmen||'')||'')+"\". "
+        +"Erfinde KEINE Beträge oder Namen, die nicht genannt wurden – leere Felder leer lassen.";
+      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:1200, system:sys, messages:[{ role:'user', content:[{ type:'text', text:usr }] }] } });
+      if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
+      let t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; t=t.replace(/```json|```/g,'').trim(); const mm=t.match(/\{[\s\S]*\}/); if(mm)t=mm[0];
+      const p=JSON.parse(t); const cu=p.customer||{}; const patch={};
+      const fullName=(cu.company||[cu.firstName,cu.lastName].filter(Boolean).join(' ')||'').trim();
+      const key=String(cu.lastName||cu.company||fullName||'').toLowerCase().split(' ')[0];
+      const found = key ? customers.find(c=>(c.name||'').toLowerCase().includes(key)) : null;
+      if(found){ Object.assign(patch,{customerId:found.id,custName:found.name||'',custAddress:found.address||'',custEmail:found.email||'',firstName:found.firstName||'',lastName:found.lastName||'',company:found.company||'',anrede:found.anrede||'',saveCust:false,_custLabel:found.name}); }
+      else if(fullName){ const an=String(cu.anrede||'').toLowerCase(); Object.assign(patch,{customerId:'',company:cu.company||'',firstName:cu.firstName||'',lastName:cu.lastName||'',anrede:an.startsWith('f')?'frau':an.startsWith('h')?'herr':'',custName:fullName,custAddress:cu.address||'',custEmail:cu.email||'',saveCust:true,_custLabel:fullName}); }
+      const acc=p.account; if(acc && ['unter','privat','p1','p2','p3'].includes(acc)){ patch.account=acc; patch._acctLabel=(acc==='unter'?(names.unternehmen||'Firma'):acc==='privat'?(names.privatLabel||'Privat'):(names[acc]||acc)); }
+      if(Array.isArray(p.items)&&p.items.length){ patch.items=p.items.map(it=>({desc:String(it.desc||'Position'),qty:num(it.qty)||1,price:Math.abs(num(it.price))||0,mwst:(it.mwst!=null&&it.mwst!==''?num(it.mwst):defMwstFor(dom))})); }
+      if(p.headerText && String(p.headerText).trim()) patch.headerText=String(p.headerText).trim();
+      if(p.footerText && String(p.footerText).trim()) patch.footerText=String(p.footerText).trim();
+      if(!Object.keys(patch).length){ setAiCap({parsed:null,busy:false}); setToast('Nichts erkannt – bitte mehr Details.'); return; }
+      setAiCap({parsed:patch, busy:false});
+    }catch(e){
+      const local=parseInvoiceVoice(txt);
+      if(local){ setAiCap({parsed:local, busy:false}); setToast('KI nicht erreichbar – lokal erkannt'); }
+      else { setAiCap({parsed:null, busy:false}); setToast('Erkennung fehlgeschlagen: '+(e.message||e)); }
+    }
+  };
   const applyAiCapture = ()=>{ if(!aiCap||!aiCap.parsed) return; const {_custLabel,_acctLabel,...clean}=aiCap.parsed; setInvEdit(e=>({...e, ...clean})); setAiCap(null); setRecText(''); setToast('Aus KI-Erfassung übernommen'); };
 
   /* Alle Daten als Datei exportieren (zur Auswertung) */
@@ -3629,11 +3664,11 @@ function App({session}) {
                     <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:10}}><span style={{fontSize:13,color:C.mut}}>Nr. {invEdit.number}</span><span style={{fontSize:12,fontWeight:600,color:A.c,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),borderRadius:8,padding:'4px 11px'}}>{(invEdit.domain||'unter')==='immo'?'Immobilien':'Firma'}</span></div>
                   </div>
                   <div style={{flex:1,minHeight:0,overflowY:'auto',padding:isMobile?'16px 14px 60px':'22px 30px 60px'}}>
-                  <button onClick={()=>{ setRecText(''); setAiCap({parsed:null}); }} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',maxWidth:isMobile?'100%':520,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),color:A.c,borderRadius:12,padding:'12px 14px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:16}}><span style={{fontSize:16}}>✨</span> Mit AI erfassen</button>
                   {(
                     <div style={{display:'flex',flexDirection:isMobile?'column':'row-reverse',gap:16,alignItems:'flex-start'}}>
                       {/* RECHTS (Felder) – per row-reverse rechts, Vorschau links wie beim Beleg-Erfassen */}
                       <div style={{flex:1,minWidth:0,width:isMobile?'100%':'auto'}}>
+                      <button onClick={()=>{ setRecText(''); setAiCap({parsed:null}); }} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),color:A.c,borderRadius:12,padding:'12px 14px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:14}}><span style={{fontSize:16}}>✨</span> Mit AI erfassen</button>
                       <div style={{...SC,marginBottom:14,display:'flex',flexDirection:'column',gap:12}}>
                         <div>
                           <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.red}}>*</span></div>
@@ -4652,15 +4687,15 @@ function App({session}) {
           onConfirm={(dest,ty,tm)=>{ assignDrafts(draftSel,dest,ty,tm); setAssignOpen(false); }} />
       )}
 
-      {aiCap && (()=>{ const p=aiCap.parsed; const A=KONTO_COLORS.unter; return (
+      {aiCap && (()=>{ const p=aiCap.parsed; const busy=aiCap.busy; const A=KONTO_COLORS.unter; return (
         <div onClick={()=>setAiCap(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:160,padding:20}}>
           <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'24px',maxWidth:460,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)',maxHeight:'88vh',overflowY:'auto'}}>
             <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:6}}><span style={{fontSize:20}}>✨</span><div style={{fontSize:18,fontWeight:800}}>Mit KI erfassen</div>{recOn && <span style={{marginLeft:'auto',fontSize:11,color:C.red,display:'flex',alignItems:'center',gap:5}}><span style={{width:8,height:8,borderRadius:'50%',background:C.red,display:'inline-block'}}/>Aufnahme…</span>}</div>
-            <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:16}}>Sprich Kunde, Positionen &amp; Konto ein – z. B. „Kunde Müller, Webdesign 1500 Euro, Wartung 200 Euro, Konto Firma". Die KI erkennt die Felder, du bestätigst sie.</div>
+            <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:16}}>Beschreibe die ganze Rechnung frei – z. B. „Stell Herrn Müller 1.500 € für die Website-Erstellung und 200 € Wartung in Rechnung, Konto Firma". Die KI füllt Kunde, Positionen, Konto und passt Kopf- &amp; Footertext an. Du prüfst und bestätigst.</div>
             <textarea value={recText} onChange={e=>setRecText(e.target.value)} rows={3} placeholder="Transkript erscheint hier… (oder selbst tippen)" style={{...SS,textAlign:'left',resize:'vertical',marginBottom:10}}/>
             <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
               <button onClick={toggleRec} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:1,minWidth:140,background:recOn?C.red:C.surf2,color:recOn?'#fff':C.txt,border:'none',borderRadius:11,padding:'12px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{recOn?'■ Stoppen':'🎤 Aufnahme'}</button>
-              <button onClick={runAiCapture} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:1,minWidth:140,background:A.c,color:'#0A0A0A',border:'none',borderRadius:11,padding:'12px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>KI auswerten</button>
+              <button onClick={runAiCapture} disabled={busy} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:1,minWidth:140,background:A.c,color:'#0A0A0A',border:'none',borderRadius:11,padding:'12px',fontSize:13,fontWeight:700,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.7:1}}>{busy?'KI denkt…':'KI auswerten'}</button>
             </div>
             {p && (
               <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px',marginBottom:16}}>
@@ -4668,8 +4703,11 @@ function App({session}) {
                 {(p._custLabel) && <div style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:13,marginBottom:7}}><span style={{color:C.sub}}>Kunde</span><b style={{color:C.txt}}>{p._custLabel}</b></div>}
                 {(p._acctLabel) && <div style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:13,marginBottom:7}}><span style={{color:C.sub}}>Konto</span><b style={{color:C.txt}}>{p._acctLabel}</b></div>}
                 {p.items && p.items.length>0 && (<div style={{marginTop:4}}><div style={{fontSize:13,color:C.sub,marginBottom:6}}>Positionen</div><div style={{display:'flex',flexDirection:'column',gap:6}}>{p.items.map((it,i)=>(<div key={i} style={{display:'flex',justifyContent:'space-between',gap:10,fontSize:13,background:C.surf3,borderRadius:9,padding:'8px 11px'}}><span style={{color:C.txt}}>{it.desc}</span><b style={{...NUM,color:C.txt}}>{fmt(it.price)}</b></div>))}</div></div>)}
+                {(p.headerText) && <div style={{marginTop:10}}><div style={{fontSize:11,color:C.sub,marginBottom:4}}>Kopftext</div><div style={{fontSize:12.5,color:C.txt,lineHeight:1.5,background:C.surf3,borderRadius:9,padding:'8px 11px',whiteSpace:'pre-line',maxHeight:90,overflowY:'auto'}}>{p.headerText}</div></div>}
+                {(p.footerText) && <div style={{marginTop:8}}><div style={{fontSize:11,color:C.sub,marginBottom:4}}>Footertext</div><div style={{fontSize:12.5,color:C.txt,lineHeight:1.5,background:C.surf3,borderRadius:9,padding:'8px 11px',whiteSpace:'pre-line',maxHeight:90,overflowY:'auto'}}>{p.footerText}</div></div>}
               </div>
             )}
+            {busy && !p && <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:9,padding:'14px',background:C.surf2,borderRadius:12,marginBottom:16,fontSize:13,color:C.sub}}><span style={{fontSize:15}}>✨</span> KI erstellt Kunde, Positionen &amp; Texte…</div>}
             <div style={{display:'flex',gap:10}}>
               <button onClick={()=>setAiCap(null)} style={{flex:1,background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:11,padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
               <button onClick={applyAiCapture} disabled={!p} style={{flex:2,background:p?C.act:C.surf2,border:'none',color:p?C.actTxt:C.mut,borderRadius:11,padding:'11px',fontSize:13,fontWeight:700,cursor:p?'pointer':'default',fontFamily:'inherit',opacity:p?1:0.6}}>Übernehmen</button>
