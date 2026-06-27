@@ -2540,7 +2540,7 @@ function App({session}) {
   const activeAcct = tab==='quellen' ? openAcct : (tab==='immo' ? sp : tab==='unter' ? 'unter' : tab==='privat' ? 'privat' : null);
   const secAccent = activeAcct ? acctColor(activeAcct) : C.pri;
 
-  const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn, rangeFn, srcKey, hideRecur, kind, sums, applyFn, addCtx, addLabel) => {
+  const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn, rangeFn, srcKey, hideRecur, kind, sums, applyFn, addCtx, addLabel, addHeading) => {
     const kindEff = kind || (folderPath && folderPath[folderPath.length-1]==='Einnahmen' ? 'ein' : 'aus');
     const shown = (items||[]).filter(it=>activeInMonth(it, yr, mo));
     const inSel = srcKey && selKey===srcKey;
@@ -2550,6 +2550,9 @@ function App({session}) {
       <>
         {(srcKey || addCtx) && (
           <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:12,minHeight:28}}>
+            {!inSel && addHeading && (
+              <div style={{fontSize:12.5,fontWeight:700,color:(addCtx&&addCtx.kind==='ein'?C.grn:'#FFB37A'),marginRight:'auto'}}>{addHeading}</div>
+            )}
             {!inSel && sums && (
               <div style={{display:'flex',gap:16,marginRight:'auto',fontSize:13,flexWrap:'wrap'}}>
                 <span style={{display:'flex',alignItems:'center',gap:6,color:C.sub}}><span style={{width:8,height:8,borderRadius:'50%',background:C.grn,display:'inline-block'}}/>Einnahmen <b style={{color:C.txt,...NUM}}>{fmt(sums.inc)}</b></span>
@@ -2557,7 +2560,7 @@ function App({session}) {
               </div>
             )}
             {!inSel && addCtx && (
-              <button onClick={()=>openCapture(addCtx)} style={{display:'inline-flex',alignItems:'center',gap:6,marginLeft:(sums?undefined:'auto'),background:C.pri,color:C.priTxt,border:'none',borderRadius:9,padding:'7px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.plus||P.up} sz={14} col={C.priTxt}/> {addLabel||'Hinzufügen'}</button>
+              <button onClick={()=>openCapture(addCtx)} style={{display:'inline-flex',alignItems:'center',gap:6,marginLeft:(sums||addHeading)?undefined:'auto',background:C.pri,color:C.priTxt,border:'none',borderRadius:9,padding:'7px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.plus||P.up} sz={14} col={C.priTxt}/> {addLabel||'Hinzufügen'}</button>
             )}
             {!inSel && srcKey && shown.length>0 && (
               <button onClick={()=>{setSelKey(srcKey);setSelIds([]);}} style={{...toolBtn,padding:'7px 14px',fontSize:13,fontWeight:600,borderRadius:9,marginLeft:addCtx?undefined:(sums?undefined:'auto')}}>Auswählen</button>
@@ -2980,7 +2983,6 @@ function App({session}) {
                 <>
                   <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
                     <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
-                      <div style={{fontSize:12,fontWeight:600,color:C.grn,marginBottom:10}}>Wiederkehrende Einnahmen</div>
                       {renderItems(
                         (pd.einnahmen||[]).filter(i=>i.recurring),
                         (id,fld,val)=>updPropSub(sp,'einnahmen',id,fld,val),
@@ -2989,11 +2991,10 @@ function App({session}) {
                         ['Immobilien',names[sp],'Einnahmen'],
                         undefined, undefined,
                         (it,range)=>setPropSubRange(sp,'einnahmen',it,range),
-                        null, true, undefined, undefined, (it)=>applyRecurPropSub(sp,'einnahmen',it), {domain:'immo',account:sp,kind:'ein',recurring:true,kindLocked:true}, 'Hinzufügen'
+                        null, true, undefined, undefined, (it)=>applyRecurPropSub(sp,'einnahmen',it), {domain:'immo',account:sp,kind:'ein',recurring:true,kindLocked:true}, 'Hinzufügen', 'Wiederkehrende Einnahmen'
                       )}
                     </div>
                     <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
-                      <div style={{fontSize:12,fontWeight:600,color:'#FFB37A',marginBottom:10}}>Wiederkehrende Ausgaben</div>
                       {renderItems(
                         (pd.expenses||[]).filter(i=>i.recurring),
                         (id,fld,val)=>updPropSub(sp,'expenses',id,fld,val),
@@ -3002,7 +3003,7 @@ function App({session}) {
                         ['Immobilien',names[sp]],
                         undefined, undefined,
                         (it,range)=>setPropSubRange(sp,'expenses',it,range),
-                        null, true, undefined, undefined, (it)=>applyRecurPropSub(sp,'expenses',it), {domain:'immo',account:sp,kind:'aus',recurring:true,kindLocked:true}, 'Hinzufügen'
+                        null, true, undefined, undefined, (it)=>applyRecurPropSub(sp,'expenses',it), {domain:'immo',account:sp,kind:'aus',recurring:true,kindLocked:true}, 'Hinzufügen', 'Wiederkehrende Ausgaben'
                       )}
                     </div>
                   </div>
@@ -3101,7 +3102,6 @@ function App({session}) {
               <>
                 <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
                   <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
-                    <div style={{fontSize:12,fontWeight:600,color:C.grn,marginBottom:10}}>Wiederkehrende Einnahmen</div>
                     {renderItems(
                       (md.unternehmen?.clients||[]).filter(i=>i.recurring),
                       (id,fld,val)=>updSec('unternehmen','clients',id,fld,val),
@@ -3110,11 +3110,10 @@ function App({session}) {
                       ['Unternehmen','Einnahmen'],
                       undefined, undefined,
                       (it,range)=>setSecRange('unternehmen','clients',it,range),
-                      null, true, undefined, undefined, (it)=>applyRecurSec('unternehmen','clients',it), {domain:'unter',account:'unter',kind:'ein',recurring:true,kindLocked:true}, 'Hinzufügen'
+                      null, true, undefined, undefined, (it)=>applyRecurSec('unternehmen','clients',it), {domain:'unter',account:'unter',kind:'ein',recurring:true,kindLocked:true}, 'Hinzufügen', 'Wiederkehrende Einnahmen'
                     )}
                   </div>
                   <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
-                    <div style={{fontSize:12,fontWeight:600,color:'#FFB37A',marginBottom:10}}>Wiederkehrende Ausgaben</div>
                     {renderItems(
                       (md.unternehmen?.items||[]).filter(i=>i.recurring),
                       (id,fld,val)=>updSec('unternehmen','items',id,fld,val),
@@ -3123,7 +3122,7 @@ function App({session}) {
                       ['Unternehmen','Ausgaben'],
                       undefined, undefined,
                       (it,range)=>setSecRange('unternehmen','items',it,range),
-                      null, true, undefined, undefined, (it)=>applyRecurSec('unternehmen','items',it), {domain:'unter',account:'unter',kind:'aus',recurring:true,kindLocked:true}, 'Hinzufügen'
+                      null, true, undefined, undefined, (it)=>applyRecurSec('unternehmen','items',it), {domain:'unter',account:'unter',kind:'aus',recurring:true,kindLocked:true}, 'Hinzufügen', 'Wiederkehrende Ausgaben'
                     )}
                   </div>
                 </div>
@@ -3184,7 +3183,6 @@ function App({session}) {
               <>
                 <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:12}}>
                   <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
-                    <div style={{fontSize:12,fontWeight:600,color:C.grn,marginBottom:10}}>Wiederkehrende Einnahmen</div>
                     {renderItems(
                       (md.privat?.einnahmen||[]).filter(i=>i.recurring),
                       (id,fld,val)=>updSec('privat','einnahmen',id,fld,val),
@@ -3193,11 +3191,10 @@ function App({session}) {
                       ['Privat','Einnahmen'],
                       undefined, undefined,
                       (it,range)=>setSecRange('privat','einnahmen',it,range),
-                      null, true, undefined, undefined, (it)=>applyRecurSec('privat','einnahmen',it), {domain:'privat',account:'privat',kind:'ein',recurring:true,kindLocked:true}, 'Einnahme erfassen'
+                      null, true, undefined, undefined, (it)=>applyRecurSec('privat','einnahmen',it), {domain:'privat',account:'privat',kind:'ein',recurring:true,kindLocked:true}, 'Einnahme erfassen', 'Wiederkehrende Einnahmen'
                     )}
                   </div>
                   <div style={{...SC,flex:1,minWidth:isMobile?'auto':260}}>
-                    <div style={{fontSize:12,fontWeight:600,color:'#FFB37A',marginBottom:10}}>Wiederkehrende Ausgaben</div>
                     {renderItems(
                       (md.privat?.items||[]).filter(i=>i.recurring),
                       (id,fld,val)=>updSec('privat','items',id,fld,val),
@@ -3206,7 +3203,7 @@ function App({session}) {
                       ['Privat'],
                       undefined, undefined,
                       (it,range)=>setSecRange('privat','items',it,range),
-                      null, true, undefined, undefined, (it)=>applyRecurSec('privat','items',it), {domain:'privat',account:'privat',kind:'aus',recurring:true,kindLocked:true}, 'Ausgabe erfassen'
+                      null, true, undefined, undefined, (it)=>applyRecurSec('privat','items',it), {domain:'privat',account:'privat',kind:'aus',recurring:true,kindLocked:true}, 'Ausgabe erfassen', 'Wiederkehrende Ausgaben'
                     )}
                   </div>
                 </div>
@@ -4509,8 +4506,8 @@ function App({session}) {
             <div style={{marginLeft:'auto',fontSize:13,color:C.mut}}>{c.account?captureAccLabel(c.account):'Konto wählen'}{c.recurring?' · wiederkehrend':''}</div>
           </div>
           <div style={{flex:1,display:'flex',minHeight:0,flexDirection:isMobile?'column':'row'}}>
-            <div style={{flex:isMobile?'none':1,overflowY:'auto',padding:isMobile?'18px 18px 40px':'26px 30px 56px',order:isMobile?2:1}}>
-              <div style={{maxWidth:560,display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{width:isMobile?'auto':'min(480px,46%)',flexShrink:0,overflowY:'auto',padding:isMobile?'18px 18px 40px':'26px 30px 56px',order:isMobile?2:2}}>
+              <div style={{maxWidth:'100%',display:'flex',flexDirection:'column',gap:16}}>
                 <div>{lbl('Konto',true)}{(isImport||!c.account)
                   ? <select value={c.account||''} onChange={e=>setCapture(cc=>cc?{...cc,account:e.target.value,f:{...cc.f,customerId:'',custName:''}}:cc)} style={{...dInp,cursor:'pointer'}}><option value="">— Konto wählen —</option>{acctOpts.map(o=><option key={o.k} value={o.k}>{o.label}</option>)}</select>
                   : <div style={{...dInp,display:'flex',alignItems:'center',gap:8,cursor:'default'}}><Ic p={P.lock} sz={13} col={C.mut}/><span style={{fontWeight:600}}>{captureAccLabel(c.account)}</span></div>}</div>
@@ -4536,16 +4533,18 @@ function App({session}) {
                 {!c.recurring && <div style={{fontSize:11.5,color:C.mut,textAlign:'center',lineHeight:1.5}}>Status nach dem Zuordnen: <b style={{color:'#FFB37A'}}>Offen</b> – wird bestätigt, sobald der Bankkontoauszug die Abbuchung zeigt.</div>}
               </div>
             </div>
-            <div onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';}} onDrop={e=>{ e.preventDefault(); const file=e.dataTransfer.files&&e.dataTransfer.files[0]; if(file) scanCaptureFile(file); }} style={{width:isMobile?'auto':'min(440px,42%)',height:isMobile?260:'auto',flexShrink:0,background:C.surf2,borderLeft:isMobile?'none':'1px solid '+C.bdr,borderBottom:isMobile?'1px solid '+C.bdr:'none',display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?14:24,position:'relative',order:isMobile?1:2}}>
-              {hasFile ? (<>
+            <div onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';}} onDrop={e=>{ e.preventDefault(); const file=e.dataTransfer.files&&e.dataTransfer.files[0]; if(file) scanCaptureFile(file); }} style={{flex:isMobile?'none':1,height:isMobile?280:'auto',background:C.surf2,borderRight:isMobile?'none':'1px solid '+C.bdr,borderBottom:isMobile?'1px solid '+C.bdr:'none',display:'flex',flexDirection:'column',padding:isMobile?14:24,position:'relative',order:isMobile?1:1,minHeight:0}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,flexShrink:0}}><Ic p={P.spark} sz={17} col={C.pri}/><span style={{fontSize:15,fontWeight:800,color:C.txt,letterSpacing:'-0.01em'}}>Mit AI erfassen</span></div>
+              <div style={{flex:1,minHeight:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              {hasFile ? (<div style={{position:'relative',width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center'}}>
                 {isPdf ? <iframe src={f.fileData} title="Beleg" style={{width:'100%',height:'100%',border:'none',borderRadius:12,background:'#fff'}}/> : <img src={f.fileData} alt="Beleg" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:12,boxShadow:'0 10px 40px rgba(0,0,0,0.4)'}}/>}
                 {c.scanning && <div style={{position:'absolute',top:isMobile?10:18,left:'50%',transform:'translateX(-50%)',display:'flex',alignItems:'center',gap:8,background:hexA(C.pri,0.92),color:C.priTxt,borderRadius:99,padding:'7px 14px',fontSize:12.5,fontWeight:700}}><Ic p={P.spark} sz={13} col={C.priTxt}/> Beleg wird ausgelesen…</div>}
                 <label style={{position:'absolute',bottom:isMobile?10:18,right:isMobile?10:18,display:'inline-flex',alignItems:'center',gap:7,background:hexA(C.bg,0.85),border:'1px solid '+C.bdr,color:C.txt,borderRadius:10,padding:'8px 13px',fontSize:13,fontWeight:600,cursor:'pointer',backdropFilter:'blur(4px)'}}><Ic p={P.upload} sz={14} col={C.txt}/> Beleg ersetzen<input type="file" accept="image/*,.pdf" onChange={e=>{const file=e.target.files[0];e.target.value='';scanCaptureFile(file);}} style={{display:'none'}}/></label>
-              </>) : (
-                <div style={{textAlign:'center',width:'100%',maxWidth:340}}>
-                  <div style={{width:58,height:58,borderRadius:16,background:hexA(C.pri,0.14),display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 16px'}}><Ic p={P.upload} sz={26} col={C.pri}/></div>
+              </div>) : (
+                <div style={{textAlign:'center',width:'100%',maxWidth:360}}>
+                  <div style={{width:58,height:58,borderRadius:16,background:hexA(C.pri,0.14),display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 16px'}}><Ic p={P.spark} sz={26} col={C.pri}/></div>
                   <div style={{fontSize:15.5,fontWeight:800,color:C.txt,marginBottom:6}}>Beleg hierher ziehen</div>
-                  <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:18}}>Foto, Scan oder PDF ablegen – die Felder links werden automatisch erkannt und ausgefüllt.</div>
+                  <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:18}}>Foto, Scan oder PDF ablegen – die KI liest den Beleg und füllt die Felder rechts automatisch aus.</div>
                   {uploading ? (
                     <div style={{maxWidth:280,margin:'0 auto'}}>
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.sub,marginBottom:7}}><span>Lädt…</span><span style={{fontWeight:700,color:C.pri}}>{Math.round(capProg)}%</span></div>
@@ -4556,6 +4555,7 @@ function App({session}) {
                   )}
                 </div>
               )}
+              </div>
             </div>
           </div>
         </div>
