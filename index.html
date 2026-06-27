@@ -1196,6 +1196,9 @@ function App({session}) {
   const [filePreview,setFilePreview]= useState(null);   // Beleg-Vorschau (dunkel, nur PDF/Bild) {src,name,isPdf,replace,remove}
   const [custTab,setCustTab]= useState('details'); // Kundenprofil: Details vs Rechnungen
   const [belPath,setBelPath]= useState([]);        // Belege-DB Ordnerpfad: [bereich, jahr, monat, kind]
+  const [belegMode,setBelegMode]= useState('once'); // Belege-Umschalter: 'once' | 'recur'
+  const [belegSearch,setBelegSearch]= useState(''); // Belege-Suche
+  const [belegEdit,setBelegEdit]= useState(null);   // Beleg-Detailansicht {loc, item}
   const [zipBusy,setZipBusy]= useState(false);
   const chat = data.chat || [];                   // KI-Berater Verlauf (gespeichert)
   const setChat = updater => setData(prev=>{ const cur=prev.chat||[]; const next=(typeof updater==='function'?updater(cur):updater).slice(-40); return {...prev, chat:next}; });
@@ -2082,6 +2085,10 @@ function App({session}) {
     if(kind==='ein' && dom){ (data.invoices||[]).forEach(iv=>{ if(iv.pdfPath && (iv.domain||'unter')===dom && iv.account===ber){ const dt=new Date(iv.sentDate||iv.date); if(!isNaN(dt)&&dt.getFullYear()===y2&&dt.getMonth()===m2) items.push({id:iv.id,name:'Rechnung '+iv.number,date:iv.sentDate||iv.date,amount:(iv.total||0),filePath:iv.pdfPath,_ber:ber,_y:y2,_m:m2,_kind:kind}); } }); }
     return items; };
   const belegesUnder = (p)=>{ const out=[]; const bers=p[0]?[p[0]]:belBerKeys; const yl=belYears(); bers.forEach(ber=>{ const yrs=p[1]!=null?[p[1]]:yl; yrs.forEach(y2=>{ const mos=p[2]!=null?[p[2]]:[0,1,2,3,4,5,6,7,8,9,10,11]; mos.forEach(m2=>{ const kinds=p[3]?[p[3]]:['ein','aus']; kinds.forEach(kind=>{ belegesLeaf(ber,y2,m2,kind).forEach(b=>out.push(b)); }); }); }); }); return out; };
+  // Vollständiges Buchungs-Item zu einem Beleg laden (für Detail-Bearbeitung)
+  const fullBelegItem = (loc)=>{ const M=data[loc._y]&&data[loc._y][loc._m]; if(!M) return null; let list; if(loc._ber==='unter'){ const s=M.unternehmen||{}; list=loc._kind==='ein'?s.clients:s.items; } else if(loc._ber==='privat'){ const s=M.privat||{}; list=loc._kind==='ein'?s.einnahmen:s.items; } else { const s=(M.props&&M.props[loc._ber])||{}; list=loc._kind==='ein'?s.einnahmen:s.expenses; } return (list||[]).find(x=>x.id===loc.id)||null; };
+  // Beleg (zugrundeliegende Buchung) bearbeiten – Position via _ber/_y/_m/_kind/id
+  const updateBelegItem = (loc, patch)=>{ const {_ber,_y,_m,_kind,id}=loc; setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const M=nd[_y]&&nd[_y][_m]; if(!M) return prev; let list; if(_ber==='unter'){ const s=M.unternehmen||{}; list=_kind==='ein'?s.clients:s.items; } else if(_ber==='privat'){ const s=M.privat||{}; list=_kind==='ein'?s.einnahmen:s.items; } else { const s=(M.props&&M.props[_ber])||{}; list=_kind==='ein'?s.einnahmen:s.expenses; } if(!list) return prev; const i=list.findIndex(x=>x.id===id); if(i<0) return prev; list[i]={...list[i],...patch}; return nd; }); };
   const downloadBelegeZip = async (p, label)=>{ const items=belegesUnder(p); if(!items.length){ setToast('Keine Belege in diesem Ordner.'); return; } setZipBusy(true); setToast('📦 Belege werden gepackt…');
     const safe=s=>String(s||'').replace(/[\/\\:*?"<>|]/g,'_').trim();
     const segLabels=b=>[belBerLabel(b._ber), String(b._y), MONTHS[b._m], b._kind==='ein'?'Einnahmen':'Ausgaben'].map(safe);
@@ -3323,7 +3330,6 @@ function App({session}) {
                     <div style={{...SC,display:'flex',gap:16,alignItems:'center',flexWrap:'wrap',marginBottom:16}}>
                       <div style={{flex:1,minWidth:200}}>
                         <div style={{fontSize:15,fontWeight:700,color:C.txt,marginBottom:4}}>Einzelnen Beleg erfassen</div>
-                        <div style={{fontSize:13,color:C.sub,lineHeight:1.5}}>Beleg/Rechnung hochladen, Felder werden automatisch erkannt. Status bleibt <b style={{color:'#FFB37A'}}>Offen</b>, bis der Bankkontoauszug die Abbuchung bestätigt.</div>
                       </div>
                       <button onClick={()=>openCapture({mode:'import',kind:'aus',account:'',recurring:false})} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.pri,color:C.priTxt,border:'none',borderRadius:11,padding:'12px 20px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={16} col={C.priTxt}/> Beleg erfassen</button>
                     </div>
@@ -4026,41 +4032,38 @@ function App({session}) {
             // Breadcrumb-Labels
             const crumbLabel=(i)=>{ if(i===0) return belBerLabel(belPath[0]); if(i===1) return String(belPath[1]); if(i===2) return MONTHS[belPath[2]]; if(i===3) return belPath[3]==='ein'?'Einnahmen':'Ausgaben'; return ''; };
             const zipLabel=()=> ['Belege',...belPath.map((_,i)=>crumbLabel(i))].join('_');
+            // Alle Belege flach, nach Modus (einmalig/wiederkehrend) + Suche gefiltert
+            const allBel=belegesUnder([]);
+            const q=belegSearch.trim().toLowerCase();
+            const shown=allBel.filter(b=> (belegMode==='recur'? !!b.recurring : !b.recurring) && (!q || ((b.name||'')+' '+(b.amount||'')+' '+belBerLabel(b._ber)).toLowerCase().includes(q)) );
+            const groups={}; shown.forEach(b=>{ const iso=toISO(b.date)||b.date||''; const key=/^\d{4}-\d{2}/.test(iso)?iso.slice(0,7):'0000-00'; (groups[key]=groups[key]||[]).push(b); });
+            const gkeys=Object.keys(groups).sort().reverse();
             return (
               <>
                 <div style={{marginBottom:16}}>
                   <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Belege</div>
                 </div>
-                {/* Breadcrumb + ZIP */}
-                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:16}}>
-                  <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',flex:1,minWidth:0}}>
-                    <button onClick={()=>setBelPath([])} style={{background:depth===0?hexA(C.pri,0.16):C.surf2,border:'1px solid '+C.bdr,color:depth===0?C.pri:C.sub,borderRadius:8,padding:'6px 11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',gap:5}}><Ic p={P.clip} sz={13} col={depth===0?C.pri:C.sub}/> Alle</button>
-                    {belPath.map((_,i)=>(<span key={i} style={{display:'flex',alignItems:'center',gap:6}}><span style={{color:C.mut}}>/</span><button onClick={()=>setBelPath(belPath.slice(0,i+1))} style={{background:i===depth-1?hexA(berCol,0.16):C.surf2,border:'1px solid '+(i===depth-1?hexA(berCol,0.4):C.bdr),color:i===depth-1?berCol:C.sub,borderRadius:8,padding:'6px 11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{crumbLabel(i)}</button></span>))}
-                  </div>
-                  <button disabled={zipBusy} onClick={()=>downloadBelegeZip(belPath, zipLabel())} style={{display:'flex',alignItems:'center',gap:7,background:berCol,color:'#0A0A0A',border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:zipBusy?'default':'pointer',fontFamily:'inherit',opacity:zipBusy?0.6:1,flexShrink:0}}><Ic p={P.upload} sz={14} col={'#0A0A0A'}/> {zipBusy?'Packt…':'Als ZIP'}</button>
+                <div style={{marginBottom:14}}>{PillTabs({tabs:[['once','Einmalige Belege'],['recur','Wiederkehrende Belege']], value:belegMode, onChange:setBelegMode})}</div>
+                <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
+                  <div style={{flex:1,minWidth:200,display:'flex',alignItems:'center',gap:9,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:'11px 14px'}}><Ic p={P.search} sz={15} col={C.mut}/><input value={belegSearch} onChange={e=>setBelegSearch(e.target.value)} placeholder="Beleg suchen…" style={{flex:1,background:'none',border:'none',outline:'none',color:C.txt,fontSize:14,fontFamily:'inherit'}}/></div>
+                  <button disabled={zipBusy} onClick={()=>downloadBelegeZip([], 'Belege')} style={{display:'flex',alignItems:'center',gap:7,background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:12,padding:'11px 16px',fontSize:13.5,fontWeight:700,cursor:zipBusy?'default':'pointer',fontFamily:'inherit',opacity:zipBusy?0.6:1,flexShrink:0}}><Ic p={P.upload} sz={14} col={C.sub}/> {zipBusy?'Packt…':'Als ZIP'}</button>
                 </div>
-
-                {depth<4 ? (
-                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                    {depth===0 && belBerKeys.map(k=>folderRow(PROPS.includes(k)?P.house:P.brief, belBerLabel(k), null, belegesUnder([k]).length, ()=>setBelPath([k]), acctColor(k)))}
-                    {depth===0 && belBerKeys.every(k=>belegesUnder([k]).length===0) && <div style={{...SC,textAlign:'center',color:C.mut,fontSize:14,padding:'30px'}}>Noch keine Belege. Hänge Belege an Buchungen an – sie erscheinen hier automatisch.</div>}
-                    {depth===1 && belYears().map(y=>folderRow(P.cal, String(y), null, belegesUnder([belPath[0],y]).length, ()=>setBelPath([belPath[0],y])))}
-                    {depth===2 && MONTHS.map((mn,i)=>({mn,i,n:belegesUnder([belPath[0],belPath[1],i]).length})).filter(x=>x.n>0).map(x=>folderRow(P.cal, x.mn, null, x.n, ()=>setBelPath([belPath[0],belPath[1],x.i])))}
-                    {depth===2 && belegesUnder([belPath[0],belPath[1]]).length===0 && <div style={{...SC,textAlign:'center',color:C.mut,fontSize:14,padding:'30px'}}>Keine Belege in diesem Jahr.</div>}
-                    {depth===3 && [['ein','Einnahmen'],['aus','Ausgaben']].map(([k,l])=>folderRow(k==='ein'?P.down:P.up, l, null, belegesUnder([belPath[0],belPath[1],belPath[2],k]).length, ()=>setBelPath([belPath[0],belPath[1],belPath[2],k])))}
-                  </div>
-                ) : (()=>{ const rows=belegesLeaf(belPath[0],belPath[1],belPath[2],belPath[3]).slice().sort((a,b)=>String(toISO(b.date)||'').localeCompare(String(toISO(a.date)||''))); const aus=belPath[3]==='aus'; return rows.length? <div style={{display:'flex',flexDirection:'column',gap:10}}>{rows.map(r=>(
-                    <div key={r.id} style={{display:'flex',alignItems:'center',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderLeft:'3px solid '+berCol,borderRadius:14,padding:'12px 14px'}}>
-                      <div style={{width:44,height:44,flexShrink:0,borderRadius:12,background:hexA(berCol,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.clip} sz={19} col={berCol}/></div>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:15,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}{r.recurring?' 🔁':''}</div>
-                        <div style={{fontSize:12.5,color:C.sub,marginTop:2}}>{(r.date&&(toISO(r.date)||r.date))||'—'}</div>
+                {shown.length? <div style={{display:'flex',flexDirection:'column',gap:20}}>{gkeys.map(gk=>{ const mm=gk.split('-')[1]; const yy=gk.split('-')[0]; const lbl=(mm==='00'||!mm)?'Ohne Datum':(MONTHS[+mm-1]+' '+yy); return (
+                  <div key={gk}>
+                    <div style={{fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',marginBottom:9,textTransform:'uppercase'}}>{lbl} · {groups[gk].length}</div>
+                    <div style={{display:'flex',flexDirection:'column',gap:10}}>{groups[gk].map(r=>{ const bc=acol(r._ber); const aus=r._kind==='aus'; return (
+                      <div key={r.id+r._y+r._m} onClick={()=>{ const it=fullBelegItem(r)||{}; setBelegEdit({loc:r, name:it.name||r.name||'', datum:toISO(it.datum||r.date)||'', amount:String(it.amount!=null?it.amount:(r.amount||'')), netto:String(it.netto!=null?it.netto:''), mwst:(it.mwst!=null?String(it.mwst):''), category:it.category||'', note:it.note||'', belegnr:it.belegnr||'' }); }} style={{display:'flex',alignItems:'center',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderLeft:'3px solid '+bc,borderRadius:14,padding:'12px 14px',cursor:'pointer'}}>
+                        <div style={{width:44,height:44,flexShrink:0,borderRadius:12,background:hexA(bc,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.clip} sz={19} col={bc}/></div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:15,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}{r.recurring?' 🔁':''}</div>
+                          <div style={{fontSize:12.5,color:C.sub,marginTop:2,display:'flex',alignItems:'center',gap:6}}><span style={{color:bc,fontWeight:600}}>{belBerLabel(r._ber)}</span><span style={{color:C.mut}}>·</span>{(r.date&&(toISO(r.date)||r.date))||'—'}</div>
+                        </div>
+                        <div style={{fontSize:15,fontWeight:700,...NUM,color:aus?'#FFB37A':C.grn,whiteSpace:'nowrap'}}>{aus?'-':''}{fmt(Math.abs(r.amount))}</div>
+                        <span style={{color:C.mut,fontSize:18,flexShrink:0}}>›</span>
                       </div>
-                      <div style={{fontSize:15,fontWeight:700,...NUM,color:aus?'#FFB37A':C.grn,whiteSpace:'nowrap'}}>{aus?'-':''}{fmt(Math.abs(r.amount))}</div>
-                      {r.filePath ? <button onClick={()=>openFile(r.filePath)} title="Ansehen" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:9,padding:'8px 12px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>Ansehen</button>
-                        : r.fileData ? <a href={r.fileData} download={r.fileName||'beleg'} style={{background:C.surf3,color:C.txt,borderRadius:9,padding:'8px 12px',fontSize:12,fontWeight:600,fontFamily:'inherit',flexShrink:0,textDecoration:'none'}}>Ansehen</a> : null}
-                    </div>
-                  ))}</div> : <div style={{...SC,textAlign:'center',color:C.mut,fontSize:14,padding:'34px 24px'}}>Keine Belege in diesem Ordner.</div>; })()}
+                    ); })}</div>
+                  </div>
+                ); })}</div> : <div style={{...SC,textAlign:'center',color:C.mut,fontSize:14,padding:'34px 24px'}}>{belegMode==='recur'?'Noch keine wiederkehrenden Belege.':'Noch keine Belege. Hänge Belege an Buchungen an – sie erscheinen hier automatisch.'}</div>}
               </>
             );
           })()}
@@ -4603,6 +4606,34 @@ function App({session}) {
             ); })}
           </div>
           <button onClick={()=>setIconPick(null)} style={{width:'100%',background:curCol,color:'#0A0A0A',border:'none',borderRadius:12,padding:'13px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginTop:18}}>Fertig</button>
+        </Sheet>
+      ); })()}
+
+      {belegEdit && (()=>{ const be=belegEdit; const loc=be.loc; const bc=acol(loc._ber); const aus=loc._kind==='aus'; const set=patch=>setBelegEdit(x=>({...x,...patch})); const hasFile=!!(loc.filePath||loc.fileData); const fld={width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,color:C.txt,padding:'11px 13px',fontSize:14,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}; const lbl=(t)=>(<div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>{t}</div>); const save=()=>{ updateBelegItem(loc,{name:be.name,datum:be.datum,amount:num(be.amount),netto:num(be.netto),mwst:(be.mwst===''?'':num(be.mwst)),category:be.category,note:be.note,belegnr:be.belegnr}); setBelegEdit(null); setToast('Beleg gespeichert'); }; return (
+        <Sheet title="Beleg" onClose={()=>setBelegEdit(null)} maxWidth={620}>
+          <div style={{display:'inline-flex',alignItems:'center',gap:8,background:hexA(bc,0.16),border:'1px solid '+hexA(bc,0.4),borderRadius:10,padding:'7px 12px',fontSize:13,fontWeight:600,color:bc,marginBottom:16}}><Ic p={loc._ber==='unter'?P.brief:loc._ber==='privat'?P.prson:P.house} sz={14} col={bc}/> {belBerLabel(loc._ber)} · {aus?'Ausgabe':'Einnahme'}{loc.recurring?' · 🔁 wiederkehrend':''}</div>
+          {hasFile ? (
+            <div style={{display:'flex',alignItems:'center',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 14px',marginBottom:16}}>
+              <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:hexA(bc,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.clip} sz={20} col={bc}/></div>
+              <div style={{flex:1,minWidth:0,fontSize:13.5,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{loc.fileName||'Beleg'}</div>
+              <button onClick={()=>openFile(loc.filePath||loc.fileData, loc.fileName)} style={{background:C.surf3,border:'none',color:C.txt,borderRadius:9,padding:'8px 13px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>Ansehen</button>
+            </div>
+          ) : <div style={{...SC,textAlign:'center',color:C.mut,fontSize:13,padding:'16px',marginBottom:16}}>Kein Beleg angehängt.</div>}
+          <div style={{marginBottom:12}}>{lbl('Bezeichnung')}<input value={be.name} onChange={e=>set({name:e.target.value})} placeholder="Bezeichnung" style={fld}/></div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+            <div>{lbl('Datum')}<DateField value={be.datum} onChange={v=>set({datum:v})} accent={bc} style={fld}/></div>
+            <div>{lbl('Betrag (brutto) €')}<input value={be.amount} onChange={e=>set({amount:e.target.value})} inputMode="decimal" placeholder="0,00" style={fld}/></div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+            <div>{lbl('Netto €')}<input value={be.netto} onChange={e=>set({netto:e.target.value})} inputMode="decimal" placeholder="0,00" style={fld}/></div>
+            <div>{lbl('MwSt %')}<input value={be.mwst} onChange={e=>set({mwst:e.target.value})} inputMode="decimal" placeholder="19" style={fld}/></div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+            <div>{lbl('Kategorie')}<input value={be.category} onChange={e=>set({category:e.target.value})} placeholder="Kategorie" style={fld}/></div>
+            <div>{lbl('Beleg-Nr')}<input value={be.belegnr} onChange={e=>set({belegnr:e.target.value})} placeholder="Beleg-Nr" style={fld}/></div>
+          </div>
+          <div style={{marginBottom:18}}>{lbl('Notiz')}<textarea value={be.note} onChange={e=>set({note:e.target.value})} rows={2} placeholder="Weitere Informationen…" style={{...fld,resize:'vertical'}}/></div>
+          <button onClick={save} style={{width:'100%',background:bc,color:'#0A0A0A',border:'none',borderRadius:12,padding:'13px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Speichern</button>
         </Sheet>
       ); })()}
 
