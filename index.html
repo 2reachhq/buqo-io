@@ -2400,10 +2400,16 @@ function App({session}) {
   // ── Rechnung per Chat erstellen (fragt Pflichtfelder ab) ──
   const matchAccount=(q)=>{ const lc=String(q||'').toLowerCase(); if(/privat/.test(lc))return 'privat'; if(/firma|unternehm/.test(lc))return 'unter'; for(const p of PROPS){ const nm=(names[p]||'').toLowerCase(); if(nm && lc.includes(nm)) return p; } return null; };
   const nextInvoiceNeed=(inv)=>{ if(!(inv.customerId||String(inv.custName||'').trim())) return 'kunde'; if(!String(inv.custAddress||'').trim()) return 'adresse'; const it=(inv.items||[])[0]; if(!it||!num(it.price)) return 'position'; if(!inv.account) return 'konto'; return 'confirm'; };
+  const invFieldOptions=(need,inv)=>{ const dom=inv.domain||'unter';
+    if(need==='kunde'){ const cs=customersFor(dom).slice(0,6).filter(c=>(c.name||'').trim()).map(c=>({label:c.name,value:c.name})); return cs.length?cs:null; }
+    if(need==='konto'){ const o=[{label:'Firma',value:'Firma'}]; PROPS.forEach(p=>{ if(names[p]) o.push({label:names[p],value:names[p]}); }); o.push({label:'Privat',value:'Privat'}); return o; }
+    return null;
+  };
   const askNextInvoiceField=(inv)=>{ const need=nextInvoiceNeed(inv); setBotFlow({type:'invoice', inv, step:need});
     if(need==='confirm'){ const cust=invCustomer(inv); const tot=invTotals(inv.items); const posL=(inv.items||[]).map(i=>i.desc+' · '+fmt(num(i.price)*num(i.qty||1))).join(', '); setBotMsgs(m=>[...m,{role:'assistant',content:'Bitte prüfen:\n• Kunde: '+((cust.name||inv.custName)||'—')+'\n• Adresse: '+(inv.custAddress||'—')+'\n• Position: '+posL+'\n• Konto: '+accLabel(inv.account)+'\n• Gesamt: '+fmt(tot.gross)+'\n\nSoll ich die Rechnung erstellen und buchen?', action:{type:'confirmInvoice'}}]); return; }
-    const Q={ kunde:'An welchen Kunden soll die Rechnung gehen? (Name)', adresse:'Wie lautet die Anschrift des Kunden? (Straße, PLZ Ort)', position:'Was soll berechnet werden? Beschreibung + Betrag, z. B. „Webdesign 1500".', konto:'Auf welches Konto soll die Rechnung gebucht werden? (z. B. Firma, '+(names[PROPS[0]]||'Immobilie')+', Privat)' };
-    setBotMsgs(m=>[...m,{role:'assistant',content:Q[need]||'Bitte ergänzen.'}]);
+    const Q={ kunde:'An welchen Kunden soll die Rechnung gehen? (Name)', adresse:'Wie lautet die Anschrift des Kunden? (Straße, PLZ Ort)', position:'Was soll berechnet werden? Beschreibung + Betrag, z. B. „Webdesign 1500".', konto:'Auf welches Konto soll die Rechnung gebucht werden?' };
+    const opts=invFieldOptions(need,inv);
+    setBotMsgs(m=>[...m,{role:'assistant',content:Q[need]||'Bitte ergänzen.', action: opts?{type:'options',options:opts}:null}]);
   };
   const startInvoiceFlow=(q)=>{ const ql=String(q||'').toLowerCase(); const dom=/immobil|vermiet|\bmiete\b/.test(ql)?'immo':'unter'; const inv=newInvoice(dom);
     let m=q.match(/(?:^|\s)(?:an|für)\s+(?:die\s+|herr[n]?\s+|frau\s+)?([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-&]{1,40}?)(?=\s+(?:über|betrag|für|mit|,|\.|$))/i) || q.match(/kunde[n]?\s+([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-&]{1,40})/i);
@@ -2433,10 +2439,13 @@ function App({session}) {
     return saved;
   };
   const finalizeBotInvoice = async ()=>{ const flow=botFlow; if(!flow||botBusy) return; setBotBusy(true); setBotFlow(null); setBotMsgs(m=>[...m,{role:'assistant',content:'Erstelle und buche die Rechnung …'}]);
-    try{ const saved=await bookInvoiceObj(flow.inv); setBotMsgs(m=>[...m,{role:'assistant',content:'✅ Rechnung '+saved.number+' erstellt und auf „'+accLabel(saved.account)+'" gebucht.', action:{type:'showInvoice', invId:saved.id}}]); }
+    try{ const saved=await bookInvoiceObj(flow.inv); const cust=invCustomer(saved); const hasMail=!!String(cust.email||'').trim(); setBotMsgs(m=>[...m,{role:'assistant',content:'✅ Rechnung '+saved.number+' erstellt und auf „'+accLabel(saved.account)+'" gebucht.'+(hasMail?'\n\nSoll ich sie '+(cust.name?('an '+cust.name+' '):'')+'per E-Mail an '+cust.email+' senden?':'\n\nMöchtest du sie ansehen oder per E-Mail senden?'), action:{type:'invoiceDone', invId:saved.id, hasMail}}]); }
     catch(e){ setBotMsgs(m=>[...m,{role:'assistant',content:'⚠️ Konnte die Rechnung nicht erstellen: '+(e.message||e)}]); }
     setBotBusy(false);
   };
+  // Rechnung aus dem Chat ansehen (PDF) / per E-Mail senden (öffnet Versandvorschau)
+  const botPreviewInvoice = async (invId)=>{ const inv=(data.invoices||[]).find(x=>x.id===invId); if(!inv){ setToast('Rechnung nicht gefunden'); return; } try{ setToast('📄 Erzeuge Vorschau…'); const blob=await buildInvoicePDF(inv); const url=URL.createObjectURL(blob); showFilePreview(url,'Rechnung_'+(inv.number||'')+'.pdf'); setTimeout(()=>URL.revokeObjectURL(url),60000); }catch(e){ setToast('Vorschau-Fehler: '+(e.message||e)); } };
+  const botStartSend = (invId)=>{ const inv=(data.invoices||[]).find(x=>x.id===invId); if(!inv){ setToast('Rechnung nicht gefunden'); return; } openMailCompose(inv); setBotMsgs(m=>[...m,{role:'assistant',content:'Ich habe die Versandvorschau geöffnet – prüfe Empfänger, Betreff und Text. Die Rechnung geht erst raus, wenn du dort auf „Jetzt senden" klickst.'}]); };
 
   const botSend = async (text)=>{ const q=(text!=null?text:botInput).trim(); const file=botFile; if(botBusy) return; if(!q && !file) return;
     setBotMsgs(m=>[...m,{role:'user',content:(q||'')+(file?((q?' ':'')+'📎 '+file.name):'')}]); setBotInput('');
@@ -4892,6 +4901,8 @@ function App({session}) {
                 {a && isLast && a.type==='import' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>applyBotImport(a.drafts)} style={primBot}>In Import übernehmen</button><button onClick={()=>setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x))} style={ghostBot}>Abbrechen</button></div>}
                 {a && isLast && a.type==='confirmInvoice' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={finalizeBotInvoice} style={primBot}>Ja, erstellen</button><button onClick={()=>{ setBotFlow(null); setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x).concat([{role:'assistant',content:'Okay, abgebrochen.'}])); }} style={ghostBot}>Abbrechen</button></div>}
                 {a && a.type==='showInvoice' && (()=>{ const iv=(data.invoices||[]).find(x=>x.id===a.invId); if(!iv) return null; return <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>setInvView(iv)} style={primBot}>Ansehen</button><button onClick={()=>openMailCompose(iv)} style={ghostBot}>Senden</button><button onClick={()=>downloadInvoicePDF(iv)} style={ghostBot}>PDF</button></div>; })()}
+                {a && isLast && a.type==='options' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>{(a.options||[]).map((o,oi)=><button key={oi} onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botSend(o.value); }} style={ghostBot}>{o.label}</button>)}</div>}
+                {a && a.type==='invoiceDone' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>{a.hasMail && <button onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botStartSend(a.invId); }} style={primBot}>✉️ Per E-Mail senden</button>}<button onClick={()=>botPreviewInvoice(a.invId)} style={ghostBot}>📄 Ansehen</button>{!a.hasMail && <button onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botStartSend(a.invId); }} style={ghostBot}>✉️ Senden</button>}<button onClick={()=>setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x).concat([{role:'assistant',content:'Alles erledigt. 👍'}]))} style={ghostBot}>Fertig</button></div>}
               </div>
             ); })}
             {botBusy && <div style={{display:'flex',justifyContent:'flex-start'}}><div style={{background:C.surf2,color:C.sub,borderRadius:13,padding:'9px 12px',fontSize:13.5}}>… einen Moment</div></div>}
