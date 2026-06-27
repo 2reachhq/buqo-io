@@ -476,6 +476,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
   const [catMenu,setCatMenu]=useState(null); // {left,top,bottom} Kategorie-Dropdown
   const [drawer,setDrawer]=useState(false); // Detail-Drawer (von rechts)
   const [recurEditOpen,setRecurEditOpen]=useState(false); // wiederkehrend: Bearbeitungsmaske statt Übersicht
+  const [moveFly,setMoveFly]=useState(false); // „Verschieben"-Hover-Flyout (Konten direkt daneben)
   const [uploading,setUploading]=useState(false); // Beleg-Upload/Auslesen läuft
   const [dlg,setDlg]=useState(null);     // 'range'|'move'
   const [mvDest,setMvDest]=useState((moveTargets&&moveTargets[0]&&moveTargets[0].key)||'');
@@ -538,7 +539,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
   const bookingMissing=(it)=>{ if(isPrivatItem) return []; const m=[]; if(!String(it.name||'').trim())m.push('Name'); if(!String(it.belegnr||'').trim())m.push('Beleg-Nr'); if(!isoDate(it.datum))m.push(kind==='aus'?'Abbuchungsdatum':kind==='ein'?'Eingangsdatum':'Datum'); if(!num(it.amount))m.push('Betrag'); if(!String(it.category||'').trim())m.push('Kategorie'); return m; };
 
   return (
-    <div onClick={()=>{ if(!selMode){ setRecurEditOpen(false); setDrawer(true); } }} style={{background:C.surf2,border:'1px solid '+(drawer?acc:C.bdr),borderRadius:14,padding:'12px 14px',cursor:selMode?'default':'pointer',transition:'border-color .14s'}}>
+    <div onClick={()=>{ if(!selMode){ setRecurEditOpen(false); setDrawer(true); } }} onContextMenu={e=>{ if(selMode) return; e.preventDefault(); const up=(e.clientY+340)>window.innerHeight; setMoveFly(false); setMenu({ right:Math.max(8, window.innerWidth-e.clientX), top:up?null:e.clientY, bottom:up?(window.innerHeight-e.clientY):null }); }} style={{background:C.surf2,border:'1px solid '+(drawer?acc:C.bdr),borderRadius:14,padding:'12px 14px',cursor:selMode?'default':'pointer',transition:'border-color .14s'}}>
       <div style={{display:'flex',gap:13,alignItems:'center'}}>
         {selMode && (
           <button onClick={e=>{e.stopPropagation();onToggleSelect&&onToggleSelect();}} title="Auswählen" style={{width:24,height:24,flexShrink:0,borderRadius:6,border:'1.5px solid '+(selected?acc:C.bdrM),background:selected?acc:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>
@@ -707,12 +708,28 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
 
       {/* Kompaktes Dropdown */}
       {menu && (
-        <div onClick={()=>setMenu(null)} style={{position:'fixed',inset:0,zIndex:110}}>
+        <div onClick={()=>{setMenu(null);setMoveFly(false);}} style={{position:'fixed',inset:0,zIndex:110}}>
           <div onClick={e=>e.stopPropagation()} style={{position:'fixed',right:menu.right,top:menu.top!=null?menu.top:undefined,bottom:menu.bottom!=null?menu.bottom:undefined,width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
             {onEditDetails && mItem(P.brief,'Kundendetails…',()=>{setMenu(null);onEditDetails(item.id);},acc)}
             {mItem(P.doc,'Öffnen / Bearbeiten',()=>{setMenu(null);setDrawer(true);})}
             {onSetRange && mItem(P.cal,'Zeitraum (von–bis)',()=>{setMenu(null);setDlg('range');})}
-            {onMoveItem && mItem(P.out,'Verschieben…',()=>{setMenu(null);setDlg('move');})}
+            {onMoveItem && (
+              <div onMouseEnter={()=>setMoveFly(true)} onMouseLeave={()=>setMoveFly(false)} style={{position:'relative'}}>
+                <button onClick={()=>{setMoveFly(m=>!m);}} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:moveFly?C.surf2:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.out} sz={16} col={C.sub}/> <span style={{flex:1}}>Verschieben</span><span style={{color:C.mut,fontSize:15}}>›</span></button>
+                {moveFly && (
+                  <div style={{position:'absolute',top:-5,right:'100%',marginRight:6,width:204,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:5}}>
+                    {(moveTargets||[]).map(t=>{ const isImmo=t.key==='p1'||t.key==='p2'||t.key==='p3'; const col=acctColor(t.key); const icon=isImmo?P.house:t.key==='privat'?P.prson:P.brief; return (
+                      <button key={t.key} onClick={()=>{ onMoveItem(t.key, curY, curM); setMenu(null); setMoveFly(false); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 11px',fontSize:13.5,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                        <span style={{width:24,height:24,flexShrink:0,borderRadius:7,background:hexA(col,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={icon} sz={14} col={col}/></span>
+                        <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.label}</span>
+                      </button>
+                    ); })}
+                    <div style={{height:1,background:C.sep,margin:'4px 8px'}}/>
+                    <button onClick={()=>{ setMenu(null); setMoveFly(false); setDlg('move'); }} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 11px',fontSize:12.5,color:C.sub,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.cal} sz={13} col={C.mut}/> Anderen Monat wählen…</button>
+                  </div>
+                )}
+              </div>
+            )}
             {onMoveUp && !isFirst && mItem(P.up,'Nach oben',()=>{setMenu(null);onMoveUp();})}
             {onMoveDown && !isLast && mItem(P.down,'Nach unten',()=>{setMenu(null);onMoveDown();})}
             <div style={{height:1,background:C.sep,margin:'4px 8px'}}/>
@@ -4951,19 +4968,22 @@ function App({session}) {
       {draftCtx && (()=>{ const d=(data.drafts||[]).find(x=>x.id===draftCtx.id); if(!d) return null; const isSel=draftSel.includes(d.id); return (
         <div onClick={()=>setDraftCtx(null)} onContextMenu={e=>{e.preventDefault();setDraftCtx(null);}} style={{position:'fixed',inset:0,zIndex:155}}>
           <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:Math.min(draftCtx.x,window.innerWidth-222),top:Math.min(draftCtx.y,window.innerHeight-260),width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
-            {draftCtx.sub ? (()=>{ const kindLbl=d.kind==='ein'?'Einnahme':'Ausgabe'; const acc=[{k:'unter',l:names.unternehmen||'Firma'},{k:'p1',l:names.p1||'Immobilie 1'},{k:'p2',l:names.p2||'Immobilie 2'},{k:'p3',l:names.p3||'Immobilie 3'},{k:'privat',l:names.privatLabel||'Privat'}]; const aicon=k=>(k==='p1'||k==='p2'||k==='p3'?P.house:k==='privat'?P.prson:P.brief); return (<>
-              <button onClick={()=>setDraftCtx({...draftCtx,sub:false})} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 12px',fontSize:13,color:C.sub,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><span style={{fontSize:15}}>‹</span> Konto wählen · als {kindLbl}</button>
-              <div style={{height:1,background:C.sep,margin:'3px 8px'}}/>
-              {acc.map(a=>{ const col=acctColor(a.k); return (<button key={a.k} onClick={()=>{ const id=d.id; setDraftCtx(null); quickAssignDraft(id,a.k); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'10px 12px',fontSize:13.5,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><span style={{width:24,height:24,flexShrink:0,borderRadius:7,background:hexA(col,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={aicon(a.k)} sz={14} col={col}/></span> {a.l}</button>); })}
-            </>); })() : (<>
+            {(()=>{ const acc=[{k:'unter',l:names.unternehmen||'Firma'},{k:'p1',l:names.p1||'Immobilie 1'},{k:'p2',l:names.p2||'Immobilie 2'},{k:'p3',l:names.p3||'Immobilie 3'},{k:'privat',l:names.privatLabel||'Privat'}]; const aicon=k=>(k==='p1'||k==='p2'||k==='p3'?P.house:k==='privat'?P.prson:P.brief); const onLeft=draftCtx.x>window.innerWidth-440; return (<>
             <button onClick={()=>{ setDraftSel(s=>s.includes(d.id)?s.filter(x=>x!==d.id):[...s,d.id]); setDraftCtx(null); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.check} sz={15} col={isSel?C.pri:C.sub}/> {isSel?'Abwählen':'Auswählen'}</button>
-            <button onClick={()=>setDraftCtx({...draftCtx,sub:true})} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.out} sz={15} col={C.sub}/> <span style={{flex:1}}>Zuordnen</span><span style={{fontSize:15,color:C.mut}}>›</span></button>
+            <div onMouseEnter={()=>setDraftCtx(c=>c?{...c,sub:true}:c)} onMouseLeave={()=>setDraftCtx(c=>c?{...c,sub:false}:c)} style={{position:'relative'}}>
+              <button onClick={()=>setDraftCtx(c=>c?{...c,sub:!c.sub}:c)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:draftCtx.sub?C.surf2:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.out} sz={15} col={C.sub}/> <span style={{flex:1}}>Zuordnen</span><span style={{fontSize:15,color:C.mut}}>{onLeft?'‹':'›'}</span></button>
+              {draftCtx.sub && (
+                <div style={{position:'absolute',top:-5,[onLeft?'right':'left']:'100%',[onLeft?'marginRight':'marginLeft']:6,width:204,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:5}}>
+                  {acc.map(a=>{ const col=acctColor(a.k); return (<button key={a.k} onClick={()=>{ const id=d.id; setDraftCtx(null); quickAssignDraft(id,a.k); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'10px 12px',fontSize:13.5,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><span style={{width:24,height:24,flexShrink:0,borderRadius:7,background:hexA(col,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={aicon(a.k)} sz={14} col={col}/></span> {a.l}</button>); })}
+                </div>
+              )}
+            </div>
             <button onClick={()=>{ setDraftEdit(d.id); setDraftCtx(null); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.brief} sz={15} col={C.sub}/> Details öffnen</button>
             <div style={{height:1,background:C.sep,margin:'4px 8px'}}/>
             {!d.privat && <button onClick={()=>{ const id=d.id; setDraftCtx(null); markDraftPrivat(id); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.prson} sz={15} col={'#ABC4FF'}/> Privat markieren</button>}
             {!d.ignored && <button onClick={()=>{ const id=d.id; setDraftCtx(null); markDraftIgnore(id); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.sub,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.close} sz={15} col={C.mut}/> Ignorieren</button>}
             {(d.privat||d.ignored) && <button onClick={()=>{ const id=d.id; setDraftCtx(null); restoreDraft(id); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.repeat} sz={15} col={C.sub}/> Rückgängig machen</button>}
-            </>)}
+            </>); })()}
           </div>
         </div>
       ); })()}
