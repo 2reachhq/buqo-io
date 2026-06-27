@@ -1161,6 +1161,7 @@ function App({session}) {
   const [draftDir,setDraftDir]= useState('alle'); // Kontoauszug-Richtungsfilter: 'alle'|'ein'|'aus'
   const [invDomain,setInvDomain]= useState('unter'); // Rechnungen/Kunden: Unternehmen vs. Immobilien
   const [invKind,setInvKind]= useState('einzel');    // Rechnungsart: einzel | wied
+  const [invRecurDlg,setInvRecurDlg]= useState(false); // „Wiederkehrend"-Dialog (Start/Ende/Intervall) im Rechnungs-Editor
   const [recInvEdit,setRecInvEdit]= useState(null);  // Editor wiederkehrende Rechnung
   const [yrView,setYrView]= useState('monat');       // Jahres- vs Monatsübersicht (Analytics, Standard=Monat)
   const [invPreview,setInvPreview]= useState(false); // große Rechnungsvorschau (Popup)
@@ -2188,8 +2189,10 @@ function App({session}) {
         else if(account==='privat'){ const s=M.privat||{}; M.privat= isExpense?{...s,items:[...(s.items||[]),item]}:{...s,einnahmen:[...(s.einnahmen||[]),item]}; }
         else { if(!M.props)M.props={}; const s=M.props[account]||{}; M.props[account]= isExpense?{...s,expenses:[...(s.expenses||[]),item]}:{...s,einnahmen:[...(s.einnahmen||[]),item]}; }
       }
+      // Wiederkehrend: einmalig eine Vorlage anlegen, die monatlich automatisch erzeugt wird
+      if(isNew && inv.recur){ const sd=new Date(toISO(inv.recur.start)||inv.date); const fy=isNaN(sd)?ty:sd.getFullYear(); const fm=isNaN(sd)?tm:sd.getMonth(); let toY2,toM2; if(inv.recur.end){ const ed=new Date(toISO(inv.recur.end)); toY2=isNaN(ed)?fy:ed.getFullYear(); toM2=isNaN(ed)?11:ed.getMonth(); } else { toY2=fy+5; toM2=11; } const rec={ id:uid(), domain:inv.domain||'unter', account, customerId:inv.customerId||'', custName:inv.custName||'', custAddress:inv.custAddress||'', custEmail:inv.custEmail||'', firstName:inv.firstName||'', lastName:inv.lastName||'', company:inv.company||'', anrede:inv.anrede||'', saveCust:false, fromY:fy, fromM:fm, toY:toY2, toM:toM2, items:(inv.items||[]).map(it=>({...it})), note:inv.note||'', headerText:inv.headerText, footerText:inv.footerText, active:true, interval:(inv.recur.interval||'monatlich'), fromInvoiceId:inv.id }; nd.recurInvoices=[...(nd.recurInvoices||[]), rec]; }
       return nd; });
-    setToast('Rechnung '+inv.number+' gespeichert'+(pdfPath?' (PDF abgelegt)':'')+' + als '+(isExpense?'Ausgabe':'Einnahme')+' gebucht'); setInvEdit(null);
+    setToast('Rechnung '+inv.number+' gespeichert'+(pdfPath?' (PDF abgelegt)':'')+(inv.recur?' + als wiederkehrend angelegt':'')+' + als '+(isExpense?'Ausgabe':'Einnahme')+' gebucht'); setInvEdit(null);
   };
   const uploadLogo = async (file, dom)=>{ try{ let blob=file; try{ blob=await compressImage(file,400,0.8); }catch(_){} const b64=await fileToB64(blob); setCompanyFor(dom||'unter',{logoData:'data:image/jpeg;base64,'+b64}); setToast('Logo gespeichert'); }catch(e){ setToast('Logo-Upload fehlgeschlagen: '+(e.message||e)); } };
   // Rechnungs-HTML (für Live-Vorschau & Druck/PDF)
@@ -3752,6 +3755,14 @@ function App({session}) {
                           <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Datum</div><DateField value={invEdit.date} onChange={v=>setI({date:v})} style={fld}/></div>
                           <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Fällig</div><DateField value={invEdit.due} onChange={v=>setI({due:v})} placeholder="—" style={fld}/></div>
                         </div>
+                        <div style={{marginTop:14,background:invEdit.recur?hexA(C.pri,0.08):C.surf2,border:'1px solid '+(invEdit.recur?hexA(C.pri,0.3):C.bdr),borderRadius:12,padding:'12px 14px'}}>
+                          <label style={{display:'flex',alignItems:'center',gap:11,cursor:'pointer'}}>
+                            <input type="checkbox" checked={!!invEdit.recur} onChange={e=>{ if(e.target.checked){ setI({recur:{interval:'monatlich', start:(invEdit.date||''), end:''}}); setInvRecurDlg(true); } else setI({recur:null}); }} style={{width:18,height:18,accentColor:C.pri}}/>
+                            <span style={{display:'flex',alignItems:'center',gap:7,fontSize:13.5,fontWeight:700,color:C.txt}}><Ic p={P.repeat} sz={15} col={invEdit.recur?C.pri:C.sub}/> Wiederkehrend</span>
+                            {invEdit.recur && <button onClick={(e)=>{e.preventDefault();setInvRecurDlg(true);}} style={{marginLeft:'auto',background:C.surf3,border:'1px solid '+C.bdr,color:C.pri,borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Bearbeiten</button>}
+                          </label>
+                          {invEdit.recur && <div style={{fontSize:12.5,color:C.sub,marginTop:9,paddingLeft:29}}>{({monatlich:'Monatlich',vierteljaehrlich:'Vierteljährlich',halbjaehrlich:'Halbjährlich',jaehrlich:'Jährlich',woechentlich:'Wöchentlich'})[invEdit.recur.interval]||'Monatlich'} · ab {invEdit.recur.start?(toISO(invEdit.recur.start)||invEdit.recur.start):'—'} {invEdit.recur.end?('bis '+(toISO(invEdit.recur.end)||invEdit.recur.end)):'· unbefristet'}</div>}
+                        </div>
                       </div>
                       <div style={{marginBottom:18}}>
                         <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:8,letterSpacing:'0.02em'}}>POSITIONEN</div>
@@ -3836,11 +3847,6 @@ function App({session}) {
                   <div style={{display:'inline-flex',gap:4,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:4}}>
                     {[['unter','Firma'],['immo','Immobilien']].map(([k,label])=>{ const on=invDomain===k; return (
                       <button key={k} onClick={()=>{setInvDomain(k);setInvSearch('');}} style={{background:on?C.pri:'transparent',color:on?C.priTxt:C.sub,border:'none',borderRadius:9,padding:'8px 17px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
-                    ); })}
-                  </div>
-                  <div style={{display:'inline-flex',gap:4,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:4}}>
-                    {[['einzel','Einzelrechnung'],['wied','Wiederkehrend']].map(([k,label])=>{ const on=invKind===k; return (
-                      <button key={k} onClick={()=>setInvKind(k)} style={{background:on?C.pri:'transparent',color:on?C.priTxt:C.sub,border:'none',borderRadius:9,padding:'8px 17px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
                     ); })}
                   </div>
                 </div>
@@ -4815,6 +4821,24 @@ function App({session}) {
             <div style={{display:'flex',gap:10}}>
               <button onClick={()=>setNewCust(null)} style={{flex:1,background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:10,padding:'12px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
               <button onClick={saveNewCust} style={{flex:2,background:C.pri,color:C.priTxt,border:'none',borderRadius:10,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Anlegen &amp; auswählen</button>
+            </div>
+          </div>
+        </div>
+      ); })()}
+
+      {invRecurDlg && invEdit && (()=>{ const rc=invEdit.recur||{interval:'monatlich',start:invEdit.date||'',end:''}; const setRc=patch=>setI({recur:{...rc,...patch}}); const fld2={width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,color:C.txt,padding:'11px 13px',fontSize:14,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}; const lbl2={fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}; return (
+        <div onClick={()=>setInvRecurDlg(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:175,padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'22px',maxWidth:440,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)',maxHeight:'88vh',overflowY:'auto'}}>
+            <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:4}}><Ic p={P.repeat} sz={18} col={C.pri}/><div style={{fontSize:17,fontWeight:800,color:C.txt}}>Wiederkehrend</div></div>
+            <div style={{fontSize:12.5,color:C.sub,lineHeight:1.5,marginBottom:16}}>Lege fest, in welchem Rhythmus und Zeitraum diese Rechnung automatisch erzeugt werden soll.</div>
+            <div style={{marginBottom:12}}><div style={lbl2}>Intervall</div><select value={rc.interval||'monatlich'} onChange={e=>setRc({interval:e.target.value})} style={{...fld2,cursor:'pointer'}}><option value="woechentlich">Wöchentlich</option><option value="monatlich">Monatlich</option><option value="vierteljaehrlich">Vierteljährlich</option><option value="halbjaehrlich">Halbjährlich</option><option value="jaehrlich">Jährlich</option></select></div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:18}}>
+              <div><div style={lbl2}>Startdatum</div><DateField value={rc.start} onChange={v=>setRc({start:v})} accent={C.pri} style={fld2}/></div>
+              <div><div style={lbl2}>Enddatum <span style={{color:C.mut}}>(optional)</span></div><DateField value={rc.end} onChange={v=>setRc({end:v})} accent={C.pri} placeholder="unbefristet" style={fld2}/></div>
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>{ setI({recur:null}); setInvRecurDlg(false); }} style={{flex:1,background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:10,padding:'12px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Entfernen</button>
+              <button onClick={()=>setInvRecurDlg(false)} style={{flex:2,background:C.pri,color:C.priTxt,border:'none',borderRadius:10,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Übernehmen</button>
             </div>
           </div>
         </div>
