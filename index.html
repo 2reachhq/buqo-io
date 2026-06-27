@@ -1227,6 +1227,9 @@ function App({session}) {
   useEffect(()=>{
     const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','mehr','settings','rechnung','kunden','belege','kosten']);
     const apply=()=>{ const raw=(window.location.hash||'').replace(/^#\/?/,''); if(!raw) return; const parts=raw.split('/'); const head=parts[0];
+      if(head!=='erfassen') setCapture(null);
+      if(head!=='rechnung-erstellen') setInvEdit(null);
+      if(head==='erfassen' || head==='rechnung-erstellen') return;
       if(head==='analyse'){ setTab('yr'); if(parts[1]) setYrView(parts[1]==='jahresuebersicht'?'jahr':'monat'); return; }
       if(valid.has(head)){ setTab(head); return; }
       // Konto-Slug → Konten-Akkordeon öffnen
@@ -1242,13 +1245,15 @@ function App({session}) {
   const firstRoute = useRef(true);
   useEffect(()=>{ if(firstRoute.current){ firstRoute.current=false; return; } try{
     let route=tab;
-    if(tab==='quellen' && openAcct){ const v=openAcct==='unter'?unterTab:openAcct==='privat'?privTab:immoView; route=acctSlug(openAcct)+'/'+subSlug(v); }
+    if(capture) route='erfassen';
+    else if(invEdit) route='rechnung-erstellen';
+    else if(tab==='quellen' && openAcct){ const v=openAcct==='unter'?unterTab:openAcct==='privat'?privTab:immoView; route=acctSlug(openAcct)+'/'+subSlug(v); }
     else if(tab==='unter') route='firma/'+subSlug(unterTab);
     else if(tab==='privat') route='privat/'+subSlug(privTab);
     else if(tab==='immo') route=acctSlug(sp)+'/'+subSlug(immoView);
     else if(tab==='yr') route='analyse/'+(yrView==='jahr'?'jahresuebersicht':'monatsuebersicht');
     if((window.location.hash||'').replace(/^#\/?/,'')!==route) window.history.pushState(null,'','#/'+route);
-  }catch(e){} },[tab,openAcct,unterTab,privTab,immoView,sp,names,yrView]);
+  }catch(e){} },[tab,openAcct,unterTab,privTab,immoView,sp,names,yrView,capture,invEdit]);
   const askConfirm = (message, onConfirm, title) => setConfirmState({message, onConfirm, title: title||'Wirklich löschen?'});
   const askChoice = (title, message, choices) => setConfirmState({title, message, choices});
   const savedRef  = useRef(true);
@@ -3617,13 +3622,14 @@ function App({session}) {
               const A=KONTO_COLORS.unter;
               const invValid = (invEdit.firstName||invEdit.lastName||invEdit.company||invEdit.custName||'').trim() && (invEdit.custAddress||'').trim() && (invEdit.account||'unter');
               return (
-                <>
-                  <button onClick={()=>setInvEdit(null)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:10}}>‹ Rechnungen</button>
-                  <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
-                    <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em'}}>Rechnung {invEdit.number}</div>
-                    <span style={{fontSize:12,fontWeight:600,color:A.c,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),borderRadius:8,padding:'4px 11px'}}>{(invEdit.domain||'unter')==='immo'?'Immobilien':'Firma'}</span>
+                <div style={{position:'fixed',inset:0,background:C.bg,zIndex:135,display:'flex',flexDirection:'column'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:14,padding:'16px 26px',borderBottom:'1px solid '+C.bdr,flexShrink:0}}>
+                    <button onClick={()=>setInvEdit(null)} title="Zurück" style={{display:'flex',alignItems:'center',gap:7,background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:10,padding:'8px 14px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><span style={{fontSize:16,lineHeight:1}}>←</span> Zurück</button>
+                    <div style={{fontSize:17,fontWeight:800,color:C.txt,letterSpacing:'-0.02em'}}>Rechnung erstellen</div>
+                    <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:10}}><span style={{fontSize:13,color:C.mut}}>Nr. {invEdit.number}</span><span style={{fontSize:12,fontWeight:600,color:A.c,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),borderRadius:8,padding:'4px 11px'}}>{(invEdit.domain||'unter')==='immo'?'Immobilien':'Firma'}</span></div>
                   </div>
-                  <button onClick={()=>{ setRecText(''); setAiCap({parsed:null}); }} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',maxWidth:isMobile?'100%':520,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),color:A.c,borderRadius:12,padding:'12px 14px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:16}}><span style={{fontSize:16}}>✨</span> Mit KI erfassen</button>
+                  <div style={{flex:1,minHeight:0,overflowY:'auto',padding:isMobile?'16px 14px 60px':'22px 30px 60px'}}>
+                  <button onClick={()=>{ setRecText(''); setAiCap({parsed:null}); }} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',maxWidth:isMobile?'100%':520,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),color:A.c,borderRadius:12,padding:'12px 14px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:16}}><span style={{fontSize:16}}>✨</span> Mit AI erfassen</button>
                   {(
                     <div style={{display:'flex',flexDirection:isMobile?'column':'row-reverse',gap:16,alignItems:'flex-start'}}>
                       {/* RECHTS (Felder) – per row-reverse rechts, Vorschau links wie beim Beleg-Erfassen */}
@@ -3708,6 +3714,7 @@ function App({session}) {
                       )}
                     </div>
                   )}
+                  </div>
                   {/* Große Vorschau (Popup) */}
                   {invPreview && (
                     <div onClick={()=>setInvPreview(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:140,display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?12:32}}>
@@ -3723,7 +3730,7 @@ function App({session}) {
                       </div>
                     </div>
                   )}
-                </>
+                </div>
               );
             }
 
