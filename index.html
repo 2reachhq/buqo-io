@@ -3355,7 +3355,7 @@ function App({session}) {
                           : (sel.fileData? <img src={sel.fileData} alt="Beleg" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:12,boxShadow:'0 10px 40px rgba(0,0,0,0.4)'}}/>
                              : (sel.filePath? <button onClick={()=>openFile(sel.filePath,sel.fileName)} style={{display:'inline-flex',alignItems:'center',gap:8,background:hexA(C.pri,0.16),border:'none',color:C.pri,borderRadius:11,padding:'12px 18px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.doc} sz={16} col={C.pri}/> Beleg ansehen</button>
                                 : <div style={{color:C.mut,fontSize:13}}>Kein Vorschaubild</div>)))
-                          : <div style={{textAlign:'center',color:C.mut,maxWidth:280}}><Ic p={P.clip} sz={30} col={C.mut}/><div style={{marginTop:12,fontSize:13.5,lineHeight:1.5}}>Wähle rechts einen offenen Beleg – die Vorschau erscheint hier.</div></div>}
+                          : <div style={{display:'flex',flexDirection:'column',alignItems:'center',textAlign:'center',color:C.mut,maxWidth:280}}><Ic p={P.clip} sz={30} col={C.mut}/><div style={{marginTop:12,fontSize:13.5,lineHeight:1.5}}>Wähle rechts einen offenen Beleg – die Vorschau erscheint hier.</div></div>}
                       </div>
                       <div style={{width:isMobile?'auto':'min(480px,46%)',flexShrink:0,overflowY:'auto',padding:isMobile?'18px 18px 40px':'24px 26px 48px'}}>
                         <div style={{fontSize:12.5,color:C.sub,lineHeight:1.5,marginBottom:14}}>Bankbewegung <b style={{color:C.txt}}>{d.name||'—'}</b> · {fmt(num(d.amount))}{d.datum?(' · '+(toISO(d.datum)||d.datum)):''} — wähle den passenden offenen Beleg.</div>
@@ -3625,8 +3625,8 @@ function App({session}) {
                   </div>
                   <button onClick={()=>{ setRecText(''); setAiCap({parsed:null}); }} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',maxWidth:isMobile?'100%':520,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),color:A.c,borderRadius:12,padding:'12px 14px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:16}}><span style={{fontSize:16}}>✨</span> Mit KI erfassen</button>
                   {(
-                    <div style={{display:'flex',flexDirection:isMobile?'column':'row',gap:16,alignItems:'flex-start'}}>
-                      {/* LINKS: Formular */}
+                    <div style={{display:'flex',flexDirection:isMobile?'column':'row-reverse',gap:16,alignItems:'flex-start'}}>
+                      {/* RECHTS (Felder) – per row-reverse rechts, Vorschau links wie beim Beleg-Erfassen */}
                       <div style={{flex:1,minWidth:0,width:isMobile?'100%':'auto'}}>
                       <div style={{...SC,marginBottom:14,display:'flex',flexDirection:'column',gap:12}}>
                         <div>
@@ -4718,10 +4718,17 @@ function App({session}) {
       {/* ── Rechts-Klick-Menü auf einem Import-Entwurf ── */}
       {draftCtx && (()=>{ const d=(data.drafts||[]).find(x=>x.id===draftCtx.id); if(!d) return null; const isSel=draftSel.includes(d.id); return (
         <div onClick={()=>setDraftCtx(null)} onContextMenu={e=>{e.preventDefault();setDraftCtx(null);}} style={{position:'fixed',inset:0,zIndex:155}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:Math.min(draftCtx.x,window.innerWidth-210),top:Math.min(draftCtx.y,window.innerHeight-170),width:200,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:Math.min(draftCtx.x,window.innerWidth-222),top:Math.min(draftCtx.y,window.innerHeight-260),width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+            {draftCtx.sub ? (()=>{ const acc = d.kind==='ein' ? [{k:'unterInc',l:(names.unternehmen||'Firma')+' · Einnahmen'}] : [{k:'unterExp',l:(names.unternehmen||'Firma')+' · Ausgaben'},{k:'p1',l:names.p1||'Immobilie 1'},{k:'p2',l:names.p2||'Immobilie 2'},{k:'p3',l:names.p3||'Immobilie 3'},{k:'privat',l:names.privatLabel||'Privat'}]; return (<>
+              <button onClick={()=>setDraftCtx({...draftCtx,sub:false})} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 12px',fontSize:13,color:C.sub,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><span style={{fontSize:15}}>‹</span> Konto wählen</button>
+              <div style={{height:1,background:C.sep,margin:'3px 8px'}}/>
+              {acc.map(a=>(<button key={a.k} onClick={()=>{ const id=d.id; setDraftCtx(null); assignDrafts([id],a.k,yr,mo); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:13.5,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={a.k==='p1'||a.k==='p2'||a.k==='p3'?P.house:a.k==='privat'?P.prson:P.brief} sz={15} col={C.sub}/> {a.l}</button>))}
+            </>); })() : (<>
             <button onClick={()=>{ setDraftSel(s=>s.includes(d.id)?s.filter(x=>x!==d.id):[...s,d.id]); setDraftCtx(null); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.check} sz={15} col={isSel?C.pri:C.sub}/> {isSel?'Abwählen':'Auswählen'}</button>
+            <button onClick={()=>setDraftCtx({...draftCtx,sub:true})} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.out} sz={15} col={C.sub}/> <span style={{flex:1}}>Zuordnen</span><span style={{fontSize:15,color:C.mut}}>›</span></button>
             <button onClick={()=>{ setDraftEdit(d.id); setDraftCtx(null); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.brief} sz={15} col={C.sub}/> Details öffnen</button>
             <button onClick={()=>{ const id=d.id; setDraftCtx(null); askConfirm('Buchung „'+(d.name||'ohne Namen')+'" löschen?',()=>delDraft(id)); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.red,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.trash} sz={15} col={C.red}/> Löschen</button>
+            </>)}
           </div>
         </div>
       ); })()}
