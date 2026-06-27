@@ -450,7 +450,7 @@ function TargetPicker({title, moveTargets, curY, curM, confirmLabel, onClose, on
 }
 
 /* ══ Item row (Name + Betrag + kompaktes ⋮-Dropdown) ══ */
-function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, onUpdate, onDelete, onApplyAll, onTaxTip, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, askChoice, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur}) {
+function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, onUpdate, onDelete, onApplyAll, onTaxTip, folderPath, onUploadFile, onOpenFile, onDeleteFile, onToggleRecurring, onSetRange, curY, curM, askConfirm, askChoice, onEditDetails, moveTargets, onMoveItem, selMode, selected, onToggleSelect, onMoveUp, onMoveDown, isFirst, isLast, hideRecur, recurInfoFn}) {
   const acc = accent||C.pri;
   const dateLabel = kind==='aus' ? 'Abbuchungsdatum' : kind==='ein' ? 'Eingangsdatum' : 'Datum';
   // Löschen anfragen – bei wiederkehrenden Posten: Monat vs. alle Monate
@@ -469,6 +469,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
   const [menu,setMenu]=useState(null);   // {top,bottom,right}
   const [catMenu,setCatMenu]=useState(null); // {left,top,bottom} Kategorie-Dropdown
   const [drawer,setDrawer]=useState(false); // Detail-Drawer (von rechts)
+  const [recurEditOpen,setRecurEditOpen]=useState(false); // wiederkehrend: Bearbeitungsmaske statt Übersicht
   const [uploading,setUploading]=useState(false); // Beleg-Upload/Auslesen läuft
   const [dlg,setDlg]=useState(null);     // 'range'|'move'
   const [mvDest,setMvDest]=useState((moveTargets&&moveTargets[0]&&moveTargets[0].key)||'');
@@ -531,7 +532,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
   const bookingMissing=(it)=>{ if(isPrivatItem) return []; const m=[]; if(!String(it.name||'').trim())m.push('Name'); if(!String(it.belegnr||'').trim())m.push('Beleg-Nr'); if(!isoDate(it.datum))m.push(kind==='aus'?'Abbuchungsdatum':kind==='ein'?'Eingangsdatum':'Datum'); if(!num(it.amount))m.push('Betrag'); if(!String(it.category||'').trim())m.push('Kategorie'); return m; };
 
   return (
-    <div onClick={()=>{ if(!selMode) setDrawer(true); }} style={{background:C.surf2,border:'1px solid '+(drawer?acc:C.bdr),borderRadius:14,padding:'12px 14px',cursor:selMode?'default':'pointer',transition:'border-color .14s'}}>
+    <div onClick={()=>{ if(!selMode){ setRecurEditOpen(false); setDrawer(true); } }} style={{background:C.surf2,border:'1px solid '+(drawer?acc:C.bdr),borderRadius:14,padding:'12px 14px',cursor:selMode?'default':'pointer',transition:'border-color .14s'}}>
       <div style={{display:'flex',gap:13,alignItems:'center'}}>
         {selMode && (
           <button onClick={e=>{e.stopPropagation();onToggleSelect&&onToggleSelect();}} title="Auswählen" style={{width:24,height:24,flexShrink:0,borderRadius:6,border:'1.5px solid '+(selected?acc:C.bdrM),background:selected?acc:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>
@@ -583,6 +584,22 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
               </div>
             )}
 
+            {item.recurring && !recurEditOpen && (()=>{ const occ=(recurInfoFn?recurInfoFn(item):[]); const M3=(o)=>MONTHS[o.m].slice(0,3)+' '+o.y; const since=(hasFrom?M3(item.from):(occ[0]?(MONTHS[occ[0].m]+' '+occ[0].y):(isoDate(item.datum)||'—'))); const sLbl=s=>s==='bezahlt'?'Bezahlt':s==='abgebucht'?'Abgebucht':'Offen'; const sCol=s=>(s==='bezahlt'||s==='abgebucht')?C.grn:'#FFB37A'; const kindW=kind==='ein'?'Einnahme':'Ausgabe'; return (
+              <div style={{marginBottom:4}}>
+                <div style={{background:hexA(acc,0.10),border:'1px solid '+hexA(acc,0.30),borderRadius:14,padding:'15px 16px',marginBottom:16}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,fontSize:13,color:C.txt,fontWeight:700,marginBottom:10}}><Ic p={P.repeat} sz={15} col={acc}/> Wiederkehrende {kindW}</div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'5px 0'}}><span style={{color:C.sub}}>Läuft seit</span><span style={{color:C.txt,fontWeight:600}}>{since}</span></div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'5px 0'}}><span style={{color:C.sub}}>Betrag</span><span style={{color:C.txt,fontWeight:600,...NUM}}>{money}</span></div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'5px 0'}}><span style={{color:C.sub}}>Aktivitäten</span><span style={{color:C.txt,fontWeight:600}}>{occ.length} {occ.length===1?'Monat':'Monate'}</span></div>
+                </div>
+                <div style={{fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.05em',marginBottom:8}}>VERLAUF</div>
+                <div style={{display:'flex',flexDirection:'column',gap:7,marginBottom:18,maxHeight:240,overflowY:'auto'}}>
+                  {occ.length? occ.slice().reverse().map((o,i)=>(<div key={i} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:11,padding:'10px 13px'}}><span style={{fontSize:13.5,color:C.txt,fontWeight:600}}>{MONTHS[o.m]} {o.y}</span><span style={{display:'flex',alignItems:'center',gap:8}}><span style={{fontSize:13,...NUM,color:C.sub}}>{fmt(o.amount)}</span><span style={{fontSize:11,fontWeight:700,color:sCol(o.status),background:hexA(sCol(o.status),0.16),borderRadius:7,padding:'2px 9px'}}>{sLbl(o.status)}</span></span></div>)) : <div style={{fontSize:13,color:C.mut,padding:'6px 2px'}}>Noch kein Verlauf.</div>}
+                </div>
+                <button onClick={()=>setRecurEditOpen(true)} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:acc,color:'#0A0A0A',border:'none',borderRadius:12,padding:'13px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.brief} sz={15} col={'#0A0A0A'}/> Wiederkehrende {kindW} bearbeiten</button>
+              </div>
+            ); })()}
+            {(!item.recurring || recurEditOpen) && (<>
             {item.recurring && onApplyAll && (
               <div style={{background:hexA(acc,0.10),border:'1px solid '+hexA(acc,0.30),borderRadius:11,padding:'12px 13px',marginBottom:18}}>
                 <div style={{display:'flex',alignItems:'center',gap:8,fontSize:12.5,color:C.txt,fontWeight:600,marginBottom:4}}><Ic p={P.repeat} sz={14} col={acc}/> Wiederkehrender Posten</div>
@@ -664,6 +681,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
 
 
             <button onClick={()=>requestDelete(()=>setDrawer(false))} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.redL,border:'none',borderRadius:10,padding:'11px',fontSize:14,fontWeight:600,color:C.red,cursor:'pointer',fontFamily:'inherit',marginTop:6}}><Ic p={P.trash} sz={15} col={C.red}/> Buchung löschen</button>
+            </>)}
           </div>
         </div>
       )}
@@ -802,7 +820,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
 }
 
 /* ══ Sortier-/Auswahl-Liste (Drag & Drop + Mehrfachauswahl) ══ */
-function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, updFn, delFn, recurFn, rangeFn, editFn, applyFn, taxTipFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, askChoice, curY, curM, hideRecur}) {
+function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn, onMakeInvoice, updFn, delFn, recurFn, rangeFn, editFn, applyFn, taxTipFn, folderPath, moveTargets, moveItemFn, moveFn, selMode, selIds, onToggleSel, onOpenFile, onUploadFile, onDeleteFile, askConfirm, askChoice, curY, curM, hideRecur, recurInfoFn}) {
   return (
     <div style={{display:'flex',flexDirection:'column',gap:10}}>
         {items.map((item,idx)=>(
@@ -821,7 +839,7 @@ function ItemList({items, srcKey, accent, kind, onExtract, custList, recurInvFn,
             selMode={selMode} selected={selIds&&selIds.includes(item.id)} onToggleSelect={()=>onToggleSel&&onToggleSel(item.id)}
             onMoveUp={moveFn?()=>moveFn(item.id,-1):null} onMoveDown={moveFn?()=>moveFn(item.id,1):null}
             isFirst={idx===0} isLast={idx===items.length-1}
-            hideRecur={hideRecur}
+            hideRecur={hideRecur} recurInfoFn={recurInfoFn}
           />
         ))}
     </div>
@@ -1996,6 +2014,8 @@ function App({session}) {
   // Aus einem wiederkehrenden Posten eine Rechnung vorbereiten (öffnet den Editor)
   const makeRecurInvoice = (item, dom)=>{ const domain=dom||'unter'; const inv=newInvoice(domain); inv.fromRecurId=item.id; if(item.invCustomerId){ const c=customers.find(x=>x.id===item.invCustomerId); if(c){ inv.customerId=c.id; inv.custName=c.name||''; inv.custAddress=c.address||''; inv.custEmail=c.email||''; inv.saveCust=false; } } inv.items=[{desc:item.name||'Leistung', qty:1, price:num(item.amount), mwst:defMwstFor(domain)}]; setInvDomain(domain); setTab('rechnung'); setInvEdit(inv); setToast('Rechnung aus „'+(item.name||'Posten')+'" vorbereitet'); };
   const recurInvoicesFor = (id)=> (data.invoices||[]).filter(iv=>iv.fromRecurId===id);
+  // Verlauf einer wiederkehrenden Buchung: alle Monate mit gleichem Namen (recurring) – {y,m,status,amount}
+  const recurInfoFn = (item)=>{ const nm=normName(item.name); if(!nm) return []; const occ=[]; Object.keys(data||{}).forEach(yk=>{ if(isNaN(+yk))return; const Y=data[yk]; if(!Y||typeof Y!=='object')return; Object.keys(Y).forEach(mk=>{ if(isNaN(+mk))return; const M=Y[mk]; if(!M)return; const scan=(arr)=>{ (arr||[]).forEach(it=>{ if(it.recurring && normName(it.name)===nm){ occ.push({y:+yk,m:+mk,status:it.status||'offen',amount:num(it.amount)}); } }); }; if(M.unternehmen){ scan(M.unternehmen.items); scan(M.unternehmen.clients); } if(M.privat){ scan(M.privat.items); scan(M.privat.einnahmen); } if(M.props)Object.keys(M.props).forEach(p=>{ const s=M.props[p]||{}; scan(s.einnahmen); scan(s.expenses); }); }); }); occ.sort((a,b)=> a.y-b.y || a.m-b.m); return occ; };
   // ── Wiederkehrende Rechnungen (Vorlagen → monatliche Auto-Erstellung) ──
   const recInvoices = data.recurInvoices || [];
   const setRecInvoices = updater => setData(prev=>{ const cur=prev.recurInvoices||[]; const next=typeof updater==='function'?updater(cur):updater; return {...prev, recurInvoices:next}; });
@@ -2673,7 +2693,7 @@ function App({session}) {
             </>)}
           </div>
         )}
-        <ItemList items={shown} srcKey={srcKey} accent={secAccent} kind={kindEff} onExtract={extractToItem} custList={customers} recurInvFn={recurInvoicesFor} onMakeInvoice={(it)=>makeRecurInvoice(it,(folderPath&&folderPath[0]==='Immobilien')?'immo':'unter')}
+        <ItemList items={shown} srcKey={srcKey} accent={secAccent} kind={kindEff} recurInfoFn={recurInfoFn} onExtract={extractToItem} custList={customers} recurInvFn={recurInvoicesFor} onMakeInvoice={(it)=>makeRecurInvoice(it,(folderPath&&folderPath[0]==='Immobilien')?'immo':'unter')}
           updFn={updFn} delFn={delFn} recurFn={recurFn} rangeFn={rangeFn} editFn={editFn} applyFn={applyFn}
           taxTipFn={async(it)=>{ try{ updFn(it.id,'taxTip','…'); const dom=(folderPath&&folderPath[0]==='Immobilien')?'immo':'unter'; const tip=await fetchTaxTip(it,dom); updFn(it.id,'taxTip',tip||'(keine Antwort)'); }catch(e){ updFn(it.id,'taxTip',''); setToast('Steuer-Tipp fehlgeschlagen: '+(e.message||e)); } }}
           folderPath={folderPath}
