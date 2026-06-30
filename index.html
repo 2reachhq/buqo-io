@@ -5256,9 +5256,10 @@ function App({session}) {
 function Root() {
   const [session,setSession]=useState(undefined);
   useEffect(()=>{
-    sb.auth.getSession().then(({data})=>setSession(data.session||null));
+    const t=setTimeout(()=>setSession(s=>s===undefined?null:s),7000);
+    sb.auth.getSession().then(({data})=>{ clearTimeout(t); setSession(data.session||null); });
     const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s));
-    return ()=>{ try{sub.subscription.unsubscribe();}catch(e){} };
+    return ()=>{ clearTimeout(t); try{sub.subscription.unsubscribe();}catch(e){} };
   },[]);
   if(session===undefined) return <Splash text="Wird geladen…" />;
   if(!session) return <Login />;
