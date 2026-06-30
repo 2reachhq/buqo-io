@@ -91,7 +91,7 @@ const acctColor=(key)=>{ const i=ACCT_ORDER.indexOf(key); return ACCT_PAL[i>=0?i
 /* ══ Helpers ══ */
 const FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', system-ui, sans-serif";
 const NUM  = {fontVariantNumeric:'tabular-nums', letterSpacing:'-0.02em'};
-const fmt  = v => new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v||0);
+const fmt  = v => new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',minimumFractionDigits:2,maximumFractionDigits:2}).format(v||0);
 const fmtN = v => ((v||0)>0 ? '-' : '')+fmt(v||0);
 const cleanMd = t => String(t||'').replace(/^\s{0,3}#{1,6}\s*/gm,'').replace(/\*\*(.*?)\*\*/g,'$1').replace(/\*(.*?)\*/g,'$1').replace(/`+/g,'').replace(/^\s*[-*]\s+/gm,'• ').trim();
 
@@ -1490,6 +1490,12 @@ function App({session}) {
     for(let m=0;m<12;m++){if(!nd[yr][m])nd[yr][m]=emptyMonth();nd[yr][m]=fn(nd[yr][m]);}
     return nd;
   });
+  /* Wie updAll, aber über ALLE Jahre/Monate die bereits Daten haben (für Löschen wiederkehrender Posten – sonst bleiben Kopien in anderen Jahren stehen). */
+  const updAllYears = fn => setData(prev=>{
+    const nd=JSON.parse(JSON.stringify(prev));
+    Object.keys(nd).forEach(y=>{ if(!/^\d+$/.test(y))return; Object.keys(nd[y]||{}).forEach(m=>{ if(nd[y][m]) nd[y][m]=fn(nd[y][m]); }); });
+    return nd;
+  });
 
   /* ── Dateien: Upload / Öffnen / Löschen (Supabase Storage) ── */
   const uploadFile = async (file, folderPath, setItemFile, desiredName) => {
@@ -1621,7 +1627,7 @@ function App({session}) {
   const updPropSub=(pid,sub,id,fld,val)=>{ const fn=md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,[sub]:(p[sub]||[]).map(i=>i.id!==id?i:((fld==='__file__'||fld==='__merge__')?{...i,...val}:{...i,[fld]:fld==='amount'?num(val):val}))}}};}; upd(fn); };
   // Wiederkehrenden Posten (mit allen Feldern) in ALLE Monate übernehmen
   const applyRecurPropSub=(pid,sub,item)=>updAll(md=>{const p=md.props?.[pid]||emptyProp();const arr=(p[sub]||[]);const has=arr.some(i=>i.id===item.id);const na=has?arr.map(i=>i.id===item.id?{...item}:i):[...arr,{...item}];return{...md,props:{...md.props,[pid]:{...p,[sub]:na}}};});
-  const delPropSub=(pid,sub,id,all)=>{const fn=md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,[sub]:(p[sub]||[]).filter(i=>i.id!==id)}}};}; all?updAll(fn):upd(fn);};
+  const delPropSub=(pid,sub,id,all)=>{const fn=md=>{const p=md.props?.[pid]||emptyProp();return{...md,props:{...md.props,[pid]:{...p,[sub]:(p[sub]||[]).filter(i=>i.id!==id)}}};}; all?updAllYears(fn):upd(fn);};
   const movePropSub=(pid,sub,id,dir)=>upd(md=>{const p=md.props?.[pid]||emptyProp();const arr=[...(p[sub]||[])];const idx=arr.findIndex(i=>i.id===id);const ni=idx+dir;if(ni<0||ni>=arr.length)return md;[arr[idx],arr[ni]]=[arr[ni],arr[idx]];return{...md,props:{...md.props,[pid]:{...p,[sub]:arr}}};});
   const setPropSubRange=(pid,sub,item,range)=>{ const hasRange=!!((range.from&&range.from.y!=null)||(range.until&&range.until.y!=null)); const recur=hasRange||!!item.recurring; updAll(md=>{const p=md.props?.[pid]||emptyProp();const arr=[...(p[sub]||[])];const idx=arr.findIndex(i=>i.id===item.id);const patch=base=>({...base,from:range.from||null,until:range.until||null,recurring:recur});if(idx>=0)arr[idx]=patch(arr[idx]);else if(recur)arr.push(patch({...item,filePath:null,fileName:'',fileData:null}));return{...md,props:{...md.props,[pid]:{...p,[sub]:arr}}};}); };
   const copyPrevPropExp=pid=>{
@@ -1644,7 +1650,7 @@ function App({session}) {
     upd(fn);
   };
   const applyRecurSec=(sec,sub,item)=>updAll(md=>{const s=md[sec]||{};const arr=(s[sub]||[]);const has=arr.some(i=>i.id===item.id);const na=has?arr.map(i=>i.id===item.id?{...item}:i):[...arr,{...item}];return{...md,[sec]:{...s,[sub]:na}};});
-  const delSec=(sec,sub,id,all)=>{const fn=md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:(s[sub]||[]).filter(i=>i.id!==id)}};}; all?updAll(fn):upd(fn);};
+  const delSec=(sec,sub,id,all)=>{const fn=md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:(s[sub]||[]).filter(i=>i.id!==id)}};}; all?updAllYears(fn):upd(fn);};
   const addSec=(sec,sub,name,amount,recur)=>{
     const item={...newItem(name),amount:num(amount),recurring:recur,id:uid()};
     const fn=md=>{const s=md[sec]||{};return{...md,[sec]:{...s,[sub]:[...(s[sub]||[]),{...item}]}};};
@@ -3660,7 +3666,7 @@ function App({session}) {
                       <div style={{display:'flex',flexDirection:'column',gap:16}}>
                         <div>{reqLbl('Konto')}<select value={d.account||''} onChange={e=>updateDraft(d.id,{account:e.target.value,customerId:'',custName:''})} style={{...dInp,cursor:'pointer'}}><option value="">— Konto wählen —</option>{acctOpts.map(o=><option key={o.k} value={o.k}>{o.label}</option>)}</select></div>
                         <div>{reqLbl('Name')}<input value={d.name||''} onChange={e=>updateDraft(d.id,{name:e.target.value})} placeholder="Name…" style={dInp}/></div>
-                        <div><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.mut}}>(optional)</span></div><CustomerSelect customers={customersFor(dDom)} value={d.customerId} onPick={c=>{ if(c) updateDraft(d.id,{customerId:c.id,custName:c.name||''}); else updateDraft(d.id,{customerId:'',custName:''}); }} /></div>
+                        <div><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.mut}}>(optional)</span></div><CustomerSelect customers={customersFor(dDom)} value={d.customerId} onCreate={()=>openNewCust(dDom, c=>updateDraft(d.id,{customerId:c.id,custName:c.name||''}))} onPick={c=>{ if(c) updateDraft(d.id,{customerId:c.id,custName:c.name||''}); else updateDraft(d.id,{customerId:'',custName:''}); }} /></div>
                         <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
                           <div style={{flex:1,minWidth:120}}>{reqLbl('Betrag € (Brutto)')}<input value={d.amount||''} onChange={e=>{ const v=e.target.value; const hasR=(d.mwst!=null&&d.mwst!==''); const rate=num(d.mwst); updateDraft(d.id, hasR?{amount:v, netto:String(Math.round(num(v)/(1+rate/100)*100)/100)}:{amount:v}); }} inputMode="decimal" style={{...dInp,...NUM}}/></div>
                           <div style={{flex:1,minWidth:160}}>{reqLbl('Art')}<div style={{display:'flex',alignItems:'center',gap:8,...dInp,cursor:'default'}}><span style={{width:9,height:9,borderRadius:'50%',background:d.kind==='ein'?'#8FD9BD':'#E8A39E',display:'inline-block'}}/><span style={{fontWeight:600,color:d.kind==='ein'?'#8FD9BD':'#E8A39E'}}>{d.kind==='ein'?'Einnahme':'Ausgabe'}</span><span style={{marginLeft:'auto',fontSize:11,color:C.mut}}>autom. erkannt</span></div></div>
@@ -3842,7 +3848,7 @@ function App({session}) {
                       <div style={{flex:1,minWidth:0,width:isMobile?'100%':'auto',display:'flex',flexDirection:'column',gap:6}}>
                       <div style={{marginBottom:20,display:'flex',flexDirection:'column',gap:14}}>
                         <div>
-                          <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.red}}>*</span></div>
+                          <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.mut}}>(optional – bestehenden wählen oder unten neu eingeben)</span></div>
                           <CustomerSelect customers={customersFor(invEdit.domain||'unter')} value={invEdit.customerId} onCreate={()=>openNewCust(invEdit.domain||'unter', c=>setI({customerId:c.id, custName:c.name||'', custAddress:c.address||'', custEmail:c.email||'', firstName:c.firstName||'', lastName:c.lastName||'', company:c.company||'', anrede:c.anrede||'', saveCust:false}))} onPick={c=>{ if(c){ setI({customerId:c.id, custName:c.name||'', custAddress:c.address||'', custEmail:c.email||'', firstName:c.firstName||'', lastName:c.lastName||'', company:c.company||'', anrede:c.anrede||'', saveCust:false}); } else { setI({customerId:'', custName:'', custAddress:'', custEmail:'', firstName:'', lastName:'', company:'', anrede:'', saveCust:true}); } }} />
                         </div>
                         <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -3911,13 +3917,12 @@ function App({session}) {
                           ); })}
                         </div>
                       </div>
-                      {!invValid && <div style={{fontSize:12,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',borderRadius:10,padding:'10px 12px',marginBottom:12}}>Pflichtfelder: Kunde (Name), Adresse und Konto.</div>}
+                      {!invValid && <div style={{fontSize:12,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',borderRadius:10,padding:'10px 12px',marginBottom:12}}>Pflichtfelder: Name (oder Firma), Adresse und Konto. Ein Kunde muss nicht ausgewählt werden.</div>}
                       <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
                         <button onClick={saveInvoice} disabled={!invValid} style={{...primBtn,flex:2,minWidth:180,opacity:invValid?1:0.5,cursor:invValid?'pointer':'default'}}>Buchen</button>
                         <button onClick={()=>setInvPreview(true)} style={{...primBtn,background:C.surf2,color:C.txt,flex:1,minWidth:130}}><Ic p={P.eye} sz={16} col={C.txt}/> Vorschau</button>
                         <button onClick={()=>downloadInvoicePDF(invEdit)} style={{...primBtn,background:C.surf2,color:C.txt,flex:1,minWidth:130}}><Ic p={P.upload} sz={16} col={C.txt}/> Herunterladen</button>
                       </div>
-                      <button onClick={()=>setInvTaxAsk({q:'',answer:'',busy:false})} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',marginTop:10,background:hexA(C.pri,0.12),border:'1px solid '+hexA(C.pri,0.3),color:C.pri,borderRadius:11,padding:'11px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.spark} sz={15} col={C.pri}/> Steuerberater-KI zur Rechnung fragen</button>
                       </div>
                       {/* RECHTS: Live-Vorschau */}
                       {!isMobile && (
@@ -4359,7 +4364,14 @@ function App({session}) {
 
           {/* ══ JAHRESÜBERSICHT / MONATSÜBERSICHT ══ */}
           {tab==='yr' && <>
-            <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:16}}>{'Analyse '+yr}</div>
+            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16,flexWrap:'wrap'}}>
+              <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Analyse</div>
+              <div style={{display:'inline-flex',alignItems:'center',gap:6,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:11,padding:'4px 6px'}}>
+                <button onClick={()=>{ setYr(y=>y-1); setCalYr(y=>y-1); }} title="Vorheriges Jahr" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,width:30,height:30,cursor:'pointer',fontFamily:'inherit',fontSize:16,lineHeight:1}}>‹</button>
+                <div style={{fontSize:18,fontWeight:800,minWidth:54,textAlign:'center',...NUM}}>{yr}</div>
+                <button onClick={()=>{ setYr(y=>y+1); setCalYr(y=>y+1); }} title="Nächstes Jahr" style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,width:30,height:30,cursor:'pointer',fontFamily:'inherit',fontSize:16,lineHeight:1}}>›</button>
+              </div>
+            </div>
             <div style={{marginBottom:18}}><PillTabs tabs={[['monat','Monatsübersicht'],['jahr','Jahresübersicht']]} value={yrView} onChange={setYrView} /></div>
 
             {yrView==='monat' && (()=>{
@@ -4880,7 +4892,7 @@ function App({session}) {
             <div style={{width:isMobile?'auto':'min(480px,46%)',flexShrink:0,overflowY:'auto',padding:isMobile?'18px 18px 40px':'26px 30px 56px',order:isMobile?2:2}}>
               <div style={{maxWidth:'100%',display:'flex',flexDirection:'column',gap:16}}>
                 <div>{lbl('Name',true)}<input value={f.name||''} onChange={e=>{ const v=e.target.value; const g=guessCategory(v+' '+(f.note||'')); setCapF((!String(f.category||'').trim()||f.catAuto)&&g?{name:v,category:g,catAuto:true}:{name:v}); }} placeholder="Name…" style={dInp}/></div>
-                {dom && <div><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.mut}}>(optional)</span></div><CustomerSelect customers={customersFor(dom)} value={f.customerId} onPick={cu=>{ if(cu) setCapF({customerId:cu.id,custName:cu.name||''}); else setCapF({customerId:'',custName:''}); }} /></div>}
+                {dom && <div><div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.mut}}>(optional)</span></div><CustomerSelect customers={customersFor(dom)} value={f.customerId} onCreate={()=>openNewCust(dom, cu=>setCapF({customerId:cu.id,custName:cu.name||''}))} onPick={cu=>{ if(cu) setCapF({customerId:cu.id,custName:cu.name||''}); else setCapF({customerId:'',custName:''}); }} /></div>}
                 <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
                   <div style={{flex:1,minWidth:120}}>{lbl('Betrag € (Brutto)',true)}<input value={f.amount||''} onChange={e=>{ const v=e.target.value; const hasR=(f.mwst!=null&&f.mwst!==''); const rate=num(f.mwst); setCapF(hasR?{amount:v,netto:String(Math.round(num(v)/(1+rate/100)*100)/100)}:{amount:v}); }} inputMode="decimal" style={{...dInp,...NUM}}/></div>
                   <div style={{flex:1,minWidth:160}}>{lbl('Art')}{c.kindLocked
