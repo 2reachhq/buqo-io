@@ -1270,6 +1270,7 @@ function App({session}) {
   const [capProg,setCapProg]= useState(0);         // Erfassung: Beleg-Upload-Fortschritt
   const [importTab,setImportTab]= useState('beleg'); // Import-Umschalter: 'beleg' | 'bank'
   const [confirmMatch,setConfirmMatch]= useState(null); // Bankauszug: Beleg-Treffer bestätigen {draftId, match}
+  const [importSummary,setImportSummary]= useState(null); // Kontoauszug-Import: Zusammenfassung neu/übersprungen/vorhanden
   const [assignFor,setAssignFor]= useState(null);  // Bankauszug: Entwurf im „Beleg zuordnen"-Modus (draftId)
   const [assignSel,setAssignSel]= useState(null);  // gewählter offener Beleg {ty,tm,account,kind,itemId,name,amount,datum,belegnr,fileData,filePath,fileName}
   const [assignName,setAssignName]= useState(true);// Name vom Bankauszug übernehmen (default an)
@@ -1797,7 +1798,7 @@ function App({session}) {
   const delDraft = id => { setDrafts(ds=>ds.filter(d=>d.id!==id)); setDraftSel(s=>s.filter(x=>x!==id)); };
   // ── Kontoauszug-Status + Dedup ──
   const draftSig = (d)=> normName(d.name)+'|'+Math.round(num(d.amount)*100)+'|'+(toISO(d.datum)||'')+'|'+String(d.belegnr||'').toLowerCase();
-  const addImportDrafts = (list)=>{ const flagged=flagDrafts(list||[]); let added=0; setDrafts(ds=>{ const existing=new Set((ds||[]).map(draftSig)); const fresh=[]; flagged.forEach(d=>{ const s=draftSig(d); if(existing.has(s)) return; existing.add(s); fresh.push({...d, isNew:true}); added++; }); const old=(ds||[]).map(d=>d.isNew?{...d,isNew:false}:d); return [...fresh, ...old]; }); return {total:flagged.length, added:flagged.length}; };
+  const addImportDrafts = (list)=>{ const flagged=flagDrafts(list||[]); const existing=new Set((drafts||[]).map(draftSig)); let added=0, skipped=0, dupBook=0; const fresh=[]; flagged.forEach(d=>{ const s=draftSig(d); if(existing.has(s)){ skipped++; return; } existing.add(s); if(d.dup) dupBook++; fresh.push({...d, isNew:true}); added++; }); setDrafts(ds=>{ const old=(ds||[]).map(d=>d.isNew?{...d,isNew:false}:d); return [...fresh, ...old]; }); return {total:flagged.length, added, skipped, dupBook}; };
   const draftStatus = (d)=>{ if(d.ignored) return {key:'ignoriert',label:'Ignoriert',col:C.mut}; if(d.privat) return {key:'privat',label:'Privat',col:'#ABC4FF'}; if(d.confirmed) return {key:'zugeordnet',label:'Zugeordnet',col:C.grn}; if(d.openMatch) return {key:'beleg',label:'Beleg gefunden',col:C.pri}; if(d.isNew) return {key:'neu',label:'Neu',col:'#FFD27A'}; return {key:'offen',label:'Offen',col:'#FFB37A'}; };
   const markDraftPrivat = id => { updateDraft(id,{privat:true,ignored:false}); setDraftSel(s=>s.filter(x=>x!==id)); setToast('Als privat markiert'); };
   const markDraftIgnore = id => { updateDraft(id,{ignored:true,privat:false}); setDraftSel(s=>s.filter(x=>x!==id)); setToast('Ignoriert'); };
@@ -1814,19 +1815,21 @@ function App({session}) {
   const normName = s => String(s||'').toLowerCase().replace(/[^a-z0-9äöü]/g,'');
   const toISO = s => { if(!s) return ''; s=String(s); if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10); const m=s.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})/); if(m){ let y=m[3]; if(y.length===2)y='20'+y; return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0'); } return ''; };
   // Dublette + Wiederkehrend für einen Entwurf bestimmen
-  const flagDraft = (d, all) => { const dn=normName(d.name), da=num(d.amount); let dup=null;
+  const flagDraft = (d, all) => { const dn=normName(d.name), da=num(d.amount); const dNote=String(d.note||'').toLowerCase(); let dup=null;
     for(const b of all){ const bn=b.it.belegnr, ba=num(b.it.amount);
       if(d.belegnr && bn && String(bn).toLowerCase()===String(d.belegnr).toLowerCase()){ dup=b; break; }
       if(da>0 && Math.abs(ba-da)<0.005 && d.datum && b.it.datum && toISO(d.datum)===toISO(b.it.datum) && dn.length>3 && (normName(b.it.name).includes(dn.slice(0,6))||dn.includes(normName(b.it.name).slice(0,6)))){ dup=b; break; }
     }
     if(!dup && d.belegnr){ const inv=(data.invoices||[]).find(iv=>String(iv.number||'').toLowerCase()===String(d.belegnr).toLowerCase()); if(inv) dup={invoice:inv}; }
     let recur=false; if(!dup && dn.length>2 && da>0){ const months=new Set(); for(const b of all){ if(normName(b.it.name)===dn && Math.abs(num(b.it.amount)-da)<Math.max(2,da*0.12)){ months.add(b.y+'-'+b.m); } } if(months.size>=1) recur=true; }
-    // Zahlungseingang erkennen: Kunde + Rechnungsnummer + Betrag stimmen mit offener Rechnung überein
+    // Verwendungszweck (Notiz) des Bankumsatzes – für Nummern-/Kundennummern-Abgleich
+    const dHay=(dNote+' '+String(d.belegnr||'')).toLowerCase();
+    // Zahlungseingang erkennen: Rechnungs-/Kundennummer im Verwendungszweck ODER belegnr + Betrag + Kunde
     let payMatch=null;
-    for(const iv of (data.invoices||[])){ if(iv.paid) continue; const numOk=d.belegnr && String(iv.number||'').toLowerCase()===String(d.belegnr).toLowerCase(); const amtOk=da>0 && Math.abs(num(iv.total)-da)<0.01; const c=(data.customers||[]).find(x=>x.id===iv.customerId); const cn=c?normName(c.name):''; const nameOk = !cn || (dn.length>3 && (cn.includes(dn.slice(0,5))||dn.includes(cn.slice(0,5)))); if(numOk && amtOk && nameOk){ payMatch={invoiceId:iv.id, number:iv.number, customerId:iv.customerId, custName:(c?c.name:''), account:iv.account||'unter'}; break; } }
-    // Wiederkehrende Ausgabe erkennen: Name/Betrag passen zu einer bestehenden wiederkehrenden Buchung
+    for(const iv of (data.invoices||[])){ if(iv.paid) continue; const ivNo=String(iv.number||'').toLowerCase(); const numOk=ivNo && ((d.belegnr && ivNo===String(d.belegnr).toLowerCase()) || (ivNo.length>=4 && dHay.includes(ivNo))); const amtOk=da>0 && Math.abs(num(iv.total)-da)<0.01; const c=(data.customers||[]).find(x=>x.id===iv.customerId); const cn=c?normName(c.name):''; const nameOk = !cn || (dn.length>3 && (cn.includes(dn.slice(0,5))||dn.includes(cn.slice(0,5)))); const custNoHit = c && c.custNo && String(c.custNo).length>=3 && dHay.includes(String(c.custNo).toLowerCase()); if((numOk && amtOk) || (numOk && custNoHit) || (amtOk && custNoHit) || (numOk && nameOk && amtOk)){ payMatch={invoiceId:iv.id, number:iv.number, customerId:iv.customerId, custName:(c?c.name:''), account:iv.account||'unter'}; break; } }
+    // Wiederkehrende Ausgabe erkennen: Name/Betrag/Verwendungszweck/Kundennummer passen zu bestehender wiederkehrender Buchung
     let recurMatch=null;
-    if(da>0){ for(const b of all){ const it=b.it; if(!it.recurring) continue; const sameName = dn.length>2 && normName(it.name)===dn; const amtClose = Math.abs(num(it.amount)-da)<Math.max(2,da*0.12); const sameNote = d.note && it.note && normName(d.note)===normName(it.note); if((sameName&&amtClose) || (sameNote&&amtClose)){ recurMatch={name:it.name, account:b.key||'', amount:num(it.amount)}; break; } } }
+    if(da>0){ for(const b of all){ const it=b.it; if(!it.recurring) continue; const sameName = dn.length>2 && normName(it.name)===dn; const amtClose = Math.abs(num(it.amount)-da)<Math.max(2,da*0.12); const itNote=String(it.note||'').toLowerCase(); const sameNote = dNote && itNote && normName(d.note)===normName(it.note); /* gleiche Kundennummer/Referenz im Verwendungszweck (Versicherung etc.) */ const refHit = it.belegnr && String(it.belegnr).length>=4 && dHay.includes(String(it.belegnr).toLowerCase()); const tokenHit = (()=>{ const toks=(itNote.match(/[a-z0-9]{5,}/gi)||[]); return toks.some(t=>dHay.includes(t.toLowerCase())); })(); if((sameName&&amtClose) || (sameNote&&amtClose) || refHit || (tokenHit&&amtClose)){ recurMatch={name:it.name, account:b.key||'', amount:num(it.amount)}; break; } } }
     // Offener Beleg (zuvor unter „Import → Beleg" erfasst) zu dieser Bankbewegung finden
     const openMatch = (!d.invId) ? findOpenBelegMatch(d) : null;
     return {...d, dup, recur, payMatch, recurMatch, openMatch};
@@ -1933,9 +1936,11 @@ function App({session}) {
       // 3) Monat erkennen und ggf. dorthin wechseln (#12)
       const dom = dominantMonth(parsed);
       const curYm = yr+'-'+String(mo+1).padStart(2,'0');
-      if(dom && dom!==curYm){ const [dy,dm]=dom.split('-').map(Number); setYr(dy); setMo(dm-1); setToast('Kontoauszug gehört zu '+MONTHS[dm-1]+' '+dy+' – Monat gewechselt. '+parsed.length+' Posten erkannt.'); }
-      else { const ymPin = yr+'-'+String(mo+1).padStart(2,'0')+'-01'; parsed.forEach(p=>{ if(!p.datum) p.datum=ymPin; }); setToast(parsed.length+' Posten per KI erkannt · Dubletten übersprungen.'); }
-      addImportDrafts(parsed);
+      let switchedTo=null;
+      if(dom && dom!==curYm){ const [dy,dm]=dom.split('-').map(Number); setYr(dy); setMo(dm-1); switchedTo=MONTHS[dm-1]+' '+dy; }
+      else { const ymPin = yr+'-'+String(mo+1).padStart(2,'0')+'-01'; parsed.forEach(p=>{ if(!p.datum) p.datum=ymPin; }); }
+      const res=addImportDrafts(parsed);
+      setImportSummary({ total:parsed.length, added:res.added, skipped:res.skipped, dupBook:res.dupBook, switchedTo });
     }catch(e){ setToast('Import fehlgeschlagen: '+(e.message||e)); }
     setImportBusy(false);
   };
@@ -4897,6 +4902,21 @@ function App({session}) {
             {fp.isPdf
               ? <iframe onClick={e=>e.stopPropagation()} src={fp.src} title={fp.name} style={{width:'min(900px,100%)',height:'100%',border:'none',borderRadius:14,background:'#525659',boxShadow:'0 20px 70px rgba(0,0,0,0.6)'}}/>
               : <img onClick={e=>e.stopPropagation()} src={fp.src} alt={fp.name} style={{maxWidth:'min(900px,100%)',maxHeight:'100%',objectFit:'contain',borderRadius:14,boxShadow:'0 20px 70px rgba(0,0,0,0.6)'}}/>}
+          </div>
+        </div>
+      ); })()}
+
+      {importSummary && (()=>{ const s=importSummary; const row=(col,lbl,n)=>(<div style={{display:'flex',alignItems:'center',gap:11,padding:'10px 0',borderBottom:'1px solid '+C.sep}}><span style={{width:10,height:10,borderRadius:'50%',background:col,flexShrink:0}}/><span style={{flex:1,fontSize:14,color:C.txt}}>{lbl}</span><span style={{fontSize:16,fontWeight:800,color:C.txt,...NUM}}>{n}</span></div>); return (
+        <div onClick={()=>setImportSummary(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:162,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{width:'min(420px,100%)',background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'24px',boxShadow:'0 24px 70px rgba(0,0,0,0.6)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:14}}><div style={{width:34,height:34,borderRadius:10,background:hexA(C.pri,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.bank} sz={17} col={C.pri}/></div><div style={{fontSize:17,fontWeight:800,color:C.txt}}>Kontoauszug eingelesen</div></div>
+            {s.switchedTo && <div style={{fontSize:13,color:C.sub,background:hexA(C.pri,0.08),border:'1px solid '+hexA(C.pri,0.25),borderRadius:10,padding:'10px 12px',marginBottom:12,lineHeight:1.5}}>Auszug gehört zu <b style={{color:C.txt}}>{s.switchedTo}</b> – es wurde automatisch dorthin gewechselt.</div>}
+            <div style={{marginBottom:16}}>
+              {row('#FFD27A','Neu hinzugefügt', s.added)}
+              {row(C.mut,'Bereits im Kontoauszug (übersprungen)', s.skipped)}
+              {row('#FFB37A','Schon als Buchung vorhanden', s.dupBook)}
+            </div>
+            <button onClick={()=>setImportSummary(null)} style={{width:'100%',background:C.pri,color:C.priTxt,border:'none',borderRadius:11,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Verstanden</button>
           </div>
         </div>
       ); })()}
