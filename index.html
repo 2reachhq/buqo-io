@@ -2134,18 +2134,20 @@ function App({session}) {
   // ── Wiederkehrende Rechnungen (Vorlagen → monatliche Auto-Erstellung) ──
   const recInvoices = data.recurInvoices || [];
   const setRecInvoices = updater => setData(prev=>{ const cur=prev.recurInvoices||[]; const next=typeof updater==='function'?updater(cur):updater; return {...prev, recurInvoices:next}; });
-  const newRecInvoice = (dom,acct)=>({ id:uid(), domain:dom||'unter', account:(acct||(dom==='immo'?(PROPS[0]||'p1'):'unter')), customerId:'', custName:'', custAddress:'', custEmail:'', firstName:'', lastName:'', company:'', anrede:'', saveCust:true, fromY:now.getFullYear(), fromM:now.getMonth(), toY:now.getFullYear(), toM:11, items:[{desc:'',qty:1,price:0,mwst:defMwstFor(dom)}], note:'', headerText:undefined, footerText:undefined, active:true });
+  const newRecInvoice = (dom,acct)=>({ id:uid(), domain:dom||'unter', account:(acct||(dom==='immo'?(PROPS[0]||'p1'):'unter')), customerId:'', custName:'', custAddress:'', custEmail:'', firstName:'', lastName:'', company:'', anrede:'', saveCust:true, fromY:now.getFullYear(), fromM:now.getMonth(), toY:now.getFullYear(), toM:11, genDay:1, items:[{desc:'',qty:1,price:0,mwst:defMwstFor(dom)}], note:'', headerText:undefined, footerText:undefined, active:true });
   const startRecurInvoice = (dom,acct)=>{ setInvDomain(dom||'unter'); setInvKind('wied'); setRecInvEdit(newRecInvoice(dom,acct)); setTab('rechnung'); };
   const delRecInvoice = (id)=> setRecInvoices(list=>list.filter(r=>r.id!==id));
   const ymK=(y,m)=>y*12+m;
   const _bookInto = (M, account, item)=>{ if(account==='unter'){ const s=M.unternehmen||{}; M.unternehmen={...s,clients:[...(s.clients||[]),item]}; } else if(account==='privat'){ const s=M.privat||{}; M.privat={...s,einnahmen:[...(s.einnahmen||[]),item]}; } else { if(!M.props)M.props={}; const s=M.props[account]||{}; M.props[account]={...s,einnahmen:[...(s.einnahmen||[]),item]}; } };
   const genRecInvoices = ()=>{ const nowK=ymK(now.getFullYear(), now.getMonth()); let created=0;
     setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const recs=nd.recurInvoices||[]; const invs=nd.invoices||(nd.invoices=[]);
-      recs.forEach(r=>{ if(r.active===false) return; const fromK=ymK(r.fromY,r.fromM), toK=Math.min(ymK(r.toY,r.toM), nowK);
+      recs.forEach(r=>{ if(r.active===false) return; const fromK=ymK(r.fromY,r.fromM), toK=Math.min(ymK(r.toY,r.toM), nowK); const gDay=Math.min(28,Math.max(1,r.genDay||1));
         for(let k=fromK;k<=toK;k++){ if(invs.find(iv=>iv.recurTemplateId===r.id && iv.genYM===k)) continue;
+          // Im laufenden Monat erst ab dem gewählten Erstellungstag erzeugen
+          if(k===nowK && now.getDate()<gDay) continue;
           const y=Math.floor(k/12), m=k%12; const tot=invTotals(r.items);
           const cnt=invs.filter(iv=>String(iv.number||'').startsWith(String(y))).length; const number=String(y)+'-'+String(cnt+1).padStart(3,'0');
-          const dstr=y+'-'+String(m+1).padStart(2,'0')+'-01';
+          const dstr=y+'-'+String(m+1).padStart(2,'0')+'-'+String(gDay).padStart(2,'0');
           const cust=customers.find(c=>c.id===r.customerId);
           const inv={ id:uid(), number, domain:r.domain, account:r.account, customerId:r.customerId, custName:(cust?cust.name:r.custName)||'', custAddress:(cust?cust.address:r.custAddress)||'', custEmail:(cust?cust.email:r.custEmail)||'', firstName:r.firstName,lastName:r.lastName,company:r.company,anrede:r.anrede, date:dstr, items:r.items, note:r.note, headerText:r.headerText, footerText:r.footerText, total:tot.gross, sentDate:dstr, booked:true, recurTemplateId:r.id, genYM:k, fromRecurId:r.id };
           invs.push(inv);
@@ -3832,10 +3834,11 @@ function App({session}) {
                       <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse <span style={{color:C.red}}>*</span></div><textarea value={r.custAddress||''} onChange={e=>setR({custAddress:e.target.value})} rows={2} style={{...fld,resize:'vertical'}}/></div>
                     </div>
                     <div style={{...SC}}>
-                      <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:12}}>Zeitraum <span style={{fontWeight:400,color:C.mut,fontSize:12}}>· Rechnung wird monatlich am Monatsanfang erstellt</span></div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:12}}>Zeitraum <span style={{fontWeight:400,color:C.mut,fontSize:12}}>· Rechnung wird jeden Monat automatisch erstellt</span></div>
                       <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap'}}>
                         <div><div style={{fontSize:11,color:C.sub,marginBottom:5}}>Von</div><div style={{display:'flex',gap:6}}><select value={r.fromM} onChange={e=>setR({fromM:+e.target.value})} style={{...fld,width:120}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select><select value={r.fromY} onChange={e=>setR({fromY:+e.target.value})} style={{...fld,width:90}}>{recYears.map(y=><option key={y} value={y}>{y}</option>)}</select></div></div>
                         <div><div style={{fontSize:11,color:C.sub,marginBottom:5}}>Bis</div><div style={{display:'flex',gap:6}}><select value={r.toM} onChange={e=>setR({toM:+e.target.value})} style={{...fld,width:120}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select><select value={r.toY} onChange={e=>setR({toY:+e.target.value})} style={{...fld,width:90}}>{recYears.map(y=><option key={y} value={y}>{y}</option>)}</select></div></div>
+                        <div><div style={{fontSize:11,color:C.sub,marginBottom:5}}>Erstellt am</div><div style={{display:'flex',alignItems:'center',gap:6}}><select value={r.genDay||1} onChange={e=>setR({genDay:+e.target.value})} style={{...fld,width:74}}>{Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>{d}.</option>)}</select><span style={{fontSize:12,color:C.mut}}>jedes Monats</span></div></div>
                       </div>
                     </div>
                     <div style={{...SC}}>
