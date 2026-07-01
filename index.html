@@ -1321,6 +1321,7 @@ function App({session}) {
   const [privTab,setPrivTab]= useState('ausgaben'); // Privat: Toggle
   const [immoView,setImmoView]= useState('einnahmen'); // Immobilien: Toggle
   const [iconPick,setIconPick]= useState(null);     // Standort-Icon-Auswahl (pid)
+  const [addAcctOpen,setAddAcctOpen]= useState(false); // Neues Konto anlegen
   const toggleSel = id => setSelIds(s=> s.includes(id)? s.filter(x=>x!==id) : [...s,id]);
   const exitSel = () => { setSelKey(null); setSelIds([]); };
   /* Eigene URL pro Bereich + pro Konto (Hash-Routing) */
@@ -3108,17 +3109,32 @@ function App({session}) {
             const arrowBtn={width:34,height:34,borderRadius:'50%',background:C.surf,border:'1px solid '+C.bdrM,color:C.txt,cursor:'pointer',fontFamily:'inherit',fontSize:16,lineHeight:1,boxShadow:'0 4px 14px rgba(0,0,0,0.4)'};
             return (
               <>
-                {/* Gesamt aller Quellen — E/A wieder sichtbar */}
+                {/* Gesamt aller Quellen — Pfeil öffnet E/A */}
                 <div style={{padding:'2px 0 20px'}}>
-                  <div onMouseEnter={()=>setGesamtHover(true)} onMouseLeave={()=>setGesamtHover(false)} style={{display:'inline-block'}}>
-                    <div style={{fontSize:13,fontWeight:600,color:C.sub,letterSpacing:'0.02em',marginBottom:7}}>Gesamtvermögen · alle Quellen</div>
-                    <div style={{display:'flex',alignItems:'baseline',gap:18,flexWrap:'wrap'}}>
-                      <div style={{fontSize:isMobile?40:50,fontWeight:800,color:tot.net>=0?C.grn:C.txt,...NUM,lineHeight:1}}>{tot.net>=0?'+':''}{fmt(tot.net)}</div>
-                      <div style={{display:'flex',gap:18,fontSize:13,color:C.sub,flexWrap:'wrap'}}>
-                        <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:8,height:8,borderRadius:'50%',background:C.grn,display:'inline-block'}}/>Einnahmen <b style={{color:C.txt,...NUM}}>{fmt(tot.totalInc)}</b></span>
-                        <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:8,height:8,borderRadius:'50%',background:'#FFB37A',display:'inline-block'}}/>Ausgaben <b style={{color:C.txt,...NUM}}>{fmtN(tot.totalExp)}</b></span>
-                      </div>
+                  <div style={{display:'inline-block',position:'relative'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:7}}>
+                      <span style={{fontSize:13,fontWeight:600,color:C.sub,letterSpacing:'0.02em'}}>Gesamtvermögen</span>
+                      <button onClick={()=>setGesamtOpen(o=>!o)} style={{background:'none',border:'none',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:4,color:C.sub,fontSize:13,fontWeight:600,fontFamily:'inherit',padding:0}}>
+                        <span>alle Quellen</span>
+                        <span style={{display:'inline-flex',transition:'transform .16s',transform:gesamtOpen?'rotate(180deg)':'none'}}><Ic p={P.down} sz={12} col={C.sub}/></span>
+                      </button>
                     </div>
+                    <div style={{fontSize:isMobile?40:50,fontWeight:800,color:tot.net>=0?C.grn:C.txt,...NUM,lineHeight:1}}>{tot.net>=0?'+':''}{fmt(tot.net)}</div>
+                    {gesamtOpen && (<>
+                      <div onClick={()=>setGesamtOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
+                      <div style={{position:'absolute',left:0,top:'100%',marginTop:10,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px 20px',boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:85,minWidth:240}}>
+                        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+                          <span style={{width:10,height:10,borderRadius:'50%',background:C.grn,display:'inline-block'}}/>
+                          <span style={{fontSize:14,color:C.sub,flex:1}}>Einnahmen</span>
+                          <span style={{fontSize:15,fontWeight:700,color:C.txt,...NUM}}>{fmt(tot.totalInc)}</span>
+                        </div>
+                        <div style={{display:'flex',alignItems:'center',gap:10}}>
+                          <span style={{width:10,height:10,borderRadius:'50%',background:'#FFB37A',display:'inline-block'}}/>
+                          <span style={{fontSize:14,color:C.sub,flex:1}}>Ausgaben</span>
+                          <span style={{fontSize:15,fontWeight:700,color:C.txt,...NUM}}>{fmtN(tot.totalExp)}</span>
+                        </div>
+                      </div>
+                    </>)}
                   </div>
                 </div>
                 {/* Slider */}
@@ -3180,20 +3196,25 @@ function App({session}) {
                     </>)}
                   </div>
                 </div>
-                {/* Konto-Grid — quadratische Karten */}
-                <div style={{display:'grid',gridTemplateColumns:isMobile?'repeat(2,1fr)':'repeat(3,1fr)',gap:14}}>
+                {/* Konto-Grid — moderne quadratische Karten */}
+                <div style={{display:'grid',gridTemplateColumns:isMobile?'repeat(2,1fr)':'repeat(3,1fr)',gap:16}}>
                   {konten.map(k=>{ const erg=k.inc-k.exp; const c=acol(k.key); const goDetail=()=>{ if(k.kind==='prop')setSp(k.pid); setOpenAcct(k.key); }; return (
-                    <div key={k.key} onClick={goDetail} style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:18,padding:isMobile?'18px 16px':'22px 22px',cursor:'pointer',display:'flex',flexDirection:'column',gap:14,transition:'border-color .14s'}}>
-                      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-                        <div style={{width:44,height:44,borderRadius:13,background:c,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={k.icon} sz={20} col={'#0A0A0A'}/></div>
-                        <button onClick={e=>{e.stopPropagation(); setIconPick(k.key);}} title="Konto bearbeiten" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:16,lineHeight:1,padding:4}}>⋮</button>
+                    <div key={k.key} onClick={goDetail} onMouseEnter={e=>{e.currentTarget.style.borderColor=hexA(c,0.5);e.currentTarget.style.transform='translateY(-2px)';}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.bdr;e.currentTarget.style.transform='translateY(0)';}} style={{background:'linear-gradient(155deg, '+hexA(c,0.10)+' 0%, '+C.surf2+' 55%)',border:'1px solid '+C.bdr,borderRadius:20,padding:isMobile?'20px 18px':'24px 22px',cursor:'pointer',display:'flex',flexDirection:'column',gap:20,transition:'border-color .18s ease, transform .18s ease',minHeight:isMobile?150:180}}>
+                      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between'}}>
+                        <div style={{width:48,height:48,borderRadius:14,background:c,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,boxShadow:'0 8px 20px '+hexA(c,0.35)}}><Ic p={k.icon} sz={22} col={'#0A0A0A'}/></div>
+                        <button onClick={e=>{e.stopPropagation(); setIconPick(k.key);}} title="Konto bearbeiten" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:18,lineHeight:1,padding:6,borderRadius:8,fontFamily:'inherit'}}>⋮</button>
                       </div>
-                      <div>
-                        <div style={{fontSize:17,fontWeight:600,color:C.txt,marginBottom:6,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.name}</div>
-                        <div style={{fontSize:15,fontWeight:500,color:C.sub,...NUM}}>{fmt(erg)}</div>
+                      <div style={{marginTop:'auto'}}>
+                        <div style={{fontSize:18,fontWeight:700,color:C.txt,marginBottom:6,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',letterSpacing:'-0.01em'}}>{k.name}</div>
+                        <div style={{fontSize:14,fontWeight:500,color:erg>=0?C.grn:'#FFB37A',...NUM}}>{erg>=0?'+':''}{fmt(erg)}</div>
                       </div>
                     </div>
                   ); })}
+                  {/* Konto hinzufügen */}
+                  <button onClick={()=>setAddAcctOpen(true)} style={{background:'none',border:'1.5px dashed '+C.bdrM,borderRadius:20,padding:isMobile?'20px 18px':'24px 22px',cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:10,color:C.sub,fontFamily:'inherit',minHeight:isMobile?150:180,transition:'border-color .18s ease, color .18s ease'}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.pri;e.currentTarget.style.color=C.pri;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.bdrM;e.currentTarget.style.color=C.sub;}}>
+                    <div style={{width:48,height:48,borderRadius:14,background:C.surf2,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.plus} sz={22} col="currentColor"/></div>
+                    <div style={{fontSize:14,fontWeight:600}}>Konto hinzufügen</div>
+                  </button>
                 </div>
               </>
             );
@@ -3427,13 +3448,13 @@ function App({session}) {
 
           {/* ══ UNTERNEHMEN ══ */}
           {(tab==='unter' || ((tab==='quellen'||tab==='home') && openAcct==='unter')) && <>
-            {tab!=='home' && (
-            <div style={{marginBottom:24}}>
-              <button onClick={()=>{setOpenAcct(null);if(tab!=='quellen')setTab('quellen');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:8}}>‹ Konten</button>
-              <div style={{fontSize:28,fontWeight:800,color:C.txt,letterSpacing:'-0.03em'}}>{names.unternehmen}</div>
-              <div style={{fontSize:13,color:C.sub}}>{MONTHS[mo]} {yr}</div>
-            </div>
-            )}
+            {tab!=='home' && (<>
+              <button onClick={()=>{setOpenAcct(null);if(tab!=='quellen')setTab('quellen');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:8,display:'flex',alignItems:'center',gap:4}}>‹ Konten</button>
+              <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
+                <div style={{width:42,height:42,borderRadius:13,flexShrink:0,background:acol('unter'),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={(({house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc})[(names.propIcon&&names.propIcon.unter)||'brief'])||P.brief} sz={20} col={'#0A0A0A'}/></div>
+                <div style={{fontSize:28,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{names.unternehmen}</div>
+              </div>
+            </>)}
             {/* Toggle: Einnahmen / Ausgaben / Wiederkehrend */}
             <div style={{marginBottom:18}}><PillTabs tabs={[['einnahmen','Einnahmen'],['ausgaben','Ausgaben']]} value={unterTab} onChange={setUnterTab} /></div>
 
@@ -3499,13 +3520,13 @@ function App({session}) {
 
           {/* ══ PRIVAT ══ */}
           {(tab==='privat' || ((tab==='quellen'||tab==='home') && openAcct==='privat')) && <>
-            {tab!=='home' && (
-            <div style={{marginBottom:18}}>
-              <button onClick={()=>{setOpenAcct(null);if(tab!=='quellen')setTab('quellen');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:8}}>‹ Konten</button>
-              <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em'}}>{names.privatLabel||'Privat'}</div>
-              <div style={{fontSize:13,color:C.sub}}>{MONTHS[mo]} {yr}</div>
-            </div>
-            )}
+            {tab!=='home' && (<>
+              <button onClick={()=>{setOpenAcct(null);if(tab!=='quellen')setTab('quellen');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:8,display:'flex',alignItems:'center',gap:4}}>‹ Konten</button>
+              <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
+                <div style={{width:42,height:42,borderRadius:13,flexShrink:0,background:acol('privat'),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={(({house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc})[(names.propIcon&&names.propIcon.privat)||'prson'])||P.prson} sz={20} col={'#0A0A0A'}/></div>
+                <div style={{fontSize:28,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{names.privatLabel||'Privat'}</div>
+              </div>
+            </>)}
             <div style={{marginBottom:18}}><PillTabs tabs={[['einnahmen','Einnahmen'],['ausgaben','Ausgaben']]} value={privTab} onChange={setPrivTab} /></div>
 
             {privTab==='einnahmen' && (
@@ -4979,8 +5000,24 @@ function App({session}) {
             ); })}
           </div>
           <button onClick={()=>setIconPick(null)} style={{width:'100%',background:curCol,color:'#0A0A0A',border:'none',borderRadius:12,padding:'13px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginTop:18}}>Fertig</button>
+          {ak!=='privat' && ak!=='unter' && (
+            <button onClick={()=>{ askConfirm('Konto "'+acctNameOf(ak)+'" wirklich löschen? Alle Buchungen bleiben in den Daten erhalten, das Konto wird nur ausgeblendet.', ()=>{ setToast('Konto-Löschen wird in der nächsten Version freigeschaltet.'); setIconPick(null); }); }} style={{width:'100%',background:'none',border:'1px solid '+hexA(C.red,0.4),color:C.red,borderRadius:12,padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',marginTop:10}}>Konto löschen</button>
+          )}
+          {(ak==='privat'||ak==='unter') && (
+            <div style={{fontSize:11.5,color:C.mut,textAlign:'center',marginTop:12,lineHeight:1.5}}>{ak==='privat'?'Das Privat-Konto ist geschützt und kann nicht gelöscht werden.':'Das Hauptkonto ist geschützt und kann nicht gelöscht werden.'}</div>
+          )}
         </Sheet>
       ); })()}
+
+      {addAcctOpen && (
+        <Sheet title="Neues Konto anlegen" onClose={()=>setAddAcctOpen(false)}>
+          <div style={{fontSize:12.5,color:C.sub,marginBottom:16,lineHeight:1.55}}>Ein neues Unternehmenskonto wird angelegt — Struktur wie <b style={{color:C.txt}}>{names.unternehmen||'Firma'}</b> (Einnahmen, Ausgaben, wiederkehrend), ohne Inserate.</div>
+          <div style={{background:hexA(C.amb,0.10),border:'1px solid '+hexA(C.amb,0.28),borderRadius:11,padding:'12px 13px',fontSize:12.5,color:C.amb,marginBottom:14,lineHeight:1.55}}>
+            ⚠️ Diese Funktion braucht noch eine Erweiterung im Datenmodell (eigene Ein-/Ausgaben-Töpfe pro Konto). Ich habe die UI vorbereitet und melde mich mit einer Rückfrage zum Datenmodell — dann wird der Anlegen-Button aktiv.
+          </div>
+          <button onClick={()=>setAddAcctOpen(false)} style={{width:'100%',background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:12,padding:'12px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Verstanden</button>
+        </Sheet>
+      )}
 
       {belegEdit && (()=>{ const be=belegEdit; const loc=be.loc; const bc=acol(loc._ber); const aus=loc._kind==='aus'; const set=patch=>setBelegEdit(x=>({...x,...patch})); const hasFile=!!(loc.filePath||loc.fileData); const fld={width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,color:C.txt,padding:'11px 13px',fontSize:14,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}; const lbl=(t)=>(<div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}}>{t}</div>); const save=()=>{ updateBelegItem(loc,{name:be.name,datum:be.datum,amount:num(be.amount),netto:num(be.netto),mwst:(be.mwst===''?'':num(be.mwst)),category:be.category,note:be.note,belegnr:be.belegnr}); setBelegEdit(null); setToast('Beleg gespeichert'); }; return (
         <Sheet title="Beleg" onClose={()=>setBelegEdit(null)} maxWidth={620}>
