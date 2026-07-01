@@ -116,7 +116,7 @@ async function pdfToLines(file){
     const page=await pdf.getPage(p);
     const tc=await page.getTextContent();
     const rowsByY={};
-    tc.items.forEach(it=>{ if(!it.str) return; const y=Math.round(it.transform[5]); (rowsByY[y]=rowsByY[y]||[]).push(it); });
+    tc.items.forEach(it=>{ if(!it.str||!it.str.trim()) return; const y=Math.round(it.transform[5]/2)*2; (rowsByY[y]=rowsByY[y]||[]).push(it); });
     Object.keys(rowsByY).sort((a,b)=>b-a).forEach(y=>{
       const ln=rowsByY[y].sort((a,b)=>a.transform[4]-b.transform[4]).map(i=>i.str).join(' ').replace(/\s{2,}/g,' ').trim();
       if(ln) lines.push(ln);
@@ -1908,24 +1908,43 @@ function App({session}) {
   };
   /* Import OHNE KI (lokal) – nur zum Vergleichen */
   /* KI liest einen kompletten Bank-Kontoauszug aus → Array von Buchungen (Betrag, Datum, Empfänger, Verwendungszweck) */
+  const STMT_RULES = "Extrahiere JEDE einzelne Buchung/Transaktion aus einem deutschen Bank-Kontoauszug (z. B. N26, DKB, Sparkasse, ING, Volksbank). "
+      + "Gib AUSSCHLIESSLICH ein minifiziertes JSON-Array zurück, kein Text, keine Erklärung, keine Markdown-Fences:\n"
+      + '[{"d":"TT.MM.JJJJ","b":"Empfaenger oder Auftraggeber","z":"Verwendungszweck komplett","a":-12.34,"k":"a","r":""}]\n'
+      + "Feld-Regeln:\n"
+      + "- d = Buchungsdatum der Transaktion im Format TT.MM.JJJJ. Wenn nur Tag+Monat angegeben sind, ergänze das Jahr aus dem Auszugszeitraum. Bei zwei Daten (Buchung/Wertstellung) nimm das Buchungsdatum.\n"
+      + "- b = Name des Empfängers, Auftraggebers oder Händlers (z. B. \"REWE\", \"Max Mustermann\"). NIEMALS die eigene Bank (nicht \"N26\", nicht \"Sparkasse\") und KEIN Datum als Namen.\n"
+      + "- z = kompletter Verwendungszweck / Buchungstext.\n"
+      + "- a = Betrag MIT Vorzeichen: negativ = Ausgabe/Lastschrift/Kartenzahlung/Überweisung raus, positiv = Eingang/Gutschrift/Gehalt. Punkt als Dezimaltrennzeichen, keine Tausenderpunkte.\n"
+      + "- k = \"e\" bei Eingang/Gutschrift, sonst \"a\".\n"
+      + "- r = Rechnungs- oder Kundennummer aus dem Verwendungszweck, sonst leerer String.\n"
+      + "IGNORIERE strikt: Kontostand, Saldo, Anfangssaldo, Endsaldo, Zwischensummen, Überträge, Überschriften, Spaltentitel, Seitenzahlen, IBAN/BIC-Kopfzeilen, Adressen. "
+      + "Jede Zeile ist genau EINE Transaktion mit genau EINEM Betrag. Erfinde nichts. Keine Buchungen gefunden → gib [] zurück.";
   const aiReadStatement = async file => {
     const isPdf = file.type==='application/pdf' || /\.pdf$/i.test(file.name);
-    let blob=file, media=file.type||'image/jpeg';
-    if(!isPdf){ try{ blob=await compressImage(file); media='image/jpeg'; }catch(_){} }
-    const b64 = await fileToB64(blob);
-    const block = isPdf ? { type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } } : { type:'image', source:{ type:'base64', media_type:media, data:b64 } };
-    const prompt = "Dies ist ein Bank-Kontoauszug (Deutschland). Lies ALLE einzelnen Buchungen/Umsätze aus. "
-      + "Gib AUSSCHLIESSLICH minifiziertes JSON-Array zurück, kein Text drumherum:\n"
-      + '[{"d":"TT.MM.JJJJ","b":"Empfaenger oder Auftraggeber","z":"Verwendungszweck komplett","a":-12.34,"k":"a","r":"Rechnungs-/Kundennummer falls im Zweck"}]\n'
-      + "d=Buchungsdatum, b=Name des Empfängers/Auftraggebers (NICHT die eigene Bank), z=kompletter Verwendungszweck als Text, "
-      + "a=Betrag mit Vorzeichen (negativ=Ausgabe/Lastschrift, positiv=Eingang/Gutschrift, Punkt als Dezimaltrennzeichen), "
-      + "k=\"e\" bei Eingang/Gutschrift sonst \"a\", r=Rechnungs- oder Kundennummer falls im Verwendungszweck erkennbar sonst leer. "
-      + "Ignoriere Salden, Zwischensummen und Überschriften. Erfinde nichts.";
-    const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:6000, messages:[{ role:'user', content:[block, { type:'text', text:prompt }] }] } });
+    let content;
+    if(isPdf){
+      // 1) Text aus dem PDF ziehen — für Text-PDFs (N26 & Co.) am zuverlässigsten + günstig
+      let text='';
+      try{ const lines = await pdfToLines(file); text = (lines||[]).join('\n').trim(); }catch(_){}
+      if(text.length > 40){
+        content = [{ type:'text', text: STMT_RULES + "\n\nKONTOAUSZUG (Rohtext, Zeilen ggf. leicht verschoben):\n" + text.slice(0,26000) }];
+      } else {
+        // 2) Gescanntes PDF ohne Textebene → als Dokument an die Vision-KI
+        const b64 = await fileToB64(file);
+        content = [{ type:'document', source:{ type:'base64', media_type:'application/pdf', data:b64 } }, { type:'text', text: "Dies ist ein Bild eines Kontoauszugs. " + STMT_RULES }];
+      }
+    } else {
+      let blob=file, media=file.type||'image/jpeg';
+      try{ blob=await compressImage(file); media='image/jpeg'; }catch(_){}
+      const b64 = await fileToB64(blob);
+      content = [{ type:'image', source:{ type:'base64', media_type:media, data:b64 } }, { type:'text', text: "Dies ist ein Foto/Bild eines Kontoauszugs. " + STMT_RULES }];
+    }
+    const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:8000, messages:[{ role:'user', content }] } });
     if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
     let txt=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; txt=txt.replace(/```json|```/g,'').trim(); const mm=txt.match(/\[[\s\S]*\]/); if(mm)txt=mm[0];
     const arr=JSON.parse(txt); if(!Array.isArray(arr)) return [];
-    return arr.map(p=>{ const amt=parseFloat(String(p.a).replace(',','.'))||0; const kind=(p.k==='e'|| amt>0)?'ein':'aus'; return { name:String(p.b||'').slice(0,80), note:String(p.z||''), amount:Math.abs(amt), kind, datum:toISO(p.d||'')||'', belegnr:String(p.r||'') }; }).filter(p=>p.amount>0||p.name);
+    return arr.map(p=>{ const amt=parseFloat(String(p.a).replace(',','.'))||0; const kind=(p.k==='e'|| amt>0)?'ein':'aus'; let nm=String(p.b||'').trim(); if(/^\d{1,2}[.\/]\d{1,2}([.\/]\d{2,4})?$/.test(nm)) nm=''; return { name:nm.slice(0,80), note:String(p.z||''), amount:Math.abs(amt), kind, datum:toISO(p.d||'')||'', belegnr:String(p.r||'') }; }).filter(p=>p.amount>0);
   };
   /* Häufigsten Monat einer Buchungsliste finden (für Auto-Monatswechsel) */
   const dominantMonth = list => { const cnt={}; (list||[]).forEach(p=>{ const iso=toISO(p.datum); if(iso&&/^\d{4}-\d{2}/.test(iso)){ const k=iso.slice(0,7); cnt[k]=(cnt[k]||0)+1; } }); let best=null,bv=0; Object.keys(cnt).forEach(k=>{ if(cnt[k]>bv){bv=cnt[k];best=k;} }); return best; };
