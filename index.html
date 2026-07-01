@@ -1321,6 +1321,7 @@ function App({session}) {
   const [gmailAccounts,setGmailAccounts]= useState([]);  // verbundene Gmail-Postfächer (Status, ohne Tokens)
   const [gmailConnectBusy,setGmailConnectBusy]= useState(false);
   const [gmailSyncBusy,setGmailSyncBusy]= useState(false);
+  const [resendLastReceived,setResendLastReceived]= useState(null); // Rechnungen per E-Mail-Weiterleitung: letzter Eingang
   const isMobile = useIsMobile(900);
   const [navOpen,setNavOpen]= useState(false);
   const [selKey,setSelKey]= useState(null);      // Bereich im Auswahl-Modus
@@ -1930,6 +1931,30 @@ function App({session}) {
     }; });
     if(list.length) addImportDrafts(list);
     await sb.from('gmail_import_queue').update({status:'imported'}).in('id', rows.map(r=>r.id));
+  };
+
+  /* ── Rechnungen per E-Mail-Weiterleitung (Resend Inbound) ── */
+  // Letzten Eingang laden (nur zur Anzeige "funktioniert/zuletzt empfangen" in den Einstellungen)
+  const loadResendInboundStatus = async ()=>{
+    const {data:rows}=await sb.from('resend_import_queue').select('received_at').order('received_at',{ascending:false}).limit(1);
+    if(rows && rows[0]) setResendLastReceived(rows[0].received_at);
+  };
+  useEffect(()=>{ if(ready) loadResendInboundStatus(); },[ready]);
+  useEffect(()=>{ if(ready) pullResendQueueIntoDrafts(); },[ready]);
+  // Offene Funde aus der E-Mail-Weiterleitung in die bestehenden Bankauszug-Entwürfe einreihen
+  const pullResendQueueIntoDrafts = async ()=>{
+    const {data:rows,error}=await sb.from('resend_import_queue').select('id,extracted,file_path,subject,from_email,received_at').eq('status','pending');
+    if(error || !rows || !rows.length) return;
+    const list=rows.filter(r=>r.extracted).map(r=>{ const ex=r.extracted||{}; return {
+      name: ex.name || r.subject || 'Beleg per E-Mail',
+      amount: ex.amount || 0, netto: ex.netto || '', mwst: ex.mwst || '',
+      kind: ex.kind==='ein' ? 'ein' : 'aus', datum: ex.datum || (r.received_at||'').slice(0,10),
+      belegnr: ex.belegnr || '', category: ex.category || '',
+      note: 'Per E-Mail von '+(r.from_email||r.subject||''),
+      filePath: r.file_path || null, resendQueueId: r.id,
+    }; });
+    if(list.length) addImportDrafts(list);
+    await sb.from('resend_import_queue').update({status:'imported'}).in('id', rows.map(r=>r.id));
   };
   const markDraftPrivat = id => { updateDraft(id,{privat:true,ignored:false}); setDraftSel(s=>s.filter(x=>x!==id)); setToast('Als privat markiert'); };
   const markDraftIgnore = id => { updateDraft(id,{ignored:true,privat:false}); setDraftSel(s=>s.filter(x=>x!==id)); setToast('Ignoriert'); };
@@ -3400,7 +3425,7 @@ function App({session}) {
 
           {/* ══ EINSTELLUNGEN (Profil) ══ */}
           {tab==='settings' && (()=>{
-            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'admin',l:'Admin',ic:P.gear}];
+            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send},{k:'admin',l:'Admin',ic:P.gear}];
             const sAcct = bizAccts.includes(settingsAcct)?settingsAcct:(bizAccts[0]||'unter');
             const fldL={...SS,textAlign:'left'};
             const toggleIn=(arr,k)=> arr.includes(k)?arr.filter(x=>x!==k):[...arr,k];
@@ -3550,6 +3575,14 @@ function App({session}) {
                       </div>
                       {a.status!=='disconnected' && <button onClick={()=>askConfirm('Verbindung zu „'+a.email+'" trennen?',()=>disconnectGmailAccount(a.id))} title="Trennen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',flexShrink:0,width:34,height:34,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={15} col={C.mut}/></button>}
                     </div>); })}</div> : <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'22px 14px'}}>Noch kein Gmail-Postfach verbunden.</div>}
+                </div>
+              </>)}
+
+              {settingsTab==='email-import' && (<>
+                <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:4}}>Rechnungen per E-Mail-Weiterleitung</div>
+                  <div style={{fontSize:12,color:C.mut,lineHeight:1.5,marginBottom:14}}>Leite Rechnungs-Mails an die dafür eingerichtete Adresse weiter (oder bitte Lieferanten, direkt dorthin zu senden). PDF-/Bild-Anhänge werden automatisch ausgelesen und erscheinen als Entwurf unter Import → Kontoauszug. Einrichtung (Domain, Webhook) einmalig über Resend – siehe RESEND_INBOUND_SETUP.md.</div>
+                  <div style={{fontSize:12,color:C.sub}}>Status: {resendLastReceived ? (<span><span style={{color:C.grn,fontWeight:600}}>Aktiv</span> · zuletzt empfangen {new Date(resendLastReceived).toLocaleString('de-DE')}</span>) : 'Noch keine E-Mail über diesen Weg empfangen.'}</div>
                 </div>
               </>)}
 

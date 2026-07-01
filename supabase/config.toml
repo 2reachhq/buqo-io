@@ -4,3 +4,8 @@ project_id = "rlorfhpgxmyplmsgmkzw"
 # die Anfrage stattdessen selbst über den signierten "state"-Parameter.
 [functions.gmail-oauth-callback]
 verify_jwt = false
+
+# Resend/Svix ruft diesen Webhook ohne Supabase-Login-Header auf – die Funktion prüft
+# die Anfrage stattdessen selbst über die Svix-Signatur (RESEND_WEBHOOK_SECRET).
+[functions.resend-inbound]
+verify_jwt = false
