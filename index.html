@@ -1279,6 +1279,10 @@ function App({session}) {
   const importDragRef = useRef(null);                // Import: Drag&Drop zwischen Ein/Aus
   const [taxOpen,setTaxOpen]= useState({});          // ausklappbare Steuer-Hinweise
   const [advOpen,setAdvOpen]= useState(false);        // Steuerberater-Bereich ein-/ausklappen
+  const [settingsTab,setSettingsTab]= useState('profil'); // Einstellungen-Tab: profil|konten|team|berater|admin
+  const [settingsAcct,setSettingsAcct]= useState('unter'); // Konten-Unter-Tab in Einstellungen
+  const [teamInvite,setTeamInvite]= useState({email:'',accounts:[]});   // Team-Einladung
+  const [taxInvite,setTaxInvite]= useState({email:'',accounts:[]});     // Steuerberater-Einladung
   const [sp,   setSp]   = useState('p1');
   const [data, setData] = useState({});
   const [names,setNames]= useState({p1:'Immobilie 1',p2:'Immobilie 2',p3:'Immobilie 3',unternehmen:'Firma'});
@@ -2186,6 +2190,14 @@ function App({session}) {
   /* ── Rechnungen ── */
   const company = data.company || {};              // Unternehmen (bestehend)
   const companyImmo = data.companyImmo || {};      // Immobilien (separates Profil)
+  const profile = data.profile || {};
+  const setProfile = patch => setData(prev=>({...prev, profile:{...(prev.profile||{}), ...patch}}));
+  const team = data.team || [];
+  const addTeam = m => setData(prev=>({...prev, team:[...(prev.team||[]), m]}));
+  const removeTeam = id => setData(prev=>({...prev, team:(prev.team||[]).filter(x=>x.id!==id)}));
+  const taxAdvisors = data.taxAdvisors || [];
+  const addTaxAdvisor = m => setData(prev=>({...prev, taxAdvisors:[...(prev.taxAdvisors||[]), m]}));
+  const removeTaxAdvisor = id => setData(prev=>({...prev, taxAdvisors:(prev.taxAdvisors||[]).filter(x=>x.id!==id)}));
   const companyFor = (dom)=> dom==='immo' ? companyImmo : PROPS.includes(dom) ? (data['company_'+dom]||{}) : dom==='privat' ? (data.companyPrivat||{}) : company;
   const customers = data.customers || [];
   const invoices = data.invoices || [];
@@ -3303,13 +3315,48 @@ function App({session}) {
           })()}
 
           {/* ══ EINSTELLUNGEN (Profil) ══ */}
-          {tab==='settings' && <>
-            <div style={{marginBottom:18}}>
-              <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Einstellungen</div>
-              <div style={{fontSize:13,color:C.sub}}>{(session&&session.user&&session.user.email)||''}</div>
-            </div>
-            {/* Rechnungs-Profile: Unternehmen + Immobilien getrennt */}
-            {[{dom:'unter',title:names.unternehmen||'Firma',icon:P.brief},...PROPS.map(p=>({dom:p,title:names[p]||p,icon:P.house})),{dom:'privat',title:names.privatLabel||'Privat',icon:P.prson}].map(({dom,title,icon})=>{ const co=companyFor(dom); const col=acol(dom); return (
+          {tab==='settings' && (()=>{
+            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'admin',l:'Admin',ic:P.gear}];
+            const sAcct = bizAccts.includes(settingsAcct)?settingsAcct:(bizAccts[0]||'unter');
+            const fldL={...SS,textAlign:'left'};
+            const toggleIn=(arr,k)=> arr.includes(k)?arr.filter(x=>x!==k):[...arr,k];
+            const acctChip=(k,on,onClick)=>{ const cc=acol(k); return (<button key={k} onClick={onClick} style={{display:'flex',alignItems:'center',gap:7,background:on?hexA(cc,0.16):C.surf2,border:'1.5px solid '+(on?cc:C.bdr),color:on?C.txt:C.sub,borderRadius:10,padding:'8px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={acctIconOf(k)} sz={14} col={cc}/> {acctNameOf(k)}{on&&<Ic p={P.check} sz={13} col={cc}/>}</button>); };
+            const teamRow=(m,onDel)=>(<div key={m.id} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 0',borderBottom:'1px solid '+C.sep}}><div style={{width:38,height:38,flexShrink:0,borderRadius:'50%',background:C.act,color:C.actTxt,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,fontWeight:700}}>{(m.email||'?').slice(0,1).toUpperCase()}</div><div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:600,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.email}</div><div style={{fontSize:12,color:C.sub,marginTop:2}}>{(m.accounts||[]).map(acctNameOf).join(', ')||'—'} · {m.status}</div></div><button onClick={onDel} title="Entfernen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',flexShrink:0,width:34,height:34,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={15} col={C.mut}/></button></div>);
+            return (
+            <>
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Einstellungen</div>
+                <div style={{fontSize:13,color:C.sub}}>{(session&&session.user&&session.user.email)||''}</div>
+              </div>
+              <div style={{display:'flex',gap:2,marginBottom:20,flexWrap:'wrap',borderBottom:'1px solid '+C.sep}}>
+                {STABS.map(t=>{const on=settingsTab===t.k; return (
+                  <button key={t.k} onClick={()=>setSettingsTab(t.k)} style={{display:'flex',alignItems:'center',gap:7,background:'none',border:'none',padding:'10px 14px',fontSize:13.5,fontWeight:on?700:600,color:on?C.pri:C.sub,cursor:'pointer',fontFamily:'inherit',borderBottom:'2px solid '+(on?C.pri:'transparent'),marginBottom:-1}}><Ic p={t.ic} sz={15} col={on?C.pri:C.sub}/> {t.l}</button>
+                );})}
+              </div>
+
+              {settingsTab==='profil' && (
+                <div style={{...SC,marginBottom:12,maxWidth:600}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:14}}>Persönliches Profil</div>
+                  <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Name</div><input value={profile.name||''} onChange={e=>setProfile({name:e.target.value})} placeholder="Dein Name" style={fldL}/></div>
+                    <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail (Login)</div><input value={(session&&session.user&&session.user.email)||''} readOnly style={{...fldL,opacity:0.65,cursor:'not-allowed'}}/></div>
+                    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                      <div style={{flex:1,minWidth:150}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Telefon</div><input value={profile.phone||''} onChange={e=>setProfile({phone:e.target.value})} placeholder="optional" style={fldL}/></div>
+                      <div style={{flex:1,minWidth:150}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Kontakt-E-Mail</div><input value={profile.contactEmail||''} onChange={e=>setProfile({contactEmail:e.target.value})} placeholder="optional" style={fldL}/></div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {settingsTab==='konten' && (<>
+                {bizAccts.length>1 && (
+                  <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+                    {bizAccts.map(k=>{const on=sAcct===k; const kcol=acol(k); return (
+                      <button key={k} onClick={()=>setSettingsAcct(k)} style={{display:'flex',alignItems:'center',gap:7,background:on?hexA(kcol,0.16):C.surf2,border:'1.5px solid '+(on?kcol:C.bdr),color:on?C.txt:C.sub,borderRadius:11,padding:'9px 14px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={acctIconOf(k)} sz={15} col={kcol}/> {acctNameOf(k)}</button>
+                    );})}
+                  </div>
+                )}
+                {(()=>{ const dom=sAcct; const title=acctNameOf(dom); const icon=acctIconOf(dom); const co=companyFor(dom); const col=acol(dom); return (
             <div key={dom} style={{...SC,marginBottom:12}}>
               <div style={{display:'flex',alignItems:'center',gap:9,fontSize:13,fontWeight:700,color:C.txt,marginBottom:12}}><div style={{width:26,height:26,borderRadius:8,background:hexA(col,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={icon} sz={13} col={col}/></div>{title}</div>
               <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
@@ -3363,41 +3410,71 @@ function App({session}) {
                 <button onClick={()=>{ setCompanyFor(dom,{invHeaderDefault:null,invFooterDefault:null}); setToast('Standardtexte zurückgesetzt'); }} style={{...BVm,alignSelf:'flex-start'}}>Auf Vorlage zurücksetzen</button>
               </div>
             </div>
-            ); })}
-            {/* Admin */}
-            <div style={{marginTop:20,marginBottom:8}}>
-              <div style={{fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.02em',marginBottom:4}}>Admin</div>
-              <div style={{fontSize:12,color:C.mut,marginBottom:14}}>Nur für dich sichtbar</div>
-            </div>
-            {/* Online-Speicher */}
-            <div style={{...SC,marginBottom:12}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Online-Speicher · Belege & Verträge</div>
-                <button onClick={loadStorage} title="Neu berechnen" style={BVm}>↻</button>
-              </div>
-              {storageInfo ? (()=>{
-                const mb=storageInfo.total/1048576, limit=1024, pct=Math.min(100,mb/limit*100);
-                return (<>
-                  <div style={{height:8,background:C.surf3,borderRadius:99,overflow:'hidden',marginBottom:8}}>
-                    <div style={{height:'100%',width:pct+'%',background:pct>85?C.red:C.pri,borderRadius:99}} />
+            ); })()}
+              </>)}
+
+              {settingsTab==='team' && (<>
+                <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:4}}>Teammitglied einladen</div>
+                  <div style={{fontSize:12,color:C.mut,lineHeight:1.5,marginBottom:14}}>Gib Personen Zugriff auf ausgewählte Konten. Zugriffsrechte & E-Mail-Versand werden serverseitig freigeschaltet.</div>
+                  <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={teamInvite.email} onChange={e=>setTeamInvite(t=>({...t,email:e.target.value}))} placeholder="name@beispiel.de" style={fldL}/></div>
+                  <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:8}}>Zugriff auf Konten</div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>{[...bizAccts,'privat'].map(k=>acctChip(k,teamInvite.accounts.includes(k),()=>setTeamInvite(t=>({...t,accounts:toggleIn(t.accounts,k)}))))}</div>
+                  <button onClick={()=>{ const em=(teamInvite.email||'').trim(); if(!em){setToast('Bitte E-Mail angeben.');return;} if(!teamInvite.accounts.length){setToast('Bitte mindestens ein Konto wählen.');return;} addTeam({id:uid(),email:em,accounts:teamInvite.accounts,role:'member',status:'eingeladen',invitedAt:new Date().toISOString().slice(0,10)}); setTeamInvite({email:'',accounts:[]}); setToast('Einladung angelegt: '+em); }} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Einladen</button>
+                </div>
+                <div style={{...SC}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:6,letterSpacing:'0.02em'}}>TEAM · {team.length}</div>
+                  {team.length? <div>{team.map(m=>teamRow(m,()=>askConfirm('„'+m.email+'" aus dem Team entfernen?',()=>removeTeam(m.id))))}</div> : <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'22px 14px'}}>Noch keine Teammitglieder.</div>}
+                </div>
+              </>)}
+
+              {settingsTab==='berater' && (<>
+                <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:4}}>Steuerberater einladen</div>
+                  <div style={{fontSize:12,color:C.mut,lineHeight:1.5,marginBottom:14}}>Dein Steuerberater erhält Zugriff auf die gewählten Firmen-Konten. <b style={{color:C.sub}}>Private Daten werden nicht geteilt.</b></div>
+                  <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={taxInvite.email} onChange={e=>setTaxInvite(t=>({...t,email:e.target.value}))} placeholder="steuerberater@kanzlei.de" style={fldL}/></div>
+                  <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:8}}>Zugriff auf Konten</div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>{bizAccts.map(k=>acctChip(k,taxInvite.accounts.includes(k),()=>setTaxInvite(t=>({...t,accounts:toggleIn(t.accounts,k)}))))}</div>
+                  <button onClick={()=>{ const em=(taxInvite.email||'').trim(); if(!em){setToast('Bitte E-Mail angeben.');return;} if(!taxInvite.accounts.length){setToast('Bitte mindestens ein Konto wählen.');return;} addTaxAdvisor({id:uid(),email:em,accounts:taxInvite.accounts,status:'eingeladen',invitedAt:new Date().toISOString().slice(0,10)}); setTaxInvite({email:'',accounts:[]}); setToast('Steuerberater eingeladen: '+em); }} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Einladen</button>
+                </div>
+                <div style={{...SC}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:6,letterSpacing:'0.02em'}}>STEUERBERATER · {taxAdvisors.length}</div>
+                  {taxAdvisors.length? <div>{taxAdvisors.map(m=>teamRow(m,()=>askConfirm('„'+m.email+'" entfernen?',()=>removeTaxAdvisor(m.id))))}</div> : <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'22px 14px'}}>Noch kein Steuerberater eingeladen.</div>}
+                </div>
+              </>)}
+
+              {settingsTab==='admin' && (<>
+                <div style={{fontSize:12,color:C.mut,marginBottom:14}}>Dieser Bereich ist nur für dich sichtbar.</div>
+                <div style={{...SC,marginBottom:12}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                    <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Online-Speicher · Belege & Verträge</div>
+                    <button onClick={loadStorage} title="Neu berechnen" style={BVm}>↻</button>
                   </div>
-                  <div style={{fontSize:12,color:C.sub}}>{mb.toFixed(mb<10?2:1)} MB von 1.024 MB belegt · {storageInfo.files} {storageInfo.files===1?'Datei':'Dateien'}</div>
-                </>);
-              })() : (
-                <div style={{fontSize:12,color:C.mut}}>{storageLoading?'Wird berechnet…':'—'}</div>
-              )}
-            </div>
-            {/* Daten-Export */}
-            <div style={{...SC,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:2}}>Daten exportieren</div>
-                <div style={{fontSize:12,color:C.mut,lineHeight:1.5}}>Alle Zahlen als Datei (.json) – z. B. zur Auswertung oder als Sicherung.</div>
-              </div>
-              <button onClick={exportData} style={{display:'flex',alignItems:'center',gap:7,background:C.priL,border:'none',color:C.pri,borderRadius:10,padding:'9px 16px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>
-                <Ic p={P.upload} sz={15} col={C.pri}/> Exportieren
-              </button>
-            </div>
-          </>}
+                  {storageInfo ? (()=>{
+                    const mb=storageInfo.total/1048576, limit=1024, pct=Math.min(100,mb/limit*100);
+                    return (<>
+                      <div style={{height:8,background:C.surf3,borderRadius:99,overflow:'hidden',marginBottom:8}}>
+                        <div style={{height:'100%',width:pct+'%',background:pct>85?C.red:C.pri,borderRadius:99}} />
+                      </div>
+                      <div style={{fontSize:12,color:C.sub}}>{mb.toFixed(mb<10?2:1)} MB von 1.024 MB belegt · {storageInfo.files} {storageInfo.files===1?'Datei':'Dateien'}</div>
+                    </>);
+                  })() : (
+                    <div style={{fontSize:12,color:C.mut}}>{storageLoading?'Wird berechnet…':'—'}</div>
+                  )}
+                </div>
+                <div style={{...SC,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:2}}>Daten exportieren</div>
+                    <div style={{fontSize:12,color:C.mut,lineHeight:1.5}}>Alle Zahlen als Datei (.json) – z. B. zur Auswertung oder als Sicherung.</div>
+                  </div>
+                  <button onClick={exportData} style={{display:'flex',alignItems:'center',gap:7,background:C.priL,border:'none',color:C.pri,borderRadius:10,padding:'9px 16px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>
+                    <Ic p={P.upload} sz={15} col={C.pri}/> Exportieren
+                  </button>
+                </div>
+              </>)}
+            </>
+            );
+          })()}
 
           {/* ══ MEHR (mobile Sekundär-Navigation) ══ */}
           {tab==='mehr' && (
