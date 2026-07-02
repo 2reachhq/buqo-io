@@ -1184,34 +1184,74 @@ function Splash({text}) {
   return <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',color:C.sub,fontFamily:FONT,fontSize:14}}>{text}</div>;
 }
 
-function Login() {
+function Login({inviteToken}) {
+  const [mode,setMode]=useState('login');            // 'login' | 'signup'
+  const [role,setRole]=useState(inviteToken?'advisor':'user'); // Rolle bei Registrierung
   const [email,setEmail]=useState('');
   const [pw,setPw]=useState('');
+  const [name,setName]=useState('');
   const [err,setErr]=useState('');
+  const [info,setInfo]=useState('');
   const [busy,setBusy]=useState(false);
   const submit=async e=>{
     e.preventDefault();
-    setBusy(true); setErr('');
-    const {error}=await sb.auth.signInWithPassword({email:email.trim(),password:pw});
-    if(error){ setErr('Login fehlgeschlagen. Bitte E-Mail und Passwort prüfen.'); setBusy(false); }
+    setBusy(true); setErr(''); setInfo('');
+    if(mode==='login'){
+      const {error}=await sb.auth.signInWithPassword({email:email.trim(),password:pw});
+      if(error){ setErr('Login fehlgeschlagen. Bitte E-Mail und Passwort prüfen.'); setBusy(false); }
+      return;
+    }
+    // Registrierung
+    const {data,error}=await sb.auth.signUp({
+      email:email.trim(), password:pw,
+      options:{ data:{ role, full_name:name.trim()||null }, emailRedirectTo: window.location.origin+(inviteToken?('/?advisor_invite='+inviteToken):'/') }
+    });
+    if(error){ setErr(error.message||'Registrierung fehlgeschlagen.'); setBusy(false); return; }
+    if(data && data.session){ /* auto eingeloggt → Root übernimmt */ }
+    else { setInfo('Fast fertig! Bitte bestätige deine E-Mail-Adresse über den Link, den wir dir gerade geschickt haben.'); setBusy(false); }
   };
   const inp = {width:'100%',background:C.surf3,border:'none',borderRadius:10,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit'};
+  const roleBtn=(k,label)=>{ const on=role===k; return (
+    <button type="button" onClick={()=>setRole(k)} style={{flex:1,background:on?C.act:C.surf3,color:on?C.actTxt:C.sub,border:'1px solid '+(on?C.act:C.bdr),borderRadius:10,padding:'9px 8px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
+  ); };
   return (
-    <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:FONT,padding:20}}>
-      <form onSubmit={submit} style={{width:'100%',maxWidth:340,background:C.surf,borderRadius:18,padding:28,border:'1px solid '+C.bdr}}>
+    <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:FONT,padding:20,overflow:'auto'}}>
+      <form onSubmit={submit} style={{width:'100%',maxWidth:360,background:C.surf,borderRadius:18,padding:28,border:'1px solid '+C.bdr,margin:'auto'}}>
         <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
           <BuqoMark sz={30}/>
           <div style={{fontSize:22,fontWeight:700,color:C.txt,letterSpacing:'-0.03em'}}>Buqo</div>
         </div>
-        <div style={{fontSize:13,color:C.sub,marginBottom:22}}>Bitte einloggen</div>
+        {inviteToken ? (
+          <div style={{fontSize:13,color:C.txt,background:hexA(C.pri,0.12),border:'1px solid '+hexA(C.pri,0.3),borderRadius:10,padding:'10px 12px',margin:'14px 0 18px',lineHeight:1.5}}>
+            Du wurdest als <b>Steuerberater</b> eingeladen. {mode==='login'?'Melde dich an,':'Registriere dich,'} um den Zugriff anzunehmen.
+          </div>
+        ) : (
+          <div style={{fontSize:13,color:C.sub,marginBottom:20}}>{mode==='login'?'Bitte einloggen':'Konto erstellen'}</div>
+        )}
+        {mode==='signup' && (
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Ich bin…</label>
+            <div style={{display:'flex',gap:8}}>{roleBtn('user','Unternehmer / Selbstständig')}{roleBtn('advisor','Steuerberater')}</div>
+          </div>
+        )}
+        {mode==='signup' && (<>
+          <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Name{role==='advisor'?' / Kanzlei':''}</label>
+          <input value={name} onChange={e=>setName(e.target.value)} placeholder="optional" style={{...inp,marginBottom:14}} />
+        </>)}
         <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>E-Mail</label>
         <input type="email" value={email} onChange={e=>setEmail(e.target.value)} autoFocus required style={{...inp,marginBottom:14}} />
         <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Passwort</label>
-        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required style={{...inp,marginBottom:err?10:18}} />
+        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required minLength={6} style={{...inp,marginBottom:(err||info)?10:18}} />
         {err && <div style={{fontSize:12,color:C.red,marginBottom:14}}>{err}</div>}
+        {info && <div style={{fontSize:12.5,color:C.grn,marginBottom:14,lineHeight:1.5}}>{info}</div>}
         <button type="submit" disabled={busy} style={{width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.6:1}}>
-          {busy?'Wird eingeloggt…':'Einloggen'}
+          {busy?'Bitte warten…':(mode==='login'?'Einloggen':'Konto erstellen')}
         </button>
+        <div style={{textAlign:'center',marginTop:16,fontSize:13,color:C.sub}}>
+          {mode==='login'
+            ? <span>Noch kein Konto? <button type="button" onClick={()=>{setMode('signup');setErr('');setInfo('');}} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>Registrieren</button></span>
+            : <span>Schon ein Konto? <button type="button" onClick={()=>{setMode('login');setErr('');setInfo('');}} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>Einloggen</button></span>}
+        </div>
       </form>
     </div>
   );
@@ -1242,6 +1282,42 @@ function CustomerSelect({customers, value, onPick, onCreate}) {
               </button>
             ))}
             {list.length===0 && <div style={{fontSize:13,color:C.mut,padding:'10px 12px'}}>Kein Kunde gefunden.</div>}
+          </div>
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+/* ══ Suchbarer Buchungs-Dropdown (Aufgaben/Raten mit einer Buchung verknüpfen) ══ */
+function BookingSelect({bookings, value, onPick, placeholder}) {
+  const [open,setOpen]=useState(false);
+  const [q,setQ]=useState('');
+  const sel = value ? bookings.find(b=>b.id===value.id && b.year===value.year) : null;
+  const ql = q.toLowerCase();
+  const list = (ql ? bookings.filter(b=>(b.name||'').toLowerCase().includes(ql)) : bookings).slice(0,60);
+  const row={display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:9,padding:'10px 12px',fontSize:13.5,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'};
+  return (
+    <div style={{position:'relative'}}>
+      <button type="button" onClick={()=>setOpen(o=>!o)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,width:'100%',background:C.surf2,border:'1px solid '+(open?C.bdrM:C.bdr),borderRadius:11,padding:'11px 13px',fontSize:13.5,color:sel?C.txt:C.mut,cursor:'pointer',fontFamily:'inherit'}}>
+        <span style={{display:'flex',alignItems:'center',gap:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}><Ic p={P.clip} sz={14} col={C.sub}/>{sel?(sel.name+' · '+fmt(sel.amount)):(placeholder||'Buchung verknüpfen…')}</span>
+        <span style={{display:'inline-flex',transition:'transform .16s',transform:open?'rotate(180deg)':'none',flexShrink:0}}><Ic p={P.down} sz={13} col={C.sub}/></span>
+      </button>
+      {open && (<>
+        <div onClick={()=>{setOpen(false);setQ('');}} style={{position:'fixed',inset:0,zIndex:140}}/>
+        <div style={{position:'absolute',top:'calc(100% + 6px)',left:0,right:0,zIndex:141,background:C.surf,border:'1px solid '+C.bdr,borderRadius:13,padding:6,boxShadow:'0 16px 40px rgba(0,0,0,0.55)'}}>
+          <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Buchung suchen…" style={{width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:9,color:C.txt,padding:'10px 12px',fontSize:13.5,outline:'none',fontFamily:'inherit',marginBottom:6,boxSizing:'border-box'}} />
+          <div style={{maxHeight:260,overflowY:'auto'}}>
+            {sel && <button onClick={()=>{onPick(null);setOpen(false);setQ('');}} style={{...row,color:C.red}}><Ic p={P.trash} sz={14} col={C.red}/> Verknüpfung entfernen</button>}
+            {list.map(b=>(
+              <button key={b.year+':'+b.id} onClick={()=>{onPick(b);setOpen(false);setQ('');}} style={{...row,background:(sel&&sel.id===b.id&&sel.year===b.year)?C.surf2:'none'}}>
+                <Ic p={b.kind==='ein'?P.up:P.down} sz={14} col={b.kind==='ein'?C.grn:C.sub}/>
+                <span style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{b.name||'(ohne Namen)'}</span>
+                <span style={{fontSize:12,color:C.mut,...NUM,flexShrink:0}}>{fmt(b.amount)}</span>
+                <span style={{fontSize:11,color:C.mut,flexShrink:0}}>{b.acctLabel}</span>
+              </button>
+            ))}
+            {list.length===0 && <div style={{fontSize:13,color:C.mut,padding:'10px 12px'}}>Keine Buchung gefunden.</div>}
           </div>
         </div>
       </>)}
@@ -1291,6 +1367,10 @@ function App({session}) {
   const [belKindF,setBelKindF]= useState('alle');          // Belege-Art: alle|einmalig|wied
   const [belStatusF,setBelStatusF]= useState('alle');      // Belege-Status: alle|offen|erledigt
   const [belAcct,setBelAcct]= useState('alle');            // Belege-Konten-Filter ('alle' | Konto-Key)
+  const [todoForm,setTodoForm]= useState(null);      // Aufgabe im Editor {id?,title,note,ref}
+  const [todoFilter,setTodoFilter]= useState('offen'); // Aufgaben-Filter: offen|erledigt|alle
+  const [instForm,setInstForm]= useState(null);       // Rate/Kredit im Editor
+  const [instOpen,setInstOpen]= useState(null);       // Rate/Kredit-Detailansicht (id)
   const [invRecurDlg,setInvRecurDlg]= useState(false); // „Wiederkehrend"-Dialog (Start/Ende/Intervall) im Rechnungs-Editor
   const [recInvEdit,setRecInvEdit]= useState(null);  // Editor wiederkehrende Rechnung
   const [yrView,setYrView]= useState('monat');       // Jahres- vs Monatsübersicht (Analytics, Standard=Monat)
@@ -1420,6 +1500,12 @@ function App({session}) {
   const [calYr,setCalYr]= useState(now.getFullYear());
   const [profOpen,setProfOpen]= useState(false);   // Profil-Menü
   const [taxBusy,setTaxBusy]= useState(false);     // Steuer-KI-Analyse
+  /* ── Abo & AI-Guthaben (pro Auth-Nutzer, Supabase) ── */
+  const [sub,setSub]= useState(null);              // subscriptions-Zeile
+  const [balanceCents,setBalanceCents]= useState(null); // AI-Guthaben in Cent
+  const [billingBusy,setBillingBusy]= useState(false);  // Checkout/Portal lädt
+  const [advInvites,setAdvInvites]= useState([]);  // echte Steuerberater-Einladungen (DB)
+  const [advBusy,setAdvBusy]= useState(false);
   const [privTab,setPrivTab]= useState('ausgaben'); // Privat: Toggle
   const [immoView,setImmoView]= useState('einnahmen'); // Immobilien: Toggle
   const [iconPick,setIconPick]= useState(null);     // Standort-Icon-Auswahl (pid)
@@ -1432,7 +1518,7 @@ function App({session}) {
   const subSlug = (v)=> v==='wied' ? 'wiederkehrend' : v;
   const parseSub = (s)=> s==='wiederkehrend' ? 'wied' : s;
   useEffect(()=>{
-    const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten']);
+    const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
     const apply=()=>{ const raw=(window.location.hash||'').replace(/^#\/?/,''); if(!raw) return; const parts=raw.split('/'); const head=parts[0];
       if(head!=='erfassen') setCapture(null);
       if(head!=='rechnung-erstellen') setInvEdit(null);
@@ -1486,6 +1572,22 @@ function App({session}) {
       setReady(true);
     })();
     return ()=>{active=false;};
+  },[]);
+
+  /* Abo & AI-Guthaben laden + Rückkehr aus Stripe-Checkout auswerten */
+  useEffect(()=>{
+    refreshBilling(); refreshAdvInvites();
+    try{
+      const q=new URLSearchParams(window.location.search);
+      const co=q.get('checkout');
+      if(co){
+        if(co==='success') setToast('Abo aktiviert. Willkommen bei Buqo!');
+        else if(co==='credits_success') { setToast('Guthaben aufgeladen.'); setTimeout(refreshBilling,1500); }
+        else if(co==='cancel') setToast('Vorgang abgebrochen.');
+        // Query-Parameter aus der URL entfernen
+        const url=window.location.pathname+window.location.hash; window.history.replaceState(null,'',url);
+      }
+    }catch(e){}
   },[]);
 
   /* Speichern nach Supabase (debounced) */
@@ -2004,6 +2106,8 @@ function App({session}) {
       const u=md.unternehmen; if(u){ (u.clients||[]).forEach(it=>out.push({it,acct:names.unternehmen,y:+y,m:+m,kind:'ein'})); (u.items||[]).forEach(it=>out.push({it,acct:names.unternehmen,y:+y,m:+m,kind:'aus'})); }
       const pr=md.privat; if(pr){ (pr.einnahmen||[]).forEach(it=>out.push({it,acct:names.privatLabel||'Privat',y:+y,m:+m,kind:'ein'})); (pr.items||[]).forEach(it=>out.push({it,acct:names.privatLabel||'Privat',y:+y,m:+m,kind:'aus'})); }
     }); }); return out; };
+  // Flache, suchbare Liste aller Buchungen (für Verknüpfung bei Aufgaben/Raten) – neueste zuerst
+  const allBookingsFlat = ()=>{ const out=existingBookings().map(b=>({id:b.it.id, year:b.y, month:b.m, name:b.it.name||'', amount:num(b.it.amount), date:b.it.datum||'', kind:b.kind, acctLabel:b.acct})); out.sort((a,b)=>(b.year-a.year)||(b.month-a.month)); return out; };
   const normName = s => String(s||'').toLowerCase().replace(/[^a-z0-9äöü]/g,'');
   const toISO = s => { if(!s) return ''; s=String(s); if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10); const m=s.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})/); if(m){ let y=m[3]; if(y.length===2)y='20'+y; return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0'); } return ''; };
   const addDays = (iso,n)=>{ try{ const d=new Date(iso); if(isNaN(d.getTime())) return ''; d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }catch(e){ return ''; } };
@@ -2033,7 +2137,65 @@ function App({session}) {
 
   /* ── KI-Kosten: Token-Verbrauch je Monat & Modell mitschreiben ── */
   const logAiUsage = (model, usage)=>{ try{ if(!usage) return; const inT=usage.input_tokens||usage.inputTokens||0, outT=usage.output_tokens||usage.outputTokens||0; if(!inT&&!outT) return; const ym=new Date().toISOString().slice(0,7); const md2=String(model||'unbekannt'); setData(prev=>{ const au={...(prev.aiUsage||{})}; const m={...(au[ym]||{})}; const cur=m[md2]||{in:0,out:0,calls:0}; m[md2]={in:cur.in+inT, out:cur.out+outT, calls:cur.calls+1}; au[ym]=m; return {...prev, aiUsage:au}; }); }catch(e){} };
-  const aiInvoke = async (opts)=>{ const r = await sb.functions.invoke('ai', opts); try{ const u = r && r.data && (r.data.usage || (r.data.message&&r.data.message.usage)); if(u) logAiUsage(opts&&opts.body&&opts.body.model, u); }catch(e){} return r; };
+  const aiInvoke = async (opts)=>{
+    const r = await sb.functions.invoke('ai', opts);
+    try{ const u = r && r.data && (r.data.usage || (r.data.message&&r.data.message.usage)); if(u) logAiUsage(opts&&opts.body&&opts.body.model, u); }catch(e){}
+    // Guthaben aufgebraucht (402) erkennen und dem Nutzer melden.
+    try{
+      if(r && r.error && r.error.context && typeof r.error.context.status==='number' && r.error.context.status===402){
+        setBalanceCents(0);
+        setToast('AI-Guthaben aufgebraucht – bitte unter „Abo & Guthaben" aufladen.');
+      }
+    }catch(e){}
+    // Nach erfolgreichen KI-Aufrufen das Guthaben im Hintergrund aktualisieren.
+    if(r && r.data && !r.error){ try{ refreshBalance(); }catch(e){} }
+    return r;
+  };
+
+  /* ── Abo & Guthaben aus Supabase laden ── */
+  const refreshBalance = async ()=>{
+    try{ const {data}=await sb.from('ai_credits').select('balance_cents').eq('user_id',session.user.id).maybeSingle(); if(data) setBalanceCents(data.balance_cents); }catch(e){}
+  };
+  const refreshBilling = async ()=>{
+    try{
+      const [s,c] = await Promise.all([
+        sb.from('subscriptions').select('*').eq('user_id',session.user.id).maybeSingle(),
+        sb.from('ai_credits').select('balance_cents,auto_recharge,auto_threshold_cents,auto_topup_cents').eq('user_id',session.user.id).maybeSingle(),
+      ]);
+      if(s&&s.data) setSub(s.data);
+      if(c&&c.data) setBalanceCents(c.data.balance_cents);
+    }catch(e){}
+  };
+  const refreshAdvInvites = async ()=>{
+    try{ const {data}=await sb.from('advisor_invitations').select('id,advisor_email,status,created_at,accepted_at').order('created_at',{ascending:false}); if(data) setAdvInvites(data); }catch(e){}
+  };
+  /* ── Stripe-Checkout / Kundenportal öffnen ── */
+  const startCheckout = async (kind, opts)=>{
+    setBillingBusy(true);
+    try{
+      const {data,error}=await sb.functions.invoke('stripe-checkout',{body:{kind, ...(opts||{})}});
+      if(error) throw error; if(data&&data.error) throw new Error(data.error);
+      if(data&&data.url){ window.location.href=data.url; return; }
+      setToast('Checkout konnte nicht gestartet werden.');
+    }catch(e){ setToast('Fehler: '+((e&&e.message)||e)); }
+    setBillingBusy(false);
+  };
+  /* ── Steuerberater echt einladen (Edge Function: Einladung + Mail) ── */
+  const inviteAdvisorReal = async (email)=>{
+    const em=(email||'').trim().toLowerCase();
+    if(!/.+@.+\..+/.test(em)){ setToast('Bitte gültige E-Mail angeben.'); return false; }
+    setAdvBusy(true);
+    try{
+      const {data,error}=await sb.functions.invoke('advisor-invite',{body:{email:em}});
+      if(error) throw error; if(data&&data.error) throw new Error(data.error);
+      setToast('Einladung an '+em+' gesendet.');
+      await refreshAdvInvites();
+      setAdvBusy(false); return true;
+    }catch(e){ setToast('Einladung fehlgeschlagen: '+((e&&e.message)||e)); setAdvBusy(false); return false; }
+  };
+  const revokeAdvInvite = async (id)=>{
+    try{ await sb.from('advisor_invitations').update({status:'revoked'}).eq('id',id); refreshAdvInvites(); }catch(e){}
+  };
   // Kurzer Steuer-Hinweis zu einer Ausgabe (wie ein Steuerberater, NRW/DE)
   const fetchTaxTip = async (item, dom, extra)=>{
     const bereich = dom==='immo' ? 'private Immobilien-Vermietung (Vermietung & Verpachtung)' : 'Unternehmen/Gewerbe';
@@ -2417,6 +2579,44 @@ function App({session}) {
   const defMwstFor = (dom)=>{ const co=companyFor(dom||'unter'); return co&&co.defMwst!=null&&co.defMwst!=='' ? num(co.defMwst) : 19; };
   const newInvoice = (dom)=>{ const acc=(dom&&dom!=='alle')?normAcct(dom):'unter'; return { id:uid(), number:nextInvNo(), domain:acc, customerId:'', custName:'', custAddress:'', custEmail:'', saveCust:true, account:'', date:new Date().toISOString().slice(0,10), due:'', items:[{desc:'',qty:1,price:0,mwst:defMwstFor(acc)}], note:'' }; };
   const invCustomer = (inv)=>{ const c=customers.find(x=>x.id===inv.customerId); if(c) return c; return {name:inv.custName||'', address:inv.custAddress||'', email:inv.custEmail||'', firstName:inv.firstName||'', lastName:inv.lastName||'', company:inv.company||'', anrede:inv.anrede||''}; };
+
+  /* ── Aufgaben (To-Dos): manuell + automatisch aus überfälligen Rechnungen/offenen Belegen/Dubletten ── */
+  const todos = data.todos || [];
+  const addTodo = (t) => setData(prev=>({...prev, todos:[{id:uid(), done:false, source:'user', createdAt:new Date().toISOString(), ref:null, note:'', ...t}, ...(prev.todos||[])]}));
+  const updateTodo = (id, patch) => setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>t.id===id?{...t,...patch}:t)}));
+  const removeTodo = (id) => setData(prev=>({...prev, todos:(prev.todos||[]).filter(t=>t.id!==id)}));
+  const toggleTodoDone = (id) => setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>t.id===id?{...t,done:!t.done,doneAt:!t.done?new Date().toISOString():null}:t)}));
+  const openTodoRef = (t) => { const ref=t&&t.ref; if(!ref) return;
+    if(ref.type==='invoice'){ const iv=(data.invoices||[]).find(x=>x.id===ref.id); if(iv){ setTab('rechnung'); setInvView(iv); } }
+    else if(ref.type==='booking'){ const loc=findItemLocation(ref.id, ref.year); if(loc) openCaptureEdit(loc); else setToast('Verknüpfte Buchung wurde nicht gefunden.'); }
+    else if(ref.type==='draft'){ setTab('import'); }
+  };
+  // Deterministische Sync: überfällige Rechnungen, offene Belege und Dubletten werden als
+  // Aufgaben abgebildet – neue tauchen auf, erledigte werden automatisch abgehakt. KEIN Chat-Popup mehr.
+  const syncAutoTodos = () => { setData(prev=>{
+    let list=(prev.todos||[]).slice(); let changed=false;
+    const byKey={}; list.forEach(t=>{ if(t.autoKey) byKey[t.autoKey]=t; });
+    const seen=new Set();
+    const upsert=(key,title,note,ref)=>{ seen.add(key); const ex=byKey[key];
+      if(ex){ if(ex.done && ex.autoResolved){ list=list.map(t=>t.id===ex.id?{...t,title,note,done:false,doneAt:null,autoResolved:false}:t); changed=true; byKey[key]={...ex,title,note,done:false}; }
+        else if(ex.title!==title||ex.note!==note){ list=list.map(t=>t.id===ex.id?{...t,title,note}:t); changed=true; byKey[key]={...ex,title,note}; } }
+      else { const t={id:uid(),autoKey:key,title,note,done:false,source:'ai',createdAt:new Date().toISOString(),ref}; list=[t,...list]; changed=true; byKey[key]=t; }
+    };
+    try{ overdueInvoices().forEach(iv=>{ const c=invCustomer(iv); upsert('inv:'+iv.id, 'Rechnung '+iv.number+' ist überfällig', (c&&c.name?('Kunde: '+c.name+'. '):'')+'Zahlungserinnerung oder Mahnung senden.', {type:'invoice', id:iv.id}); }); }catch(e){}
+    try{ openBelegeList().forEach(b=>{ upsert('beleg:'+b.it.id, 'Beleg „'+(b.it.name||'—')+'" wartet auf Bestätigung', 'Über den Kontoauszug bestätigen oder manuell zuordnen.', {type:'booking', id:b.it.id, year:b.ty}); }); }catch(e){}
+    try{ (data.drafts||[]).filter(d=>d.dup && !d.confirmed && !d.ignored && !d.privat).forEach(d=>{ upsert('dup:'+d.id, 'Mögliche Dublette: „'+(d.name||'—')+'"', 'Im Import prüfen, ob das schon gebucht wurde.', {type:'draft', id:d.id}); }); }catch(e){}
+    list = list.map(t=>{ if(!t.autoKey || t.done) return t; const tracked = t.autoKey.indexOf('inv:')===0 || t.autoKey.indexOf('beleg:')===0 || t.autoKey.indexOf('dup:')===0;
+      if(tracked && !seen.has(t.autoKey)){ changed=true; return {...t, done:true, doneAt:new Date().toISOString(), autoResolved:true}; } return t; });
+    return changed ? {...prev, todos:list} : prev;
+  }); };
+
+  /* ── Ratenzahlungen & Kredite (Sonstiges): Übersicht laufender Raten mit Buchungs-Verknüpfung ── */
+  const installments = data.installments || [];
+  const addInstallment = (patch) => setData(prev=>({...prev, installments:[{id:uid(), createdAt:new Date().toISOString(), account:'unter', linkedIds:[], note:'', ...patch}, ...(prev.installments||[])]}));
+  const updateInstallment = (id, patch) => setData(prev=>({...prev, installments:(prev.installments||[]).map(x=>x.id===id?{...x,...patch}:x)}));
+  const removeInstallment = (id) => setData(prev=>({...prev, installments:(prev.installments||[]).filter(x=>x.id!==id)}));
+  const toggleInstallmentLink = (instId, booking) => setData(prev=>({...prev, installments:(prev.installments||[]).map(x=>{ if(x.id!==instId) return x; const has=(x.linkedIds||[]).some(l=>l.id===booking.id&&l.year===booking.year); const linkedIds = has ? (x.linkedIds||[]).filter(l=>!(l.id===booking.id&&l.year===booking.year)) : [...(x.linkedIds||[]), {id:booking.id, year:booking.year}]; return {...x, linkedIds}; })}));
+  const installmentPaid = (inst) => { let sum=0; (inst.linkedIds||[]).forEach(l=>{ try{ const loc=findItemLocation(l.id,l.year); const it=loc?fullBelegItem(loc):null; if(it) sum+=num(it.amount); }catch(e){} }); return sum; };
   // Steuerberater-KI: Frage zur aktuellen Rechnung beantworten
   const askInvoiceTax = async (inv, q)=>{ const qq=String(q||'').trim(); if(!qq){ setToast('Bitte eine Frage eingeben.'); return; } setInvTaxAsk({q:qq, answer:'', busy:true}); try{ const tot=invTotals(inv.items); const cust=invCustomer(inv); const sys="Du bist ein deutscher Steuerberater-Assistent (Standort NRW). Beantworte Fragen zur Rechnungsstellung/Abrechnung kurz, konkret, in Klartext (KEIN Markdown, keine Aufzählungszeichen). Schließe mit einem kurzen Satz, dass der Steuerberater final entscheidet."; const usr="Kontext einer Ausgangsrechnung: Kunde "+((cust&&cust.name)||inv.custName||'—')+", Bereich "+((inv.domain||'unter')==='immo'?'Immobilien/Vermietung':'Firma')+", Positionen: "+((inv.items||[]).map(i=>i.desc+' '+fmt(num(i.price)*num(i.qty||1))+' ('+(i.mwst!=null?i.mwst:19)+'% MwSt)').join('; ')||'—')+", Gesamt brutto "+fmt(tot.gross)+". Frage des Nutzers: „"+qq+"\""; const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:800, system:sys, messages:[{ role:'user', content:[{ type:'text', text:usr }] }] } }); if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler'); const t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'(keine Antwort)'; setInvTaxAsk({q:qq, answer:t, busy:false}); }catch(e){ setInvTaxAsk({q:qq, answer:'Konnte nicht beantworten: '+(e.message||e), busy:false}); } };
   // Aus einem wiederkehrenden Posten eine Rechnung vorbereiten (öffnet den Editor)
@@ -3013,35 +3213,12 @@ function App({session}) {
     if(botOpen){ botSeenRef.current=botMsgs.length; setBotUnread(0); }
     else setBotUnread(botMsgs.filter((m,i)=>i>=botSeenRef.current && m.role==='assistant').length);
   }, [botMsgs.length, botOpen]);
-  // Täglicher Morgen-Digest: ab 9 Uhr einmal pro Tag eine To-do-Nachricht in den Chat legen
-  const digestCheckRef = useRef(null);
-  digestCheckRef.current = ()=>{
-    try{
-      const now=new Date(); if(now.getHours()<9) return;
-      const today=now.toISOString().slice(0,10);
-      if(localStorage.getItem('buqo_digest_date')===today) return;
-      localStorage.setItem('buqo_digest_date',today);
-      const openCount=openBelegeList().length;
-      const dupCount=drafts.filter(d=>d.dup && !d.confirmed && !d.ignored && !d.privat).length;
-      const overdue=overdueInvoices();
-      const pending=drafts.filter(d=>!d.confirmed && !d.ignored && !d.privat).length;
-      const todos=[];
-      if(overdue.length) todos.push('• '+overdue.length+(overdue.length===1?' Rechnung ist':' Rechnungen sind')+' überfällig');
-      if(openCount) todos.push('• '+openCount+(openCount===1?' Beleg wartet':' Belege warten')+' auf Bestätigung');
-      if(dupCount) todos.push('• '+dupCount+' mögliche Dublette'+(dupCount===1?'':'n'));
-      if(pending) todos.push('• '+pending+' Kontoauszug-Buchung'+(pending===1?'':'en')+' unbearbeitet');
-      const opts=[];
-      if(overdue.length) opts.push({label:'Rechnungen',tab:'rechnung'});
-      if(openCount) opts.push({label:'Belege',tab:'belege'});
-      if(dupCount||pending) opts.push({label:'Import',tab:'import'});
-      const content = todos.length ? 'Guten Morgen! ☀️ Deine To-dos für heute:\n'+todos.join('\n') : 'Guten Morgen! ☀️ Alles im grünen Bereich – keine offenen To-dos.';
-      setBotMsgs(m=>[...m, {role:'assistant', content, action: opts.length?{type:'navTab',options:opts}:null}]);
-    }catch(_){}
-  };
+  // Aufgaben-Sync statt Chat-Digest: läuft still im Hintergrund (kein Chat-Popup) und hält die
+  // Aufgaben-Seite aktuell – neue Punkte tauchen dort auf, erledigte werden automatisch abgehakt.
   useEffect(()=>{
     if(!ready) return;
-    digestCheckRef.current && digestCheckRef.current();
-    const t=setInterval(()=>{ digestCheckRef.current && digestCheckRef.current(); }, 60000);
+    syncAutoTodos();
+    const t=setInterval(()=>{ syncAutoTodos(); }, 60000);
     return ()=>clearInterval(t);
   }, [ready]);
   const botSend = async (text)=>{ const q=(text!=null?text:botInput).trim(); const file=botFile; if(botBusy) return; if(!q && !file) return; if(botRecOn){ try{ botRecRef.current&&botRecRef.current.stop(); }catch(_){ } setBotRecOn(false); }
@@ -3342,6 +3519,8 @@ function App({session}) {
   );
   const SONSTIGES = [
     {id:'kunden', label:'Kunden',       icon:P.prson},
+    {id:'aufgaben', label:'Aufgaben',   icon:P.check},
+    {id:'raten',  label:'Raten & Kredite', icon:P.bank},
     {id:'download', label:'Download',   icon:P.down},
     {id:'yr',     label:'Analyse',      icon:P.cal},
     {id:'steuer', label:'Steuer-Assistent', icon:P.doc},
@@ -3598,6 +3777,10 @@ function App({session}) {
               <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
                 <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
               </div>
+              <button onClick={()=>{ setProfOpen(false); setSettingsTab('abo'); setTab('settings'); }} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                <span style={{display:'flex',alignItems:'center',gap:10}}><Ic p={P.spark} sz={16} col={C.sub}/> <span>AI-Guthaben</span></span>
+                <span style={{fontSize:13,fontWeight:700,color:balanceCents!=null&&balanceCents<=0?C.red:C.grn}}>{balanceCents==null?'—':((balanceCents/100).toFixed(2).replace('.',',')+' €')}</span>
+              </button>
               <button onClick={()=>{ setProfOpen(false); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
                 <Ic p={P.gear} sz={16} col={C.sub}/> <span>Einstellungen</span>
               </button>
@@ -3798,7 +3981,8 @@ function App({session}) {
 
           {/* ══ EINSTELLUNGEN (Profil) ══ */}
           {tab==='settings' && (()=>{
-            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send},{k:'admin',l:'Admin',ic:P.gear}];
+            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'abo',l:'Abo & Guthaben',ic:P.brief},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send},{k:'admin',l:'Admin',ic:P.gear}];
+            const eur = (c)=> (c==null?'—':((c/100).toFixed(2).replace('.',',')+' €'));
             const sAcct = bizAccts.includes(settingsAcct)?settingsAcct:(bizAccts[0]||'unter');
             const fldL={...SS,textAlign:'left'};
             const toggleIn=(arr,k)=> arr.includes(k)?arr.filter(x=>x!==k):[...arr,k];
@@ -3829,6 +4013,59 @@ function App({session}) {
                   </div>
                 </div>
               )}
+
+              {settingsTab==='abo' && (()=>{
+                const st = (sub&&sub.status)||'none';
+                const active = st==='active'||st==='trialing';
+                const stLbl = {none:'Kein Abo',trialing:'Testphase',active:'Aktiv',past_due:'Zahlung offen',canceled:'Gekündigt'}[st]||st;
+                const stCol = active?C.grn:(st==='past_due'?C.amb:C.mut);
+                const extra = (sub&&sub.extra_accounts)||0;
+                const monthly = 1499 + extra*700; // Cent
+                const pkgs=[500,1000,2500];
+                return (<>
+                  {/* Abo-Status */}
+                  <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:14}}>
+                      <div>
+                        <div style={{fontSize:14,fontWeight:700,color:C.txt}}>Buqo-Abo</div>
+                        <div style={{fontSize:12,color:C.sub,marginTop:2}}>Ein Plan – alle Funktionen frei. AI-Nutzung läuft über Guthaben.</div>
+                      </div>
+                      <span style={{display:'inline-flex',alignItems:'center',gap:6,background:hexA(stCol,0.14),color:stCol,borderRadius:99,padding:'6px 12px',fontSize:12.5,fontWeight:700,whiteSpace:'nowrap'}}><span style={{width:7,height:7,borderRadius:'50%',background:stCol}}/>{stLbl}</span>
+                    </div>
+                    <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:4}}>
+                      <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.02em',color:C.txt}}>{eur(monthly)}</div>
+                      <div style={{fontSize:13,color:C.sub}}>/ Monat</div>
+                    </div>
+                    <div style={{fontSize:12,color:C.mut,marginBottom:16}}>14,99 € Basis{extra>0?(' + '+extra+' × 7 € Zusatzkonto'):''} · monatlich kündbar</div>
+                    {active ? (
+                      <button disabled={billingBusy} onClick={()=>startCheckout('portal')} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.surf3,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:billingBusy?'default':'pointer',fontFamily:'inherit',opacity:billingBusy?0.6:1}}><Ic p={P.gear} sz={15} col={C.txt}/> Abo verwalten</button>
+                    ) : (
+                      <button disabled={billingBusy} onClick={()=>startCheckout('subscription',{extraAccounts:extra})} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:billingBusy?'default':'pointer',fontFamily:'inherit',opacity:billingBusy?0.6:1}}><Ic p={P.check} sz={15} col={C.actTxt}/> {billingBusy?'Wird geöffnet…':'Abo starten'}</button>
+                    )}
+                    {sub&&sub.cancel_at_period_end && <div style={{fontSize:12,color:C.amb,marginTop:10}}>Läuft zum Periodenende aus{sub.current_period_end?(' ('+new Date(sub.current_period_end).toLocaleDateString('de-DE')+')'):''}.</div>}
+                  </div>
+                  {/* Zusatzkonten */}
+                  <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                    <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:4}}>Zusatzkonten</div>
+                    <div style={{fontSize:12,color:C.mut,lineHeight:1.5,marginBottom:14}}>Jedes weitere Konto (neben dem ersten) kostet 7 € / Monat. Aktuell: <b style={{color:C.sub}}>{extra}</b> Zusatzkonto{extra===1?'':'en'}.</div>
+                    <button disabled={billingBusy} onClick={()=>startCheckout(active?'portal':'subscription',{extraAccounts:extra+1})} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.surf3,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'10px 16px',fontSize:13.5,fontWeight:700,cursor:billingBusy?'default':'pointer',fontFamily:'inherit',opacity:billingBusy?0.6:1}}><Ic p={P.plus} sz={14} col={C.txt}/> {active?'Zusatzkonto im Portal buchen':'Konto hinzufügen (+7 €)'}</button>
+                  </div>
+                  {/* AI-Guthaben */}
+                  <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:6}}>
+                      <div style={{fontSize:14,fontWeight:700,color:C.txt}}>AI-Guthaben</div>
+                      <div style={{fontSize:20,fontWeight:800,color:balanceCents!=null&&balanceCents<=0?C.red:C.grn}}>{eur(balanceCents)}</div>
+                    </div>
+                    <div style={{fontSize:12,color:C.mut,lineHeight:1.5,marginBottom:14}}>Alles rund um KI (Belegerkennung, Steuer-Hinweise, Chat) wird nach Verbrauch abgerechnet. Prepaid – kein Überraschungs-Betrag am Monatsende.</div>
+                    <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:8}}>Guthaben aufladen</div>
+                    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                      {pkgs.map(c=>(
+                        <button key={c} disabled={billingBusy} onClick={()=>startCheckout('credits',{amountCents:c})} style={{display:'inline-flex',alignItems:'center',gap:7,background:hexA(C.pri,0.12),color:C.pri,border:'1px solid '+hexA(C.pri,0.3),borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:billingBusy?'default':'pointer',fontFamily:'inherit',opacity:billingBusy?0.6:1}}>+ {eur(c)}</button>
+                      ))}
+                    </div>
+                  </div>
+                </>);
+              })()}
 
               {settingsTab==='konten' && (<>
                 {bizAccts.length>1 && (
@@ -3917,8 +4154,19 @@ function App({session}) {
                   <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={taxInvite.email} onChange={e=>setTaxInvite(t=>({...t,email:e.target.value}))} placeholder="steuerberater@kanzlei.de" style={fldL}/></div>
                   <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:8}}>Zugriff auf Konten</div>
                   <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>{bizAccts.map(k=>acctChip(k,taxInvite.accounts.includes(k),()=>setTaxInvite(t=>({...t,accounts:toggleIn(t.accounts,k)}))))}</div>
-                  <button onClick={()=>{ const em=(taxInvite.email||'').trim(); if(!em){setToast('Bitte E-Mail angeben.');return;} if(!taxInvite.accounts.length){setToast('Bitte mindestens ein Konto wählen.');return;} addTaxAdvisor({id:uid(),email:em,accounts:taxInvite.accounts,status:'eingeladen',invitedAt:new Date().toISOString().slice(0,10)}); setTaxInvite({email:'',accounts:[]}); setToast('Steuerberater eingeladen: '+em); }} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Einladen</button>
+                  <button disabled={advBusy} onClick={async()=>{ const em=(taxInvite.email||'').trim(); if(!em){setToast('Bitte E-Mail angeben.');return;} if(!taxInvite.accounts.length){setToast('Bitte mindestens ein Konto wählen.');return;} const ok=await inviteAdvisorReal(em); if(ok){ addTaxAdvisor({id:uid(),email:em,accounts:taxInvite.accounts,status:'eingeladen',invitedAt:new Date().toISOString().slice(0,10)}); setTaxInvite({email:'',accounts:[]}); } }} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:advBusy?'default':'pointer',fontFamily:'inherit',opacity:advBusy?0.6:1}}><Ic p={P.plus} sz={15} col={C.actTxt}/> {advBusy?'Wird gesendet…':'Einladen & E-Mail senden'}</button>
                 </div>
+                {advInvites.length>0 && (
+                  <div style={{...SC,marginBottom:12}}>
+                    <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:8,letterSpacing:'0.02em'}}>GESENDETE EINLADUNGEN · {advInvites.length}</div>
+                    {advInvites.map(iv=>{ const stC={pending:C.amb,accepted:C.grn,revoked:C.mut,expired:C.mut}[iv.status]||C.mut; const stL={pending:'ausstehend',accepted:'angenommen',revoked:'zurückgezogen',expired:'abgelaufen'}[iv.status]||iv.status; return (
+                      <div key={iv.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:'1px solid '+C.sep}}>
+                        <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:600,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{iv.advisor_email}</div><div style={{fontSize:12,marginTop:2,color:stC}}>{stL}</div></div>
+                        {iv.status==='pending' && <button onClick={()=>askConfirm('Einladung an „'+iv.advisor_email+'" zurückziehen?',()=>revokeAdvInvite(iv.id))} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',flexShrink:0,padding:'6px 12px',borderRadius:9,fontSize:12.5,fontWeight:600,fontFamily:'inherit'}}>Zurückziehen</button>}
+                      </div>
+                    );})}
+                  </div>
+                )}
                 <div style={{...SC}}>
                   <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:6,letterSpacing:'0.02em'}}>STEUERBERATER · {taxAdvisors.length}</div>
                   {taxAdvisors.length? <div>{taxAdvisors.map(m=>teamRow(m,()=>askConfirm('„'+m.email+'" entfernen?',()=>removeTaxAdvisor(m.id))))}</div> : <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'22px 14px'}}>Noch kein Steuerberater eingeladen.</div>}
@@ -4034,7 +4282,7 @@ function App({session}) {
                 <div style={{fontSize:13,color:C.sub}}>Weitere Bereiche</div>
               </div>
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                {[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},{id:'settings',label:'Einstellungen',icon:P.gear}].map(m=>(
+                {[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'Aufgaben',icon:P.check},{id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},{id:'settings',label:'Einstellungen',icon:P.gear}].map(m=>(
                   <button key={m.id} onClick={()=>setTab(m.id)} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
                   </button>
@@ -5116,6 +5364,180 @@ function App({session}) {
               </>
             );
           })()}
+          {/* ══ AUFGABEN (manuell + automatisch aus überfälligen Rechnungen/offenen Belegen/Dubletten) ══ */}
+          {tab==='aufgaben' && (()=>{
+            const allT = todos;
+            const openT = allT.filter(t=>!t.done);
+            const doneT = allT.filter(t=>t.done);
+            const shown = todoFilter==='offen'?openT:todoFilter==='erledigt'?doneT:allT;
+            const bookings = allBookingsFlat();
+            const startNew = ()=> setTodoForm({title:'',note:'',ref:null});
+            const saveTodoForm = ()=>{
+              const title=(todoForm.title||'').trim();
+              if(!title){ setToast('Bitte einen Titel eingeben.'); return; }
+              if(todoForm.id) updateTodo(todoForm.id, {title, note:todoForm.note||'', ref:todoForm.ref||null});
+              else addTodo({title, note:todoForm.note||'', ref:todoForm.ref||null, source:'user'});
+              setTodoForm(null);
+            };
+            return (
+              <>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
+                  <div>
+                    <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Aufgaben</div>
+                    <div style={{fontSize:13,color:C.sub,marginTop:4}}>Eigene Aufgaben und automatische Hinweise der KI an einem Ort – nur sichtbar, wenn wirklich etwas ansteht.</div>
+                  </div>
+                  <button onClick={startNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Aufgabe erstellen</button>
+                </div>
+                {todoForm && (
+                  <div style={{...SC,marginBottom:16}}>
+                    <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:12}}>{todoForm.id?'Aufgabe bearbeiten':'Neue Aufgabe'}</div>
+                    <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                      <input autoFocus value={todoForm.title} onChange={e=>setTodoForm({...todoForm,title:e.target.value})} placeholder="Titel…" style={{...SS,padding:'11px 13px',fontSize:14}}/>
+                      <textarea value={todoForm.note} onChange={e=>setTodoForm({...todoForm,note:e.target.value})} placeholder="Notiz (optional)…" rows={3} style={{...SS,padding:'11px 13px',fontSize:13.5,resize:'vertical'}}/>
+                      <BookingSelect bookings={bookings} value={todoForm.ref&&todoForm.ref.type==='booking'?todoForm.ref:null} onPick={b=>setTodoForm(f=>({...f, ref: b?{type:'booking',id:b.id,year:b.year}:null}))}/>
+                    </div>
+                    <div style={{display:'flex',gap:10,marginTop:14}}>
+                      <button onClick={saveTodoForm} style={{flex:1,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Speichern</button>
+                      <button onClick={()=>setTodoForm(null)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:11,padding:'11px 18px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+                    </div>
+                  </div>
+                )}
+                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+                  {[['offen','Offen',openT.length],['erledigt','Erledigt',doneT.length],['alle','Alle',allT.length]].map(([k,label,n])=>{ const on=todoFilter===k; return (
+                    <button key={k} onClick={()=>setTodoFilter(k)} style={{background:on?hexA(C.pri,0.16):C.surf2,border:'1px solid '+(on?hexA(C.pri,0.4):C.bdr),color:on?C.pri:C.mut,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}{n?' · '+n:''}</button>
+                  ); })}
+                </div>
+                {shown.length? (
+                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                    {shown.map(t=>(
+                      <div key={t.id} style={{display:'flex',alignItems:'flex-start',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',opacity:t.done?0.6:1}}>
+                        <button onClick={()=>toggleTodoDone(t.id)} title={t.done?'Als offen markieren':'Erledigt'} style={{width:22,height:22,flexShrink:0,marginTop:1,borderRadius:7,border:'1.5px solid '+(t.done?C.grn:C.bdrM),background:t.done?C.grn:'none',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>{t.done && <Ic p={P.check} sz={13} col="#0A0A0A"/>}</button>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:14.5,fontWeight:700,color:C.txt,textDecoration:t.done?'line-through':'none',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                            {t.title}
+                            {t.source==='ai' && <span style={{fontSize:10,fontWeight:800,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 7px'}}>KI</span>}
+                          </div>
+                          {t.note && <div style={{fontSize:12.5,color:C.sub,marginTop:3}}>{t.note}</div>}
+                          {t.ref && <button onClick={()=>openTodoRef(t)} style={{marginTop:7,display:'inline-flex',alignItems:'center',gap:5,background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'5px 10px',fontSize:11.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.clip} sz={12} col={C.sub}/> Verknüpfte Buchung ansehen</button>}
+                        </div>
+                        <div style={{display:'flex',gap:6,flexShrink:0}}>
+                          {t.source==='user' && <button onClick={()=>setTodoForm({id:t.id,title:t.title,note:t.note||'',ref:t.ref||null})} title="Bearbeiten" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.note} sz={13} col={C.mut}/></button>}
+                          <button onClick={()=>askConfirm('Aufgabe „'+(t.title||'')+'" löschen?',()=>removeTodo(t.id))} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={13} col={C.mut}/></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>{todoFilter==='offen'?'Keine offenen Aufgaben – alles erledigt. ✔':todoFilter==='erledigt'?'Noch keine erledigten Aufgaben.':'Noch keine Aufgaben. Lege oben deine erste Aufgabe an.'}</div>}
+              </>
+            );
+          })()}
+          {/* ══ RATEN & KREDITE (Sonstiges): laufende Ratenzahlungen/Kredite mit Buchungs-Verknüpfung + Fortschritt ══ */}
+          {tab==='raten' && (()=>{
+            const list = installments;
+            const bookings = allBookingsFlat();
+            const startNew = ()=> setInstForm({name:'',account:bizAccts[0]||'unter',totalAmount:'',monthlyAmount:'',startDate:'',endDate:'',note:''});
+            const saveInstForm = ()=>{
+              const name=(instForm.name||'').trim();
+              if(!name){ setToast('Bitte eine Bezeichnung eingeben.'); return; }
+              const patch = { name, account:instForm.account||'unter', totalAmount:num(instForm.totalAmount)||0, monthlyAmount:num(instForm.monthlyAmount)||0, startDate:instForm.startDate||'', endDate:instForm.endDate||'', note:instForm.note||'' };
+              if(instForm.id) updateInstallment(instForm.id, patch);
+              else addInstallment(patch);
+              setInstForm(null);
+            };
+            const smallBtn={background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0};
+            return (
+              <>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
+                  <div>
+                    <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Raten & Kredite</div>
+                    <div style={{fontSize:13,color:C.sub,marginTop:4}}>Laufende Finanzierungen mit den verknüpften Buchungen – bezahlt und offen auf einen Blick.</div>
+                  </div>
+                  <button onClick={startNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Rate / Kredit anlegen</button>
+                </div>
+                {instForm && (
+                  <div style={{...SC,marginBottom:16}}>
+                    <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:12}}>{instForm.id?'Bearbeiten':'Neue Rate / Kredit'}</div>
+                    <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                      <input autoFocus value={instForm.name} onChange={e=>setInstForm({...instForm,name:e.target.value})} placeholder="Bezeichnung (z. B. Firmenwagen-Finanzierung)…" style={{...SS,padding:'11px 13px',fontSize:14}}/>
+                      {showAcctSel && (
+                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                          {bizAccts.map(k=>{ const on=instForm.account===k; const kc=acol(k); return (
+                            <button key={k} onClick={()=>setInstForm({...instForm,account:k})} style={{display:'flex',alignItems:'center',gap:7,background:on?hexA(kc,0.16):C.surf2,border:'1.5px solid '+(on?kc:C.bdr),color:on?C.txt:C.sub,borderRadius:10,padding:'8px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={acctIconOf(k)} sz={14} col={kc}/> {acctNameOf(k)}{on&&<Ic p={P.check} sz={13} col={kc}/>}</button>
+                          );})}
+                        </div>
+                      )}
+                      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                        <div style={{flex:1,minWidth:150}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Gesamtsumme</div><input type="number" step="0.01" value={instForm.totalAmount} onChange={e=>setInstForm({...instForm,totalAmount:e.target.value})} style={SS}/></div>
+                        <div style={{flex:1,minWidth:150}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Monatliche Rate</div><input type="number" step="0.01" value={instForm.monthlyAmount} onChange={e=>setInstForm({...instForm,monthlyAmount:e.target.value})} style={SS}/></div>
+                      </div>
+                      <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                        <div style={{flex:1,minWidth:150}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Läuft von</div><input type="date" value={instForm.startDate} onChange={e=>setInstForm({...instForm,startDate:e.target.value})} style={SS}/></div>
+                        <div style={{flex:1,minWidth:150}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Läuft bis</div><input type="date" value={instForm.endDate} onChange={e=>setInstForm({...instForm,endDate:e.target.value})} style={SS}/></div>
+                      </div>
+                      <textarea value={instForm.note} onChange={e=>setInstForm({...instForm,note:e.target.value})} placeholder="Notiz (optional)…" rows={2} style={{...SS,padding:'11px 13px',fontSize:13.5,resize:'vertical'}}/>
+                    </div>
+                    <div style={{display:'flex',gap:10,marginTop:14}}>
+                      <button onClick={saveInstForm} style={{flex:1,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Speichern</button>
+                      <button onClick={()=>setInstForm(null)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:11,padding:'11px 18px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+                    </div>
+                  </div>
+                )}
+                {list.length? (
+                  <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                    {list.map(inst=>{
+                      const paid = installmentPaid(inst);
+                      const total = num(inst.totalAmount)||0;
+                      const open = Math.max(0, total-paid);
+                      const pct = total>0 ? Math.min(100, Math.round(paid/total*100)) : 0;
+                      const col = acol(normAcct(inst.account));
+                      const linked = (inst.linkedIds||[]).map(l=>({...l, b:bookings.find(b=>b.id===l.id&&b.year===l.year)}));
+                      return (
+                        <div key={inst.id} style={SC}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,marginBottom:12,flexWrap:'wrap'}}>
+                            <div>
+                              <div style={{fontSize:17,fontWeight:800,color:C.txt}}>{inst.name}</div>
+                              <div style={{display:'flex',alignItems:'center',gap:8,marginTop:5,flexWrap:'wrap'}}>
+                                <span style={{fontSize:11.5,fontWeight:600,color:col,background:hexA(col,0.16),border:'1px solid '+hexA(col,0.4),borderRadius:8,padding:'3px 9px'}}>{acctNameOf(normAcct(inst.account))}</span>
+                                {num(inst.monthlyAmount) ? <span style={{fontSize:12,color:C.sub}}>{fmt(num(inst.monthlyAmount))} / Monat</span> : null}
+                                {(inst.startDate||inst.endDate) ? <span style={{fontSize:12,color:C.sub}}>{(inst.startDate?toISO(inst.startDate):'—')+' – '+(inst.endDate?toISO(inst.endDate):'—')}</span> : null}
+                              </div>
+                              {inst.note && <div style={{fontSize:12.5,color:C.sub,marginTop:6}}>{inst.note}</div>}
+                            </div>
+                            <div style={{display:'flex',gap:6,flexShrink:0}}>
+                              <button onClick={()=>setInstForm({id:inst.id,name:inst.name,account:inst.account,totalAmount:String(inst.totalAmount||''),monthlyAmount:String(inst.monthlyAmount||''),startDate:inst.startDate||'',endDate:inst.endDate||'',note:inst.note||''})} title="Bearbeiten" style={smallBtn}><Ic p={P.note} sz={13} col={C.mut}/></button>
+                              <button onClick={()=>askConfirm('„'+(inst.name||'')+'" löschen?',()=>removeInstallment(inst.id))} title="Löschen" style={smallBtn}><Ic p={P.trash} sz={13} col={C.mut}/></button>
+                            </div>
+                          </div>
+                          <div style={{height:10,borderRadius:99,background:C.surf3,overflow:'hidden',marginBottom:6}}>
+                            <div style={{height:'100%',width:pct+'%',background:col,borderRadius:99,transition:'width .3s'}}/>
+                          </div>
+                          <div style={{display:'flex',justifyContent:'space-between',fontSize:12.5,color:C.sub,marginBottom:14}}>
+                            <span>Bezahlt <b style={{color:C.txt,...NUM}}>{fmt(paid)}</b></span>
+                            <span>{pct}%</span>
+                            <span>Offen <b style={{color:total>0?C.exp:C.txt,...NUM}}>{fmt(open)}</b></span>
+                          </div>
+                          <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:8}}>Verknüpfte Buchungen ({linked.length})</div>
+                          {linked.length? (
+                            <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:10}}>
+                              {linked.map(l=>(
+                                <div key={l.year+':'+l.id} style={{display:'flex',alignItems:'center',gap:8,background:C.surf2,borderRadius:9,padding:'7px 10px'}}>
+                                  <Ic p={l.b&&l.b.kind==='ein'?P.up:P.down} sz={13} col={C.sub}/>
+                                  <span style={{flex:1,fontSize:12.5,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.b?l.b.name:'(Buchung nicht gefunden)'}</span>
+                                  {l.b && <span style={{fontSize:11.5,color:C.mut,...NUM}}>{fmt(l.b.amount)}</span>}
+                                  <button onClick={()=>toggleInstallmentLink(inst.id,{id:l.id,year:l.year})} title="Verknüpfung entfernen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',flexShrink:0,display:'flex'}}><Ic p={P.close} sz={13} col={C.mut}/></button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : <div style={{fontSize:12,color:C.mut,marginBottom:10}}>Noch keine Buchung verknüpft.</div>}
+                          <BookingSelect bookings={bookings} value={null} placeholder="Buchung hinzufügen…" onPick={b=>{ if(b) toggleInstallmentLink(inst.id,{id:b.id,year:b.year}); }}/>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>Noch keine Raten oder Kredite angelegt. Lege oben die erste an und verknüpfe sie mit den passenden Buchungen.</div>}
+              </>
+            );
+          })()}
           {/* ══ DOWNLOAD (Ordnerstruktur + ZIP) ══ */}
           {tab==='download' && (()=>{
             const depth=belPath.length; // 0=Bereiche 1=Jahre 2=Monate 3=Ein/Aus 4=Dateien
@@ -5855,7 +6277,7 @@ function App({session}) {
               </button>
             </div>
             <button onClick={()=>setBotOpen(o=>!o)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',color:botOpen?C.pri:C.sub,paddingTop:8,position:'relative'}}><Ic p={P.spark} sz={20} col={botOpen?C.pri:C.sub}/><span style={{fontSize:10,fontWeight:600}}>Assistent</span>{botUnread>0 && <span style={{position:'absolute',top:3,right:'calc(50% - 21px)',minWidth:17,height:17,borderRadius:99,background:C.red,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',boxSizing:'border-box'}}>{botUnread}</span>}</button>
-            {cell('mehr','Sonstiges',P.menu,['mehr','kal','yr','steuer','steuern'])}
+            {cell('mehr','Sonstiges',P.menu,['mehr','kal','yr','steuer','steuern','aufgaben','raten','kunden','download','kosten'])}
           </div>
         );
       })()}
@@ -6541,16 +6963,87 @@ function App({session}) {
 }
 
 /* ══ Root: Login-Gate ══ */
+/* ══ Steuerberater-Ansicht: Liste der verknüpften Mandanten ══ */
+function AdvisorHome({session}) {
+  const [clients,setClients]=useState(null);
+  const [me,setMe]=useState(null);
+  useEffect(()=>{ (async()=>{
+    try{
+      const {data:prof}=await sb.from('profiles').select('full_name,company').eq('id',session.user.id).maybeSingle();
+      setMe(prof||{});
+      const {data:links}=await sb.from('advisor_links').select('client_user_id, created_at, profiles:client_user_id(full_name,company)').eq('advisor_user_id',session.user.id);
+      setClients(links||[]);
+    }catch(e){ setClients([]); }
+  })(); },[]);
+  const box={maxWidth:720,margin:'0 auto',padding:'0 20px'};
+  return (
+    <div style={{position:'fixed',inset:0,background:C.bg,color:C.txt,fontFamily:FONT,overflow:'auto'}}>
+      <div style={{...box,paddingTop:40}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:24}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}><BuqoMark sz={30}/><div><div style={{fontSize:20,fontWeight:800,letterSpacing:'-0.03em'}}>Buqo · Steuerberater</div><div style={{fontSize:12.5,color:C.sub}}>{(me&&(me.company||me.full_name))||session.user.email}</div></div></div>
+          <button onClick={()=>sb.auth.signOut()} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:10,padding:'9px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abmelden</button>
+        </div>
+        <div style={{fontSize:26,fontWeight:800,letterSpacing:'-0.03em',marginBottom:6}}>Deine Mandanten</div>
+        <div style={{fontSize:13.5,color:C.sub,marginBottom:22,lineHeight:1.55}}>Mandanten, die dir Zugriff auf ihre vorbereitete Buchhaltung gegeben haben. Belege, Auswertungen (UStVA, EÜR, GuV, BWA, SuSa) und DATEV-Export sind dort einsehbar.</div>
+        {clients===null ? (
+          <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'40px 0'}}>Wird geladen…</div>
+        ) : clients.length===0 ? (
+          <div style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:16,padding:'32px 22px',textAlign:'center'}}>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:6}}>Noch keine Mandanten</div>
+            <div style={{fontSize:13,color:C.sub,lineHeight:1.6}}>Sobald dich ein Mandant in seiner Buqo-App als Steuerberater einlädt und du die Einladung annimmst, erscheint er hier.</div>
+          </div>
+        ) : (
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {clients.map(c=>{ const p=c.profiles||{}; const nm=p.company||p.full_name||'Mandant'; return (
+              <div key={c.client_user_id} style={{display:'flex',alignItems:'center',gap:14,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px 18px'}}>
+                <div style={{width:44,height:44,borderRadius:12,background:hexA(C.pri,0.14),display:'flex',alignItems:'center',justifyContent:'center',color:C.pri,fontWeight:800,fontSize:17,flexShrink:0}}>{(nm||'?').slice(0,1).toUpperCase()}</div>
+                <div style={{flex:1,minWidth:0}}><div style={{fontSize:15,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nm}</div><div style={{fontSize:12,color:C.sub,marginTop:2}}>verknüpft seit {new Date(c.created_at).toLocaleDateString('de-DE')}</div></div>
+                <span style={{fontSize:12,color:C.mut}}>Ansicht folgt</span>
+              </div>
+            );})}
+            <div style={{fontSize:12,color:C.mut,lineHeight:1.55,marginTop:8,padding:'0 2px'}}>Hinweis: Die detaillierte Mandanten-Datenansicht wird gerade eingerichtet. Die Verknüpfung steht bereits – sobald die mandantengetrennte Datenhaltung aktiv ist, öffnen sich hier die Bücher des jeweiligen Mandanten.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Root() {
   const [session,setSession]=useState(undefined);
+  const [profile,setProfile]=useState(undefined);   // {role} | null
+  const inviteToken = (()=>{ try{ return new URLSearchParams(window.location.search).get('advisor_invite')||null; }catch(e){ return null; } })();
+  const acceptedRef = useRef(false);
+
   useEffect(()=>{
     const t=setTimeout(()=>setSession(s=>s===undefined?null:s),7000);
     sb.auth.getSession().then(({data})=>{ clearTimeout(t); setSession(data.session||null); });
     const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s));
     return ()=>{ clearTimeout(t); try{sub.subscription.unsubscribe();}catch(e){} };
   },[]);
+
+  // Profil (Rolle) laden, sobald eine Session da ist.
+  useEffect(()=>{
+    if(!session){ setProfile(session===null?null:undefined); return; }
+    let active=true;
+    (async()=>{
+      // Offene Steuerberater-Einladung annehmen (Token aus der URL).
+      if(inviteToken && !acceptedRef.current){
+        acceptedRef.current=true;
+        try{ await sb.rpc('accept_advisor_invitation',{p_token:inviteToken}); }catch(e){}
+        try{ const url=window.location.pathname+window.location.hash; window.history.replaceState(null,'',url); }catch(e){}
+      }
+      const {data:prof}=await sb.from('profiles').select('role').eq('id',session.user.id).maybeSingle();
+      if(!active) return;
+      setProfile(prof||{role:'user'});
+    })();
+    return ()=>{active=false;};
+  },[session]);
+
   if(session===undefined) return <Splash text="Wird geladen…" />;
-  if(!session) return <Login />;
+  if(!session) return <Login inviteToken={inviteToken} />;
+  if(profile===undefined) return <Splash text="Wird geladen…" />;
+  if(profile && profile.role==='advisor') return <AdvisorHome session={session} />;
   return <App session={session} />;
 }
 
