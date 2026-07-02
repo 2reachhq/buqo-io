@@ -1184,34 +1184,74 @@ function Splash({text}) {
   return <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',color:C.sub,fontFamily:FONT,fontSize:14}}>{text}</div>;
 }
 
-function Login() {
+function Login({inviteToken}) {
+  const [mode,setMode]=useState('login');            // 'login' | 'signup'
+  const [role,setRole]=useState(inviteToken?'advisor':'user'); // Rolle bei Registrierung
   const [email,setEmail]=useState('');
   const [pw,setPw]=useState('');
+  const [name,setName]=useState('');
   const [err,setErr]=useState('');
+  const [info,setInfo]=useState('');
   const [busy,setBusy]=useState(false);
   const submit=async e=>{
     e.preventDefault();
-    setBusy(true); setErr('');
-    const {error}=await sb.auth.signInWithPassword({email:email.trim(),password:pw});
-    if(error){ setErr('Login fehlgeschlagen. Bitte E-Mail und Passwort prüfen.'); setBusy(false); }
+    setBusy(true); setErr(''); setInfo('');
+    if(mode==='login'){
+      const {error}=await sb.auth.signInWithPassword({email:email.trim(),password:pw});
+      if(error){ setErr('Login fehlgeschlagen. Bitte E-Mail und Passwort prüfen.'); setBusy(false); }
+      return;
+    }
+    // Registrierung
+    const {data,error}=await sb.auth.signUp({
+      email:email.trim(), password:pw,
+      options:{ data:{ role, full_name:name.trim()||null }, emailRedirectTo: window.location.origin+(inviteToken?('/?advisor_invite='+inviteToken):'/') }
+    });
+    if(error){ setErr(error.message||'Registrierung fehlgeschlagen.'); setBusy(false); return; }
+    if(data && data.session){ /* auto eingeloggt → Root übernimmt */ }
+    else { setInfo('Fast fertig! Bitte bestätige deine E-Mail-Adresse über den Link, den wir dir gerade geschickt haben.'); setBusy(false); }
   };
   const inp = {width:'100%',background:C.surf3,border:'none',borderRadius:10,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit'};
+  const roleBtn=(k,label)=>{ const on=role===k; return (
+    <button type="button" onClick={()=>setRole(k)} style={{flex:1,background:on?C.act:C.surf3,color:on?C.actTxt:C.sub,border:'1px solid '+(on?C.act:C.bdr),borderRadius:10,padding:'9px 8px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
+  ); };
   return (
-    <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:FONT,padding:20}}>
-      <form onSubmit={submit} style={{width:'100%',maxWidth:340,background:C.surf,borderRadius:18,padding:28,border:'1px solid '+C.bdr}}>
+    <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:FONT,padding:20,overflow:'auto'}}>
+      <form onSubmit={submit} style={{width:'100%',maxWidth:360,background:C.surf,borderRadius:18,padding:28,border:'1px solid '+C.bdr,margin:'auto'}}>
         <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
           <BuqoMark sz={30}/>
           <div style={{fontSize:22,fontWeight:700,color:C.txt,letterSpacing:'-0.03em'}}>Buqo</div>
         </div>
-        <div style={{fontSize:13,color:C.sub,marginBottom:22}}>Bitte einloggen</div>
+        {inviteToken ? (
+          <div style={{fontSize:13,color:C.txt,background:hexA(C.pri,0.12),border:'1px solid '+hexA(C.pri,0.3),borderRadius:10,padding:'10px 12px',margin:'14px 0 18px',lineHeight:1.5}}>
+            Du wurdest als <b>Steuerberater</b> eingeladen. {mode==='login'?'Melde dich an,':'Registriere dich,'} um den Zugriff anzunehmen.
+          </div>
+        ) : (
+          <div style={{fontSize:13,color:C.sub,marginBottom:20}}>{mode==='login'?'Bitte einloggen':'Konto erstellen'}</div>
+        )}
+        {mode==='signup' && (
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Ich bin…</label>
+            <div style={{display:'flex',gap:8}}>{roleBtn('user','Unternehmer / Selbstständig')}{roleBtn('advisor','Steuerberater')}</div>
+          </div>
+        )}
+        {mode==='signup' && (<>
+          <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Name{role==='advisor'?' / Kanzlei':''}</label>
+          <input value={name} onChange={e=>setName(e.target.value)} placeholder="optional" style={{...inp,marginBottom:14}} />
+        </>)}
         <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>E-Mail</label>
         <input type="email" value={email} onChange={e=>setEmail(e.target.value)} autoFocus required style={{...inp,marginBottom:14}} />
         <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Passwort</label>
-        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required style={{...inp,marginBottom:err?10:18}} />
+        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required minLength={6} style={{...inp,marginBottom:(err||info)?10:18}} />
         {err && <div style={{fontSize:12,color:C.red,marginBottom:14}}>{err}</div>}
+        {info && <div style={{fontSize:12.5,color:C.grn,marginBottom:14,lineHeight:1.5}}>{info}</div>}
         <button type="submit" disabled={busy} style={{width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.6:1}}>
-          {busy?'Wird eingeloggt…':'Einloggen'}
+          {busy?'Bitte warten…':(mode==='login'?'Einloggen':'Konto erstellen')}
         </button>
+        <div style={{textAlign:'center',marginTop:16,fontSize:13,color:C.sub}}>
+          {mode==='login'
+            ? <span>Noch kein Konto? <button type="button" onClick={()=>{setMode('signup');setErr('');setInfo('');}} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>Registrieren</button></span>
+            : <span>Schon ein Konto? <button type="button" onClick={()=>{setMode('login');setErr('');setInfo('');}} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>Einloggen</button></span>}
+        </div>
       </form>
     </div>
   );
@@ -1420,6 +1460,12 @@ function App({session}) {
   const [calYr,setCalYr]= useState(now.getFullYear());
   const [profOpen,setProfOpen]= useState(false);   // Profil-Menü
   const [taxBusy,setTaxBusy]= useState(false);     // Steuer-KI-Analyse
+  /* ── Abo & AI-Guthaben (pro Auth-Nutzer, Supabase) ── */
+  const [sub,setSub]= useState(null);              // subscriptions-Zeile
+  const [balanceCents,setBalanceCents]= useState(null); // AI-Guthaben in Cent
+  const [billingBusy,setBillingBusy]= useState(false);  // Checkout/Portal lädt
+  const [advInvites,setAdvInvites]= useState([]);  // echte Steuerberater-Einladungen (DB)
+  const [advBusy,setAdvBusy]= useState(false);
   const [privTab,setPrivTab]= useState('ausgaben'); // Privat: Toggle
   const [immoView,setImmoView]= useState('einnahmen'); // Immobilien: Toggle
   const [iconPick,setIconPick]= useState(null);     // Standort-Icon-Auswahl (pid)
@@ -1486,6 +1532,22 @@ function App({session}) {
       setReady(true);
     })();
     return ()=>{active=false;};
+  },[]);
+
+  /* Abo & AI-Guthaben laden + Rückkehr aus Stripe-Checkout auswerten */
+  useEffect(()=>{
+    refreshBilling(); refreshAdvInvites();
+    try{
+      const q=new URLSearchParams(window.location.search);
+      const co=q.get('checkout');
+      if(co){
+        if(co==='success') setToast('Abo aktiviert. Willkommen bei Buqo!');
+        else if(co==='credits_success') { setToast('Guthaben aufgeladen.'); setTimeout(refreshBilling,1500); }
+        else if(co==='cancel') setToast('Vorgang abgebrochen.');
+        // Query-Parameter aus der URL entfernen
+        const url=window.location.pathname+window.location.hash; window.history.replaceState(null,'',url);
+      }
+    }catch(e){}
   },[]);
 
   /* Speichern nach Supabase (debounced) */
@@ -2033,7 +2095,65 @@ function App({session}) {
 
   /* ── KI-Kosten: Token-Verbrauch je Monat & Modell mitschreiben ── */
   const logAiUsage = (model, usage)=>{ try{ if(!usage) return; const inT=usage.input_tokens||usage.inputTokens||0, outT=usage.output_tokens||usage.outputTokens||0; if(!inT&&!outT) return; const ym=new Date().toISOString().slice(0,7); const md2=String(model||'unbekannt'); setData(prev=>{ const au={...(prev.aiUsage||{})}; const m={...(au[ym]||{})}; const cur=m[md2]||{in:0,out:0,calls:0}; m[md2]={in:cur.in+inT, out:cur.out+outT, calls:cur.calls+1}; au[ym]=m; return {...prev, aiUsage:au}; }); }catch(e){} };
-  const aiInvoke = async (opts)=>{ const r = await sb.functions.invoke('ai', opts); try{ const u = r && r.data && (r.data.usage || (r.data.message&&r.data.message.usage)); if(u) logAiUsage(opts&&opts.body&&opts.body.model, u); }catch(e){} return r; };
+  const aiInvoke = async (opts)=>{
+    const r = await sb.functions.invoke('ai', opts);
+    try{ const u = r && r.data && (r.data.usage || (r.data.message&&r.data.message.usage)); if(u) logAiUsage(opts&&opts.body&&opts.body.model, u); }catch(e){}
+    // Guthaben aufgebraucht (402) erkennen und dem Nutzer melden.
+    try{
+      if(r && r.error && r.error.context && typeof r.error.context.status==='number' && r.error.context.status===402){
+        setBalanceCents(0);
+        setToast('AI-Guthaben aufgebraucht – bitte unter „Abo & Guthaben" aufladen.');
+      }
+    }catch(e){}
+    // Nach erfolgreichen KI-Aufrufen das Guthaben im Hintergrund aktualisieren.
+    if(r && r.data && !r.error){ try{ refreshBalance(); }catch(e){} }
+    return r;
+  };
+
+  /* ── Abo & Guthaben aus Supabase laden ── */
+  const refreshBalance = async ()=>{
+    try{ const {data}=await sb.from('ai_credits').select('balance_cents').eq('user_id',session.user.id).maybeSingle(); if(data) setBalanceCents(data.balance_cents); }catch(e){}
+  };
+  const refreshBilling = async ()=>{
+    try{
+      const [s,c] = await Promise.all([
+        sb.from('subscriptions').select('*').eq('user_id',session.user.id).maybeSingle(),
+        sb.from('ai_credits').select('balance_cents,auto_recharge,auto_threshold_cents,auto_topup_cents').eq('user_id',session.user.id).maybeSingle(),
+      ]);
+      if(s&&s.data) setSub(s.data);
+      if(c&&c.data) setBalanceCents(c.data.balance_cents);
+    }catch(e){}
+  };
+  const refreshAdvInvites = async ()=>{
+    try{ const {data}=await sb.from('advisor_invitations').select('id,advisor_email,status,created_at,accepted_at').order('created_at',{ascending:false}); if(data) setAdvInvites(data); }catch(e){}
+  };
+  /* ── Stripe-Checkout / Kundenportal öffnen ── */
+  const startCheckout = async (kind, opts)=>{
+    setBillingBusy(true);
+    try{
+      const {data,error}=await sb.functions.invoke('stripe-checkout',{body:{kind, ...(opts||{})}});
+      if(error) throw error; if(data&&data.error) throw new Error(data.error);
+      if(data&&data.url){ window.location.href=data.url; return; }
+      setToast('Checkout konnte nicht gestartet werden.');
+    }catch(e){ setToast('Fehler: '+((e&&e.message)||e)); }
+    setBillingBusy(false);
+  };
+  /* ── Steuerberater echt einladen (Edge Function: Einladung + Mail) ── */
+  const inviteAdvisorReal = async (email)=>{
+    const em=(email||'').trim().toLowerCase();
+    if(!/.+@.+\..+/.test(em)){ setToast('Bitte gültige E-Mail angeben.'); return false; }
+    setAdvBusy(true);
+    try{
+      const {data,error}=await sb.functions.invoke('advisor-invite',{body:{email:em}});
+      if(error) throw error; if(data&&data.error) throw new Error(data.error);
+      setToast('Einladung an '+em+' gesendet.');
+      await refreshAdvInvites();
+      setAdvBusy(false); return true;
+    }catch(e){ setToast('Einladung fehlgeschlagen: '+((e&&e.message)||e)); setAdvBusy(false); return false; }
+  };
+  const revokeAdvInvite = async (id)=>{
+    try{ await sb.from('advisor_invitations').update({status:'revoked'}).eq('id',id); refreshAdvInvites(); }catch(e){}
+  };
   // Kurzer Steuer-Hinweis zu einer Ausgabe (wie ein Steuerberater, NRW/DE)
   const fetchTaxTip = async (item, dom, extra)=>{
     const bereich = dom==='immo' ? 'private Immobilien-Vermietung (Vermietung & Verpachtung)' : 'Unternehmen/Gewerbe';
@@ -3598,6 +3718,10 @@ function App({session}) {
               <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
                 <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
               </div>
+              <button onClick={()=>{ setProfOpen(false); setSettingsTab('abo'); setTab('settings'); }} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                <span style={{display:'flex',alignItems:'center',gap:10}}><Ic p={P.spark} sz={16} col={C.sub}/> <span>AI-Guthaben</span></span>
+                <span style={{fontSize:13,fontWeight:700,color:balanceCents!=null&&balanceCents<=0?C.red:C.grn}}>{balanceCents==null?'—':((balanceCents/100).toFixed(2).replace('.',',')+' €')}</span>
+              </button>
               <button onClick={()=>{ setProfOpen(false); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
                 <Ic p={P.gear} sz={16} col={C.sub}/> <span>Einstellungen</span>
               </button>
@@ -3798,7 +3922,8 @@ function App({session}) {
 
           {/* ══ EINSTELLUNGEN (Profil) ══ */}
           {tab==='settings' && (()=>{
-            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send},{k:'admin',l:'Admin',ic:P.gear}];
+            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'abo',l:'Abo & Guthaben',ic:P.brief},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send},{k:'admin',l:'Admin',ic:P.gear}];
+            const eur = (c)=> (c==null?'—':((c/100).toFixed(2).replace('.',',')+' €'));
             const sAcct = bizAccts.includes(settingsAcct)?settingsAcct:(bizAccts[0]||'unter');
             const fldL={...SS,textAlign:'left'};
             const toggleIn=(arr,k)=> arr.includes(k)?arr.filter(x=>x!==k):[...arr,k];
@@ -3829,6 +3954,59 @@ function App({session}) {
                   </div>
                 </div>
               )}
+
+              {settingsTab==='abo' && (()=>{
+                const st = (sub&&sub.status)||'none';
+                const active = st==='active'||st==='trialing';
+                const stLbl = {none:'Kein Abo',trialing:'Testphase',active:'Aktiv',past_due:'Zahlung offen',canceled:'Gekündigt'}[st]||st;
+                const stCol = active?C.grn:(st==='past_due'?C.amb:C.mut);
+                const extra = (sub&&sub.extra_accounts)||0;
+                const monthly = 1499 + extra*700; // Cent
+                const pkgs=[500,1000,2500];
+                return (<>
+                  {/* Abo-Status */}
+                  <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:14}}>
+                      <div>
+                        <div style={{fontSize:14,fontWeight:700,color:C.txt}}>Buqo-Abo</div>
+                        <div style={{fontSize:12,color:C.sub,marginTop:2}}>Ein Plan – alle Funktionen frei. AI-Nutzung läuft über Guthaben.</div>
+                      </div>
+                      <span style={{display:'inline-flex',alignItems:'center',gap:6,background:hexA(stCol,0.14),color:stCol,borderRadius:99,padding:'6px 12px',fontSize:12.5,fontWeight:700,whiteSpace:'nowrap'}}><span style={{width:7,height:7,borderRadius:'50%',background:stCol}}/>{stLbl}</span>
+                    </div>
+                    <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:4}}>
+                      <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.02em',color:C.txt}}>{eur(monthly)}</div>
+                      <div style={{fontSize:13,color:C.sub}}>/ Monat</div>
+                    </div>
+                    <div style={{fontSize:12,color:C.mut,marginBottom:16}}>14,99 € Basis{extra>0?(' + '+extra+' × 7 € Zusatzkonto'):''} · monatlich kündbar</div>
+                    {active ? (
+                      <button disabled={billingBusy} onClick={()=>startCheckout('portal')} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.surf3,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:billingBusy?'default':'pointer',fontFamily:'inherit',opacity:billingBusy?0.6:1}}><Ic p={P.gear} sz={15} col={C.txt}/> Abo verwalten</button>
+                    ) : (
+                      <button disabled={billingBusy} onClick={()=>startCheckout('subscription',{extraAccounts:extra})} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:billingBusy?'default':'pointer',fontFamily:'inherit',opacity:billingBusy?0.6:1}}><Ic p={P.check} sz={15} col={C.actTxt}/> {billingBusy?'Wird geöffnet…':'Abo starten'}</button>
+                    )}
+                    {sub&&sub.cancel_at_period_end && <div style={{fontSize:12,color:C.amb,marginTop:10}}>Läuft zum Periodenende aus{sub.current_period_end?(' ('+new Date(sub.current_period_end).toLocaleDateString('de-DE')+')'):''}.</div>}
+                  </div>
+                  {/* Zusatzkonten */}
+                  <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                    <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:4}}>Zusatzkonten</div>
+                    <div style={{fontSize:12,color:C.mut,lineHeight:1.5,marginBottom:14}}>Jedes weitere Konto (neben dem ersten) kostet 7 € / Monat. Aktuell: <b style={{color:C.sub}}>{extra}</b> Zusatzkonto{extra===1?'':'en'}.</div>
+                    <button disabled={billingBusy} onClick={()=>startCheckout(active?'portal':'subscription',{extraAccounts:extra+1})} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.surf3,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'10px 16px',fontSize:13.5,fontWeight:700,cursor:billingBusy?'default':'pointer',fontFamily:'inherit',opacity:billingBusy?0.6:1}}><Ic p={P.plus} sz={14} col={C.txt}/> {active?'Zusatzkonto im Portal buchen':'Konto hinzufügen (+7 €)'}</button>
+                  </div>
+                  {/* AI-Guthaben */}
+                  <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:6}}>
+                      <div style={{fontSize:14,fontWeight:700,color:C.txt}}>AI-Guthaben</div>
+                      <div style={{fontSize:20,fontWeight:800,color:balanceCents!=null&&balanceCents<=0?C.red:C.grn}}>{eur(balanceCents)}</div>
+                    </div>
+                    <div style={{fontSize:12,color:C.mut,lineHeight:1.5,marginBottom:14}}>Alles rund um KI (Belegerkennung, Steuer-Hinweise, Chat) wird nach Verbrauch abgerechnet. Prepaid – kein Überraschungs-Betrag am Monatsende.</div>
+                    <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:8}}>Guthaben aufladen</div>
+                    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                      {pkgs.map(c=>(
+                        <button key={c} disabled={billingBusy} onClick={()=>startCheckout('credits',{amountCents:c})} style={{display:'inline-flex',alignItems:'center',gap:7,background:hexA(C.pri,0.12),color:C.pri,border:'1px solid '+hexA(C.pri,0.3),borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:billingBusy?'default':'pointer',fontFamily:'inherit',opacity:billingBusy?0.6:1}}>+ {eur(c)}</button>
+                      ))}
+                    </div>
+                  </div>
+                </>);
+              })()}
 
               {settingsTab==='konten' && (<>
                 {bizAccts.length>1 && (
@@ -3917,8 +4095,19 @@ function App({session}) {
                   <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>E-Mail</div><input value={taxInvite.email} onChange={e=>setTaxInvite(t=>({...t,email:e.target.value}))} placeholder="steuerberater@kanzlei.de" style={fldL}/></div>
                   <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:8}}>Zugriff auf Konten</div>
                   <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>{bizAccts.map(k=>acctChip(k,taxInvite.accounts.includes(k),()=>setTaxInvite(t=>({...t,accounts:toggleIn(t.accounts,k)}))))}</div>
-                  <button onClick={()=>{ const em=(taxInvite.email||'').trim(); if(!em){setToast('Bitte E-Mail angeben.');return;} if(!taxInvite.accounts.length){setToast('Bitte mindestens ein Konto wählen.');return;} addTaxAdvisor({id:uid(),email:em,accounts:taxInvite.accounts,status:'eingeladen',invitedAt:new Date().toISOString().slice(0,10)}); setTaxInvite({email:'',accounts:[]}); setToast('Steuerberater eingeladen: '+em); }} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Einladen</button>
+                  <button disabled={advBusy} onClick={async()=>{ const em=(taxInvite.email||'').trim(); if(!em){setToast('Bitte E-Mail angeben.');return;} if(!taxInvite.accounts.length){setToast('Bitte mindestens ein Konto wählen.');return;} const ok=await inviteAdvisorReal(em); if(ok){ addTaxAdvisor({id:uid(),email:em,accounts:taxInvite.accounts,status:'eingeladen',invitedAt:new Date().toISOString().slice(0,10)}); setTaxInvite({email:'',accounts:[]}); } }} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:advBusy?'default':'pointer',fontFamily:'inherit',opacity:advBusy?0.6:1}}><Ic p={P.plus} sz={15} col={C.actTxt}/> {advBusy?'Wird gesendet…':'Einladen & E-Mail senden'}</button>
                 </div>
+                {advInvites.length>0 && (
+                  <div style={{...SC,marginBottom:12}}>
+                    <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:8,letterSpacing:'0.02em'}}>GESENDETE EINLADUNGEN · {advInvites.length}</div>
+                    {advInvites.map(iv=>{ const stC={pending:C.amb,accepted:C.grn,revoked:C.mut,expired:C.mut}[iv.status]||C.mut; const stL={pending:'ausstehend',accepted:'angenommen',revoked:'zurückgezogen',expired:'abgelaufen'}[iv.status]||iv.status; return (
+                      <div key={iv.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:'1px solid '+C.sep}}>
+                        <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:600,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{iv.advisor_email}</div><div style={{fontSize:12,marginTop:2,color:stC}}>{stL}</div></div>
+                        {iv.status==='pending' && <button onClick={()=>askConfirm('Einladung an „'+iv.advisor_email+'" zurückziehen?',()=>revokeAdvInvite(iv.id))} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',flexShrink:0,padding:'6px 12px',borderRadius:9,fontSize:12.5,fontWeight:600,fontFamily:'inherit'}}>Zurückziehen</button>}
+                      </div>
+                    );})}
+                  </div>
+                )}
                 <div style={{...SC}}>
                   <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:6,letterSpacing:'0.02em'}}>STEUERBERATER · {taxAdvisors.length}</div>
                   {taxAdvisors.length? <div>{taxAdvisors.map(m=>teamRow(m,()=>askConfirm('„'+m.email+'" entfernen?',()=>removeTaxAdvisor(m.id))))}</div> : <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'22px 14px'}}>Noch kein Steuerberater eingeladen.</div>}
@@ -6541,16 +6730,87 @@ function App({session}) {
 }
 
 /* ══ Root: Login-Gate ══ */
+/* ══ Steuerberater-Ansicht: Liste der verknüpften Mandanten ══ */
+function AdvisorHome({session}) {
+  const [clients,setClients]=useState(null);
+  const [me,setMe]=useState(null);
+  useEffect(()=>{ (async()=>{
+    try{
+      const {data:prof}=await sb.from('profiles').select('full_name,company').eq('id',session.user.id).maybeSingle();
+      setMe(prof||{});
+      const {data:links}=await sb.from('advisor_links').select('client_user_id, created_at, profiles:client_user_id(full_name,company)').eq('advisor_user_id',session.user.id);
+      setClients(links||[]);
+    }catch(e){ setClients([]); }
+  })(); },[]);
+  const box={maxWidth:720,margin:'0 auto',padding:'0 20px'};
+  return (
+    <div style={{position:'fixed',inset:0,background:C.bg,color:C.txt,fontFamily:FONT,overflow:'auto'}}>
+      <div style={{...box,paddingTop:40}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginBottom:24}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}><BuqoMark sz={30}/><div><div style={{fontSize:20,fontWeight:800,letterSpacing:'-0.03em'}}>Buqo · Steuerberater</div><div style={{fontSize:12.5,color:C.sub}}>{(me&&(me.company||me.full_name))||session.user.email}</div></div></div>
+          <button onClick={()=>sb.auth.signOut()} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:10,padding:'9px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abmelden</button>
+        </div>
+        <div style={{fontSize:26,fontWeight:800,letterSpacing:'-0.03em',marginBottom:6}}>Deine Mandanten</div>
+        <div style={{fontSize:13.5,color:C.sub,marginBottom:22,lineHeight:1.55}}>Mandanten, die dir Zugriff auf ihre vorbereitete Buchhaltung gegeben haben. Belege, Auswertungen (UStVA, EÜR, GuV, BWA, SuSa) und DATEV-Export sind dort einsehbar.</div>
+        {clients===null ? (
+          <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'40px 0'}}>Wird geladen…</div>
+        ) : clients.length===0 ? (
+          <div style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:16,padding:'32px 22px',textAlign:'center'}}>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:6}}>Noch keine Mandanten</div>
+            <div style={{fontSize:13,color:C.sub,lineHeight:1.6}}>Sobald dich ein Mandant in seiner Buqo-App als Steuerberater einlädt und du die Einladung annimmst, erscheint er hier.</div>
+          </div>
+        ) : (
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {clients.map(c=>{ const p=c.profiles||{}; const nm=p.company||p.full_name||'Mandant'; return (
+              <div key={c.client_user_id} style={{display:'flex',alignItems:'center',gap:14,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px 18px'}}>
+                <div style={{width:44,height:44,borderRadius:12,background:hexA(C.pri,0.14),display:'flex',alignItems:'center',justifyContent:'center',color:C.pri,fontWeight:800,fontSize:17,flexShrink:0}}>{(nm||'?').slice(0,1).toUpperCase()}</div>
+                <div style={{flex:1,minWidth:0}}><div style={{fontSize:15,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nm}</div><div style={{fontSize:12,color:C.sub,marginTop:2}}>verknüpft seit {new Date(c.created_at).toLocaleDateString('de-DE')}</div></div>
+                <span style={{fontSize:12,color:C.mut}}>Ansicht folgt</span>
+              </div>
+            );})}
+            <div style={{fontSize:12,color:C.mut,lineHeight:1.55,marginTop:8,padding:'0 2px'}}>Hinweis: Die detaillierte Mandanten-Datenansicht wird gerade eingerichtet. Die Verknüpfung steht bereits – sobald die mandantengetrennte Datenhaltung aktiv ist, öffnen sich hier die Bücher des jeweiligen Mandanten.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Root() {
   const [session,setSession]=useState(undefined);
+  const [profile,setProfile]=useState(undefined);   // {role} | null
+  const inviteToken = (()=>{ try{ return new URLSearchParams(window.location.search).get('advisor_invite')||null; }catch(e){ return null; } })();
+  const acceptedRef = useRef(false);
+
   useEffect(()=>{
     const t=setTimeout(()=>setSession(s=>s===undefined?null:s),7000);
     sb.auth.getSession().then(({data})=>{ clearTimeout(t); setSession(data.session||null); });
     const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s));
     return ()=>{ clearTimeout(t); try{sub.subscription.unsubscribe();}catch(e){} };
   },[]);
+
+  // Profil (Rolle) laden, sobald eine Session da ist.
+  useEffect(()=>{
+    if(!session){ setProfile(session===null?null:undefined); return; }
+    let active=true;
+    (async()=>{
+      // Offene Steuerberater-Einladung annehmen (Token aus der URL).
+      if(inviteToken && !acceptedRef.current){
+        acceptedRef.current=true;
+        try{ await sb.rpc('accept_advisor_invitation',{p_token:inviteToken}); }catch(e){}
+        try{ const url=window.location.pathname+window.location.hash; window.history.replaceState(null,'',url); }catch(e){}
+      }
+      const {data:prof}=await sb.from('profiles').select('role').eq('id',session.user.id).maybeSingle();
+      if(!active) return;
+      setProfile(prof||{role:'user'});
+    })();
+    return ()=>{active=false;};
+  },[session]);
+
   if(session===undefined) return <Splash text="Wird geladen…" />;
-  if(!session) return <Login />;
+  if(!session) return <Login inviteToken={inviteToken} />;
+  if(profile===undefined) return <Splash text="Wird geladen…" />;
+  if(profile && profile.role==='advisor') return <AdvisorHome session={session} />;
   return <App session={session} />;
 }
 

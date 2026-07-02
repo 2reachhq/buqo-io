@@ -9,3 +9,8 @@ verify_jwt = false
 # die Anfrage stattdessen selbst über die Svix-Signatur (RESEND_WEBHOOK_SECRET).
 [functions.resend-inbound]
 verify_jwt = false
+
+# Stripe ruft diesen Webhook ohne Supabase-Login-Header auf – die Funktion prüft
+# die Anfrage stattdessen selbst über die Stripe-Signatur (STRIPE_WEBHOOK_SECRET).
+[functions.stripe-webhook]
+verify_jwt = false
