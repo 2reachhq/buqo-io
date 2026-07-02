@@ -1307,6 +1307,12 @@ function App({session}) {
   const [taxOpen,setTaxOpen]= useState({});          // ausklappbare Steuer-Hinweise
   const [advOpen,setAdvOpen]= useState(false);        // Steuerberater-Bereich ein-/ausklappen
   const [settingsTab,setSettingsTab]= useState('profil'); // Einstellungen-Tab: profil|konten|team|berater|admin
+  const [steuernTab,setSteuernTab]= useState('ustva');    // Steuern-Bereich: ustva|euer|guv|bwa|susa|datev
+  const [steuernOpen,setSteuernOpen]= useState(false);    // Steuern-Dropdown im Header offen
+  const [stY,setStY]= useState(now.getFullYear());        // Steuern: gewähltes Jahr
+  const [stM,setStM]= useState(now.getMonth());           // Steuern: gewählter Monat (UStVA/BWA)
+  const [bwaBusy,setBwaBusy]= useState(false);            // BWA: KI-Bericht wird gerade erstellt
+  const [datevBusy,setDatevBusy]= useState(false);        // DATEV-ZIP wird gerade gepackt
   const [settingsAcct,setSettingsAcct]= useState('unter'); // Konten-Unter-Tab in Einstellungen
   const [teamInvite,setTeamInvite]= useState({email:'',accounts:[]});   // Team-Einladung
   const [taxInvite,setTaxInvite]= useState({email:'',accounts:[]});     // Steuerberater-Einladung
@@ -1426,7 +1432,7 @@ function App({session}) {
   const subSlug = (v)=> v==='wied' ? 'wiederkehrend' : v;
   const parseSub = (s)=> s==='wiederkehrend' ? 'wied' : s;
   useEffect(()=>{
-    const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','mehr','settings','rechnung','kunden','belege','download','kosten']);
+    const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten']);
     const apply=()=>{ const raw=(window.location.hash||'').replace(/^#\/?/,''); if(!raw) return; const parts=raw.split('/'); const head=parts[0];
       if(head!=='erfassen') setCapture(null);
       if(head!=='rechnung-erstellen') setInvEdit(null);
@@ -3075,6 +3081,135 @@ function App({session}) {
   };
   const setTaxAnswer = (q, a) => setData(prev=>{ const tn={...(prev.taxNotes||{})}; const cur=tn[yr]||{}; tn[yr]={...cur, answers:{...(cur.answers||{}), [q]:a}}; return {...prev, taxNotes:tn}; });
 
+  /* ══ Steuer-Engine: alle Auswertungen (UStVA, EÜR, GuV, BWA, SuSa, DATEV) werden DETERMINISTISCH
+     aus den Buchungsdaten berechnet – die KI erklärt die Ergebnisse nur, rechnet aber nie selbst. ══ */
+  const r2 = v => Math.round(v*100)/100;
+  // Alle Geschäftsbuchungen (Firma + Immobilien, ohne Privat) eines Jahres bzw. Monats
+  const collectBizBookings = (year, month)=>{ const out=[]; const Y=data[year]||{};
+    Object.keys(Y).forEach(mk=>{ if(isNaN(+mk)) return; if(month!=null && +mk!==month) return; const M=Y[mk]; if(!M) return;
+      const grab=(arr,account,kind)=>{ (arr||[]).forEach(it=>{ const brutto=Math.abs(num(it.amount)); if(!brutto) return;
+        const hasRate = it.mwst!=='' && it.mwst!=null && !isNaN(parseFloat(it.mwst));
+        const rateIn = hasRate ? num(it.mwst) : null;
+        let netto = Math.abs(num(it.netto));
+        if(!netto) netto = rateIn!=null ? r2(brutto/(1+rateIn/100)) : brutto;
+        const vat = r2(brutto-netto);
+        const rate = rateIn!=null ? rateIn : (netto>0 && vat>0 ? Math.round(vat/netto*100) : 0);
+        out.push({ id:it.id, name:it.name||'', brutto, netto, vat, rate, category:it.category||'', skr:String(it.skr||suggestSKR(it.category||'',kind)), belegnr:it.belegnr||'', datum:toISO(it.datum)||'', kind, account, y:+year, m:+mk, hasBeleg:!!(it.filePath||it.fileData), hasVatInfo:(rateIn!=null || Math.abs(num(it.netto))>0), filePath:it.filePath||'', fileDataRaw:it.fileData||null });
+      }); };
+      if(M.unternehmen){ grab(M.unternehmen.clients,'unter','ein'); grab(M.unternehmen.items,'unter','aus'); }
+      if(M.props) Object.keys(M.props).forEach(pid=>{ const p=M.props[pid]||{}; grab(p.einnahmen,pid,'ein'); grab(p.expenses,pid,'aus'); });
+    });
+    return out; };
+  // 1) UStVA – Kennzahlen je Monat (aktualisiert sich automatisch mit jeder Buchungsänderung)
+  const calcVat = (year, month)=>{ const rows=collectBizBookings(year,month);
+    const isE=r=>r.kind==='ein', isA=r=>r.kind==='aus', hi=r=>r.rate>=16, lo=r=>r.rate>0&&r.rate<16;
+    const sum=(f,fld)=>r2(rows.filter(f).reduce((s,r)=>s+r[fld],0));
+    const base19=sum(r=>isE(r)&&hi(r),'netto'), base7=sum(r=>isE(r)&&lo(r),'netto'), baseFree=sum(r=>isE(r)&&r.rate===0,'netto');
+    const salesTax19=sum(r=>isE(r)&&hi(r),'vat'), salesTax7=sum(r=>isE(r)&&lo(r),'vat');
+    const inputTax19=sum(r=>isA(r)&&hi(r),'vat'), inputTax7=sum(r=>isA(r)&&lo(r),'vat');
+    const salesTax=r2(salesTax19+salesTax7), inputTax=r2(inputTax19+inputTax7), payableTax=r2(salesTax-inputTax);
+    return { rows, salesTax, salesTax19, salesTax7, inputTax, inputTax19, inputTax7, base19, base7, baseFree, payableTax,
+      taxBoxes:{ '81':base19, '86':base7, '48':baseFree, '66':inputTax, '83':payableTax },
+      missingVat:rows.filter(r=>!r.hasVatInfo).length, missingBeleg:rows.filter(r=>isA(r)&&!r.hasBeleg).length };
+  };
+  // 2) EÜR je Jahr (Netto-Betrachtung; USt/Vorsteuer laufen über die UStVA)
+  const calcEUR = (year)=>{ const rows=collectBizBookings(year,null);
+    const revenue=r2(rows.filter(r=>r.kind==='ein').reduce((s,r)=>s+r.netto,0));
+    const expenses=r2(rows.filter(r=>r.kind==='aus').reduce((s,r)=>s+r.netto,0));
+    const categories={}; rows.filter(r=>r.kind==='aus').forEach(r=>{ const k=r.category||'Sonstiges'; categories[k]=r2((categories[k]||0)+r.netto); });
+    return { revenue, expenses, profit:r2(revenue-expenses), categories, count:rows.length };
+  };
+  // 3) GuV je Jahr (vereinfachte Staffel)
+  const calcGuV = (year)=>{ const rows=collectBizBookings(year,null);
+    const rev=r2(rows.filter(r=>r.kind==='ein').reduce((s,r)=>s+r.netto,0));
+    const cat=(c)=>r2(rows.filter(r=>r.kind==='aus'&&r.category===c).reduce((s,r)=>s+r.netto,0));
+    const material=cat('Material'), personal=cat('Personal');
+    const totalExp=r2(rows.filter(r=>r.kind==='aus').reduce((s,r)=>s+r.netto,0));
+    const abschreibungen=0; // im Datenmodell gibt es (noch) keine AfA-Buchungen
+    return { rev, material, personal, abschreibungen, sonstige:r2(totalExp-material-personal), totalExp, result:r2(rev-totalExp) };
+  };
+  // 4) BWA je Monat (Vergleich zum Vormonat + kumuliertes Jahresergebnis)
+  const calcBWA = (year, month)=>{ const sumK=(rows,k)=>rows.filter(r=>r.kind===k).reduce((s,r)=>s+r.netto,0);
+    const cur=collectBizBookings(year,month); const py=month===0?year-1:year, pm=month===0?11:month-1; const prev=collectBizBookings(py,pm);
+    const umsatz=r2(sumK(cur,'ein')), kosten=r2(sumK(cur,'aus')), gewinn=r2(umsatz-kosten);
+    const umsatzPrev=r2(sumK(prev,'ein')), kostenPrev=r2(sumK(prev,'aus')), gewinnPrev=r2(umsatzPrev-kostenPrev);
+    let kumuliert=0; for(let i=0;i<=month;i++){ const r=collectBizBookings(year,i); kumuliert+=sumK(r,'ein')-sumK(r,'aus'); }
+    const catMap={}; cur.filter(r=>r.kind==='aus').forEach(r=>{ const k=r.category||'Sonstiges'; catMap[k]=(catMap[k]||0)+r.netto; });
+    const topCats=Object.entries(catMap).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,v])=>({kategorie:k,netto:r2(v)}));
+    const pct=(c,p)=>p>0?Math.round((c-p)/p*100):null;
+    return { umsatz,kosten,gewinn,umsatzPrev,kostenPrev,gewinnPrev,dUmsatz:pct(umsatz,umsatzPrev),dKosten:pct(kosten,kostenPrev),dGewinn:pct(gewinn,gewinnPrev),kumuliert:r2(kumuliert),topCats };
+  };
+  // 5) SuSa je Jahr – Buchungen nach Konto gruppiert (Soll/Haben/Saldo)
+  const calcSuSa = (year)=>{ const map={}; collectBizBookings(year,null).forEach(r=>{ const k=r.skr||'—';
+      if(!map[k]) map[k]={ konto:k, name:((SKR03_ACCTS.find(a=>a.nr===k)||{}).name)||(r.kind==='ein'?'Erlöse':'Aufwand'), soll:0, haben:0 };
+      if(r.kind==='aus') map[k].soll+=r.netto; else map[k].haben+=r.netto; });
+    return Object.values(map).map(x=>({ ...x, soll:r2(x.soll), haben:r2(x.haben), saldo:r2(x.haben-x.soll) })).sort((a,b)=>String(a.konto).localeCompare(String(b.konto)));
+  };
+  // Datei-Download-Helfer
+  const dlBlob=(name,blob)=>{ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); };
+  const dlText=(name,text,mime)=>dlBlob(name,new Blob([text],{type:mime||'text/csv;charset=utf-8'}));
+  const deNum=v=>Number(v||0).toFixed(2).replace('.',',');
+  // UStVA-Kennzahlen als Datei (zum Übertragen in ELSTER; direkte Übermittlung braucht ein ELSTER-Zertifikat)
+  const exportUStVA=(year,month)=>{ const v=calcVat(year,month); const lines=[
+      'Umsatzsteuervoranmeldung – '+MONTHS[month]+' '+year+' (Buqo, ohne Gewähr)','',
+      'Kz 81 – Steuerpflichtige Umsätze 19 % (netto): '+deNum(v.base19)+' EUR · USt: '+deNum(v.salesTax19)+' EUR',
+      'Kz 86 – Steuerpflichtige Umsätze 7 % (netto): '+deNum(v.base7)+' EUR · USt: '+deNum(v.salesTax7)+' EUR',
+      'Kz 48 – Steuerfreie Umsätze: '+deNum(v.baseFree)+' EUR',
+      'Innergemeinschaftliche Erwerbe: 0,00 EUR (keine entsprechenden Buchungen erfasst)',
+      'Reverse Charge (§13b UStG): 0,00 EUR (keine entsprechenden Buchungen erfasst)',
+      'Kz 66 – Vorsteuerbeträge: '+deNum(v.inputTax)+' EUR',
+      'Kz 83 – Zahllast / Erstattung: '+deNum(v.payableTax)+' EUR','',
+      'Diese Werte auf elster.de in die UStVA übertragen.'];
+    dlText('UStVA_'+year+'_'+String(month+1).padStart(2,'0')+'.txt',lines.join('\r\n'),'text/plain;charset=utf-8'); setToast('UStVA-Kennzahlen exportiert – zum Übertragen in ELSTER.'); };
+  // SuSa-Exporte (CSV / Excel / PDF)
+  const susaCSV=(year)=>{ const rows=calcSuSa(year); const lines=['Konto;Bezeichnung;Soll;Haben;Saldo',...rows.map(x=>[x.konto,'"'+String(x.name).replace(/"/g,'""')+'"',deNum(x.soll),deNum(x.haben),deNum(x.saldo)].join(';'))]; dlText('SuSa_'+year+'.csv','﻿'+lines.join('\r\n')); };
+  const susaExcel=(year)=>{ const rows=calcSuSa(year); const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); const html='<html><head><meta charset="utf-8"></head><body><table border="1"><tr><th>Konto</th><th>Bezeichnung</th><th>Soll</th><th>Haben</th><th>Saldo</th></tr>'+rows.map(x=>'<tr><td>'+esc(x.konto)+'</td><td>'+esc(x.name)+'</td><td>'+deNum(x.soll)+'</td><td>'+deNum(x.haben)+'</td><td>'+deNum(x.saldo)+'</td></tr>').join('')+'</table></body></html>'; dlText('SuSa_'+year+'.xls',html,'application/vnd.ms-excel'); };
+  const susaPDF=async(year)=>{ try{ await loadJsPDF(); const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'}); const rows=calcSuSa(year); let y=48;
+      doc.setFontSize(15); doc.text('Summen- und Saldenliste '+year,40,y); doc.setFontSize(9); doc.setTextColor(120); doc.text('Buqo · Netto-Beträge · erstellt am '+new Date().toLocaleDateString('de-DE'),40,y+16); doc.setTextColor(0); y+=44; doc.setFontSize(10);
+      const cols=[40,110,370,450,530]; doc.setFont(undefined,'bold'); ['Konto','Bezeichnung','Soll','Haben','Saldo'].forEach((h,i)=>doc.text(h,cols[i],y,{align:i>=2?'right':'left'})); doc.setFont(undefined,'normal'); y+=6; doc.line(40,y,555,y); y+=16;
+      rows.forEach(x=>{ if(y>790){ doc.addPage(); y=48; } doc.text(String(x.konto),cols[0],y); doc.text(String(x.name).slice(0,44),cols[1],y); doc.text(deNum(x.soll),cols[2],y,{align:'right'}); doc.text(deNum(x.haben),cols[3],y,{align:'right'}); doc.text(deNum(x.saldo),cols[4],y,{align:'right'}); y+=16; });
+      doc.save('SuSa_'+year+'.pdf'); }catch(e){ setToast('PDF-Export fehlgeschlagen: '+(e.message||e)); } };
+  // 6) DATEV-Export: BU-Schlüssel (2/3 = USt 7/19 %, 8/9 = Vorsteuer 7/19 %)
+  const datevBU=r=> r.kind==='ein' ? (r.rate>=16?'3':(r.rate>0?'2':'')) : (r.rate>=16?'9':(r.rate>0?'8':''));
+  const datevExtfCsv=(year)=>{ const rows=collectBizBookings(year,null);
+    const n2=new Date(); const stamp=''+n2.getFullYear()+String(n2.getMonth()+1).padStart(2,'0')+String(n2.getDate()).padStart(2,'0')+String(n2.getHours()).padStart(2,'0')+String(n2.getMinutes()).padStart(2,'0')+String(n2.getSeconds()).padStart(2,'0')+'000';
+    const head1='"EXTF";700;21;"Buchungsstapel";12;'+stamp+';;"";"";"";1001;1;'+year+'0101;4;'+year+'0101;'+year+'1231;"Buqo Export";"";;;;"EUR";;;;;;;;;;""';
+    const head2='Umsatz (ohne Soll/Haben-Kz);Soll/Haben-Kennzeichen;WKZ Umsatz;Kurs;Basis-Umsatz;WKZ Basis-Umsatz;Konto;Gegenkonto (ohne BU-Schlüssel);BU-Schlüssel;Belegdatum;Belegfeld 1;Belegfeld 2;Skonto;Buchungstext';
+    const body=rows.map(r=>{ const d=r.datum?new Date(r.datum):null; const bd=(d&&!isNaN(d.getTime()))?(String(d.getDate()).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')):'';
+      return [deNum(r.brutto),'"'+(r.kind==='ein'?'H':'S')+'"','"EUR"','','','',r.skr,'1200','"'+datevBU(r)+'"',bd,'"'+String(r.belegnr||'').slice(0,36).replace(/"/g,'')+'"','""','0,00','"'+String(r.name||'').slice(0,60).replace(/"/g,'')+'"'].join(';'); });
+    return '﻿'+[head1,head2,...body].join('\r\n'); };
+  const exportDatevCsv=(year)=>{ dlText('EXTF_Buchungsstapel_'+year+'.csv',datevExtfCsv(year)); setToast('DATEV-EXTF-Datei exportiert.'); };
+  const exportBookingsCsv=(year)=>{ const rows=collectBizBookings(year,null);
+    const lines=['Belegnummer;Datum;Konto;Gegenkonto;MwSt-Satz;Steuerschlüssel;Betrag (brutto);Netto;Text;Kategorie;Beleg vorhanden',
+      ...rows.map(r=>[r.belegnr,r.datum,r.skr,'1200',(r.rate||0)+'%',(datevBU(r)||'-'),deNum(r.brutto),deNum(r.netto),'"'+String(r.name).replace(/"/g,'""')+'"',r.category,(r.hasBeleg?'ja':'nein')].join(';'))];
+    dlText('Buchungen_'+year+'.csv','﻿'+lines.join('\r\n')); };
+  const exportDatevZip=async(year,withBelege)=>{ if(datevBusy) return; setDatevBusy(true); setToast('📦 DATEV-Paket wird gepackt…');
+    try{ await loadJSZip(); const zip=new window.JSZip();
+      zip.file('EXTF_Buchungsstapel_'+year+'.csv', datevExtfCsv(year));
+      const rows=collectBizBookings(year,null);
+      zip.file('Buchungen_'+year+'.csv','﻿'+['Belegnummer;Datum;Konto;Gegenkonto;MwSt-Satz;Steuerschlüssel;Betrag (brutto);Netto;Text',...rows.map(r=>[r.belegnr,r.datum,r.skr,'1200',(r.rate||0)+'%',(datevBU(r)||'-'),deNum(r.brutto),deNum(r.netto),'"'+String(r.name).replace(/"/g,'""')+'"'].join(';'))].join('\r\n'));
+      if(withBelege){ const seen={}; for(const r of rows){ let payload=null, ext='pdf';
+          if(r.fileDataRaw){ try{ const m2=String(r.fileDataRaw).match(/^data:([^;]+);base64,(.*)$/); if(m2){ payload=Uint8Array.from(atob(m2[2]),c=>c.charCodeAt(0)); ext=/pdf/.test(m2[1])?'pdf':'jpg'; } }catch(_){} }
+          else if(r.filePath){ try{ const {data:dd}=await sb.storage.from('belege').createSignedUrl(r.filePath,3600); if(dd&&dd.signedUrl){ const resp=await fetch(dd.signedUrl); payload=await resp.arrayBuffer(); ext=(r.filePath.split('.').pop()||'pdf').toLowerCase(); } }catch(_){} }
+          if(!payload) continue; const base=safeName((r.belegnr||r.name||'Beleg').slice(0,40))||'Beleg'; let fn=base+'.'+ext; let k=2; while(seen[fn]){ fn=base+'_'+k+'.'+ext; k++; } seen[fn]=1;
+          zip.file('Belege/'+fn, payload); } }
+      const blob=await zip.generateAsync({type:'blob'}); dlBlob('DATEV_Export_'+year+'.zip',blob); setToast('DATEV-Paket erstellt ✓');
+    }catch(e){ setToast('Export fehlgeschlagen: '+(e.message||e)); }
+    setDatevBusy(false); };
+  // BWA-Bericht: KI ERKLÄRT die (fertig berechneten) Zahlen – sie rechnet nichts selbst
+  const generateBwaReport = async (year, month, force)=>{ const key=year+'-'+String(month+1).padStart(2,'0');
+    if(bwaBusy) return; if(!force && (data.bwaReports||{})[key]) return; setBwaBusy(true);
+    try{ const b=calcBWA(year,month);
+      const sys="Du bist der CFO-Assistent in der Finanz-App Buqo. Du bekommst FERTIG BERECHNETE Unternehmenszahlen – rechne nichts selbst nach, nutze nur die gelieferten Werte. Erkläre: wichtigste Veränderungen, Risiken, Chancen, Empfehlungen (z. B. Rücklagen bilden, offene Forderungen verfolgen, Kostenentwicklung beobachten). Sprich wie ein CFO in einfacher Sprache, Ich-Form, KEIN Markdown, 4–7 kurze Sätze, Beträge in Euro.";
+      const usr='Zahlen für '+MONTHS[month]+' '+year+' (deterministisch aus den Buchungen berechnet):\n'+JSON.stringify({umsatz:b.umsatz,umsatzVormonat:b.umsatzPrev,umsatzVeraenderungProzent:b.dUmsatz,kosten:b.kosten,kostenVormonat:b.kostenPrev,kostenVeraenderungProzent:b.dKosten,gewinn:b.gewinn,gewinnVormonat:b.gewinnPrev,gewinnVeraenderungProzent:b.dGewinn,jahresergebnisKumuliert:b.kumuliert,groessteKostenbloecke:b.topCats});
+      const {data:resp,error}=await aiInvoke({body:{model:'claude-haiku-4-5',max_tokens:500,system:sys,messages:[{role:'user',content:usr}]}});
+      if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
+      const text=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'';
+      if(text) setData(prev=>({...prev, bwaReports:{...(prev.bwaReports||{}), [key]:{text, ts:new Date().toISOString()}}}));
+    }catch(e){ setToast('BWA-Bericht fehlgeschlagen: '+(e.message||e)); }
+    setBwaBusy(false); };
+  useEffect(()=>{ if(ready && tab==='steuern' && steuernTab==='bwa') generateBwaReport(stY,stM,false); },[ready,tab,steuernTab,stY,stM]);
+
   /* Derived */
   const md    = getMD(yr,mo);
   const futureMonth = isFuture(yr, mo);
@@ -3209,8 +3344,17 @@ function App({session}) {
     {id:'kunden', label:'Kunden',       icon:P.prson},
     {id:'download', label:'Download',   icon:P.down},
     {id:'yr',     label:'Analyse',      icon:P.cal},
-    {id:'steuer', label:'Steuer',       icon:P.doc},
+    {id:'steuer', label:'Steuer-Assistent', icon:P.doc},
     {id:'kosten', label:'Betriebskosten', icon:P.spark},
+  ];
+  // Steuern-Bereich: 6 Auswertungen, alle deterministisch aus den Buchungen berechnet
+  const STEUERN_MENU = [
+    {id:'ustva', label:'UStVA', sub:'Umsatzsteuervoranmeldung', icon:P.doc},
+    {id:'euer',  label:'EÜR',   sub:'Einnahmenüberschussrechnung', icon:P.cal},
+    {id:'guv',   label:'GuV',   sub:'Gewinn- und Verlustrechnung', icon:P.up},
+    {id:'bwa',   label:'BWA',   sub:'Betriebswirtschaftliche Auswertung', icon:P.spark},
+    {id:'susa',  label:'SuSa',  sub:'Summen- und Saldenliste', icon:P.menu},
+    {id:'datev', label:'DATEV-Export', sub:'Export für den Steuerberater', icon:P.dload},
   ];
 
   /* Reusable items renderer */
@@ -3368,10 +3512,30 @@ function App({session}) {
                 </button>
               );
             })}
+            {/* Steuern-Dropdown */}
+            <div style={{position:'relative'}}>
+              {(()=>{ const sa=tab==='steuern'; return (
+              <button onClick={()=>{setSteuernOpen(o=>!o); setSonstOpen(false);}} className={'navlink'+(sa?' active':'')} style={{
+                display:'flex',alignItems:'center',gap:6,padding:'8px 14px',
+                fontFamily:'inherit',fontSize:15,fontWeight:sa?700:500,whiteSpace:'nowrap',color:sa?C.txt:C.sub,
+              }}><span>Steuern</span> <span style={{display:'inline-flex',transition:'transform .16s',transform:steuernOpen?'rotate(180deg)':'none'}}><Ic p={P.down} sz={14} col={sa?C.txt:C.sub}/></span></button>
+              ); })()}
+              {steuernOpen && (<>
+                <div onClick={()=>setSteuernOpen(false)} style={{position:'fixed',inset:0,zIndex:90}} />
+                <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'calc(100% + 8px)',right:0,zIndex:91,width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+                  {STEUERN_MENU.map(({id,label,sub,icon})=>(
+                    <button key={id} onClick={()=>{setTab('steuern');setSteuernTab(id);setSteuernOpen(false);}} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 12px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                      <Ic p={icon} sz={16} col={(tab==='steuern'&&steuernTab===id)?C.txt:C.sub}/>
+                      <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:14,color:C.txt,fontWeight:600}}>{label}</span><span style={{display:'block',fontSize:11,color:C.mut}}>{sub}</span></span>
+                    </button>
+                  ))}
+                </div>
+              </>)}
+            </div>
             {/* Sonstiges-Dropdown */}
             <div style={{position:'relative'}}>
               {(()=>{ const sa=SONSTIGES.some(s=>s.id===tab); return (
-              <button onClick={()=>setSonstOpen(o=>!o)} className={'navlink'+(sa?' active':'')} style={{
+              <button onClick={()=>{setSonstOpen(o=>!o); setSteuernOpen(false);}} className={'navlink'+(sa?' active':'')} style={{
                 display:'flex',alignItems:'center',gap:6,padding:'8px 14px',
                 fontFamily:'inherit',fontSize:15,fontWeight:sa?700:500,whiteSpace:'nowrap',color:sa?C.txt:C.sub,
               }}><span>Sonstiges</span> <span style={{display:'inline-flex',transition:'transform .16s',transform:sonstOpen?'rotate(180deg)':'none'}}><Ic p={P.down} sz={14} col={sa?C.txt:C.sub}/></span></button>
@@ -3870,7 +4034,7 @@ function App({session}) {
                 <div style={{fontSize:13,color:C.sub}}>Weitere Bereiche</div>
               </div>
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                {[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},{id:'settings',label:'Einstellungen',icon:P.gear}].map(m=>(
+                {[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},{id:'settings',label:'Einstellungen',icon:P.gear}].map(m=>(
                   <button key={m.id} onClick={()=>setTab(m.id)} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
                   </button>
@@ -5305,6 +5469,156 @@ function App({session}) {
             </>}
           </>}
 
+          {/* ══ STEUERN (UStVA · EÜR · GuV · BWA · SuSa · DATEV) – deterministisch berechnet, KI erklärt nur ══ */}
+          {tab==='steuern' && (()=>{
+            const kpi=(lbl,val,col,sub2)=>(<div key={lbl} style={{flex:1,minWidth:160,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 17px'}}><div style={{fontSize:12,color:C.sub,marginBottom:7}}>{lbl}</div><div style={{fontSize:24,fontWeight:800,color:col||C.txt,...NUM}}>{val}</div>{sub2&&<div style={{fontSize:11,color:C.mut,marginTop:5}}>{sub2}</div>}</div>);
+            const yNow=new Date().getFullYear();
+            const yearSel=(<select value={stY} onChange={e=>setStY(+e.target.value)} style={{...SS,width:100}}>{[yNow-2,yNow-1,yNow,yNow+1].map(y=><option key={y} value={y}>{y}</option>)}</select>);
+            const monthSel=(<div style={{display:'flex',gap:8}}><select value={stM} onChange={e=>setStM(+e.target.value)} style={{...SS,maxWidth:170}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>{yearSel}</div>);
+            const secHead=(title,picker)=>(<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:14}}><div style={{fontSize:16,fontWeight:700}}>{title}</div>{picker}</div>);
+            const expBtn=(label,onClick,primary)=>(<button key={label} onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:7,background:primary?C.act:C.surf2,color:primary?C.actTxt:C.txt,border:primary?'none':'1px solid '+C.bdr,borderRadius:11,padding:'11px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.dload} sz={14} col={primary?C.actTxt:C.txt}/> {label}</button>);
+            return (<>
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Steuern</div>
+                <div style={{fontSize:13,color:C.sub}}>Automatisch aus deinen Buchungen berechnet (Firma + Immobilien, ohne Privat) · aktualisiert sich bei jeder Änderung · keine verbindliche Steuerberatung</div>
+              </div>
+              <div style={{display:'flex',gap:2,marginBottom:20,flexWrap:'wrap',borderBottom:'1px solid '+C.sep}}>
+                {STEUERN_MENU.map(t=>{const on=steuernTab===t.id; return (
+                  <button key={t.id} onClick={()=>setSteuernTab(t.id)} title={t.sub} style={{display:'flex',alignItems:'center',gap:7,background:'none',border:'none',padding:'10px 14px',fontSize:13.5,fontWeight:on?700:600,color:on?C.pri:C.sub,cursor:'pointer',fontFamily:'inherit',borderBottom:'2px solid '+(on?C.pri:'transparent'),marginBottom:-1}}><Ic p={t.icon} sz={15} col={on?C.pri:C.sub}/> {t.label}</button>
+                );})}
+              </div>
+
+              {steuernTab==='ustva' && (()=>{ const v=calcVat(stY,stM); return (<>
+                {secHead('Umsatzsteuervoranmeldung · '+MONTHS[stM]+' '+stY, monthSel)}
+                <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:14}}>
+                  {kpi('Umsatzsteuer',fmt(v.salesTax),C.txt,'19 %: '+fmt(v.salesTax19)+' · 7 %: '+fmt(v.salesTax7))}
+                  {kpi('Vorsteuer',fmt(v.inputTax),C.txt,'19 %: '+fmt(v.inputTax19)+' · 7 %: '+fmt(v.inputTax7))}
+                  {kpi(v.payableTax>=0?'Zu zahlen':'Erstattung',fmt(Math.abs(v.payableTax)),v.payableTax>=0?C.exp:C.grn,'Zahllast = Umsatzsteuer − Vorsteuer')}
+                </div>
+                <div style={{...SC,marginBottom:12}}>
+                  <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>Kennzahlen (für ELSTER)</div>
+                  {[['81','Steuerpflichtige Umsätze 19 % (netto)',v.base19],['86','Steuerpflichtige Umsätze 7 % (netto)',v.base7],['48','Steuerfreie Umsätze',v.baseFree],['—','Innergemeinschaftliche Erwerbe',0],['—','Reverse Charge (§13b UStG)',0],['66','Vorsteuerbeträge',v.inputTax],['83','Zahllast / Erstattung',v.payableTax]].map(([kz,lbl,val],i)=>(
+                    <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:'1px solid '+C.sep,fontSize:13.5}}>
+                      <span style={{width:38,flexShrink:0,fontWeight:700,color:C.sub,...NUM}}>{kz}</span>
+                      <span style={{flex:1,color:C.txt}}>{lbl}</span>
+                      <span style={{fontWeight:700,...NUM}}>{fmt(val)}</span>
+                    </div>
+                  ))}
+                  <div style={{fontSize:11,color:C.mut,marginTop:10,lineHeight:1.5}}>Innergemeinschaftliche Erwerbe und Reverse Charge werden ausgewiesen, sobald entsprechende Buchungen erfasst sind.</div>
+                </div>
+                {(v.missingVat>0||v.missingBeleg>0) && (
+                  <div style={{background:C.ambL,border:'1px solid rgba(255,159,10,0.35)',borderRadius:12,padding:'12px 14px',marginBottom:12,fontSize:13,color:C.txt,lineHeight:1.6}}>
+                    ⚠ {v.missingVat>0?(v.missingVat+' Buchung'+(v.missingVat===1?'':'en')+' ohne MwSt-Angabe (als 0 % gewertet)'):''}{v.missingVat>0&&v.missingBeleg>0?' · ':''}{v.missingBeleg>0?(v.missingBeleg+' Ausgabe'+(v.missingBeleg===1?'':'n')+' ohne Beleg'):''} – bitte ergänzen, damit die Voranmeldung stimmt.
+                  </div>
+                )}
+                <button onClick={()=>exportUStVA(stY,stM)} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'12px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.send} sz={15} col={C.actTxt}/> ELSTER übermitteln (Kennzahlen exportieren)</button>
+                <div style={{fontSize:11,color:C.mut,marginTop:8}}>Exportiert alle Kennzahlen zum Übertragen auf elster.de – die direkte Übermittlung (ELSTER-Zertifikat) ist in Vorbereitung.</div>
+              </>); })()}
+
+              {steuernTab==='euer' && (()=>{ const e=calcEUR(stY); return (<>
+                {secHead('Einnahmenüberschussrechnung · '+stY, yearSel)}
+                <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:14}}>
+                  {kpi('Einnahmen (netto)',fmt(e.revenue))}
+                  {kpi('Ausgaben (netto)',fmt(e.expenses))}
+                  {kpi('Gewinn',(e.profit>=0?'+':'−')+fmt(Math.abs(e.profit)),e.profit>=0?C.grn:C.exp,'Einnahmen − Ausgaben')}
+                </div>
+                <div style={{...SC,marginBottom:12}}>
+                  <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>Ausgaben nach Kategorie (mit Buchungskonto)</div>
+                  {Object.entries(e.categories).sort((a,b)=>b[1]-a[1]).map(([cat,val])=>(
+                    <div key={cat} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:'1px solid '+C.sep,fontSize:13.5}}>
+                      <span style={{width:52,flexShrink:0,fontWeight:700,color:C.sub,...NUM}}>{CAT_TO_SKR[cat]||'4900'}</span>
+                      <span style={{flex:1,color:C.txt}}>{cat}</span>
+                      <span style={{fontWeight:700,...NUM}}>{fmt(val)}</span>
+                    </div>
+                  ))}
+                  {!Object.keys(e.categories).length && <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'18px'}}>Noch keine Ausgaben in {stY}.</div>}
+                </div>
+                <div style={{fontSize:11,color:C.mut}}>Netto-Betrachtung ({e.count} Buchungen) – Umsatz- und Vorsteuer laufen über die UStVA. Erlöskonten: 8400/8300/8100 je nach Steuersatz bzw. Vermietung.</div>
+              </>); })()}
+
+              {steuernTab==='guv' && (()=>{ const g=calcGuV(stY); const row=(lbl,val,strong,sign)=>(<div style={{display:'flex',alignItems:'center',gap:10,padding:'11px 0',borderBottom:'1px solid '+C.sep,fontSize:strong?15:13.5,fontWeight:strong?800:500}}><span style={{width:22,color:C.mut,...NUM}}>{sign||''}</span><span style={{flex:1,color:C.txt}}>{lbl}</span><span style={{...NUM,fontWeight:700,color:strong?(val>=0?C.grn:C.exp):C.txt}}>{fmt(Math.abs(val))}</span></div>); return (<>
+                {secHead('Gewinn- und Verlustrechnung · '+stY, yearSel)}
+                <div style={{...SC,marginBottom:12,maxWidth:640}}>
+                  {row('Umsatzerlöse',g.rev)}
+                  {row('Materialaufwand',g.material,false,'−')}
+                  {row('Personalaufwand',g.personal,false,'−')}
+                  {row('Abschreibungen',g.abschreibungen,false,'−')}
+                  {row('Sonstige betriebliche Aufwendungen',g.sonstige,false,'−')}
+                  {row(g.result>=0?'Jahresüberschuss':'Jahresfehlbetrag',g.result,true,'=')}
+                </div>
+                <div style={{fontSize:11,color:C.mut,lineHeight:1.5}}>Vereinfachte GuV-Staffel für bilanzierende Unternehmen (Netto-Werte). Abschreibungen erscheinen, sobald AfA-Buchungen erfasst sind – aktuell 0,00 €.</div>
+              </>); })()}
+
+              {steuernTab==='bwa' && (()=>{ const b=calcBWA(stY,stM); const key=stY+'-'+String(stM+1).padStart(2,'0'); const rep=(data.bwaReports||{})[key];
+                const delta=(d)=> d==null ? <span style={{color:C.mut}}>—</span> : <span style={{color:d>=0?C.grn:C.exp,fontWeight:700}}>{d>=0?'+':''}{d} %</span>; return (<>
+                {secHead('Betriebswirtschaftliche Auswertung · '+MONTHS[stM]+' '+stY, monthSel)}
+                <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:14}}>
+                  {kpi('Umsatz',fmt(b.umsatz),C.txt,delta(b.dUmsatz))}
+                  {kpi('Kosten',fmt(b.kosten),C.txt,delta(b.dKosten))}
+                  {kpi('Gewinn',fmt(b.gewinn),b.gewinn>=0?C.grn:C.exp,delta(b.dGewinn))}
+                  {kpi('Ergebnis kumuliert',fmt(b.kumuliert),b.kumuliert>=0?C.txt:C.exp,'Jahr bis '+MONTHS[stM])}
+                </div>
+                <div style={{...SC,marginBottom:12}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+                    <Ic p={P.spark} sz={15} col={C.pri}/>
+                    <div style={{fontSize:13,fontWeight:700,flex:1}}>KI-Bericht (erklärt die berechneten Zahlen)</div>
+                    <button onClick={()=>generateBwaReport(stY,stM,true)} disabled={bwaBusy} style={{background:C.priL,color:C.pri,border:'none',borderRadius:9,padding:'7px 13px',fontSize:12.5,fontWeight:700,cursor:bwaBusy?'default':'pointer',fontFamily:'inherit',opacity:bwaBusy?0.6:1}}>{bwaBusy?'Erstellt…':(rep?'Neu erstellen':'Erstellen')}</button>
+                  </div>
+                  {bwaBusy && !rep && <div className="prog" style={{marginTop:4}}/>}
+                  {rep ? (<><div style={{fontSize:13.5,color:C.txt,lineHeight:1.65,whiteSpace:'pre-wrap'}}>{rep.text}</div><div style={{fontSize:11,color:C.mut,marginTop:8}}>Erstellt: {new Date(rep.ts).toLocaleString('de-DE')} · Die Zahlen wurden deterministisch berechnet, die KI erklärt sie nur.</div></>)
+                    : (!bwaBusy && <div style={{fontSize:13,color:C.mut}}>Der Bericht wird automatisch erstellt, sobald du diesen Bereich öffnest.</div>)}
+                </div>
+                {b.topCats.length>0 && (
+                  <div style={{...SC}}>
+                    <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>Größte Kostenblöcke im {MONTHS[stM]}</div>
+                    {b.topCats.map(tc=>(<div key={tc.kategorie} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid '+C.sep,fontSize:13.5}}><span>{tc.kategorie}</span><span style={{fontWeight:700,...NUM}}>{fmt(tc.netto)}</span></div>))}
+                  </div>
+                )}
+              </>); })()}
+
+              {steuernTab==='susa' && (()=>{ const rows=calcSuSa(stY); return (<>
+                {secHead('Summen- und Saldenliste · '+stY, yearSel)}
+                <div style={{...SC,marginBottom:12,overflowX:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:13.5}}>
+                    <thead><tr style={{textAlign:'left',color:C.sub,fontSize:11.5}}>
+                      <th style={{padding:'8px 10px 8px 0',fontWeight:700}}>Konto</th><th style={{padding:'8px 10px',fontWeight:700}}>Bezeichnung</th>
+                      <th style={{padding:'8px 10px',textAlign:'right',fontWeight:700}}>Soll</th><th style={{padding:'8px 10px',textAlign:'right',fontWeight:700}}>Haben</th><th style={{padding:'8px 0 8px 10px',textAlign:'right',fontWeight:700}}>Saldo</th>
+                    </tr></thead>
+                    <tbody>{rows.map(x=>(
+                      <tr key={x.konto} style={{borderTop:'1px solid '+C.sep}}>
+                        <td style={{padding:'9px 10px 9px 0',fontWeight:700,...NUM}}>{x.konto}</td>
+                        <td style={{padding:'9px 10px',color:C.sub}}>{x.name}</td>
+                        <td style={{padding:'9px 10px',textAlign:'right',...NUM}}>{fmt(x.soll)}</td>
+                        <td style={{padding:'9px 10px',textAlign:'right',...NUM}}>{fmt(x.haben)}</td>
+                        <td style={{padding:'9px 0 9px 10px',textAlign:'right',fontWeight:700,...NUM,color:x.saldo>=0?C.txt:C.exp}}>{fmt(x.saldo)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                  {!rows.length && <div style={{fontSize:13,color:C.mut,textAlign:'center',padding:'18px'}}>Noch keine Buchungen in {stY}.</div>}
+                </div>
+                <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
+                  {expBtn('CSV',()=>susaCSV(stY),true)}
+                  {expBtn('Excel',()=>susaExcel(stY))}
+                  {expBtn('PDF',()=>susaPDF(stY))}
+                </div>
+              </>); })()}
+
+              {steuernTab==='datev' && (()=>{ const rows=collectBizBookings(stY,null); const withFile=rows.filter(r=>r.hasBeleg).length; return (<>
+                {secHead('DATEV-Export · '+stY, yearSel)}
+                <div style={{...SC,marginBottom:12,maxWidth:680}}>
+                  <div style={{fontSize:13.5,color:C.txt,lineHeight:1.6,marginBottom:12}}>Dein Steuerberater bekommt mit einem Klick alle Daten: <b>{rows.length} Buchungen</b> ({withFile} mit Beleg) aus {stY}. Jeder Export enthält Belegnummer, Datum, Konto, Gegenkonto, MwSt, Steuerschlüssel, Betrag und Buchungstext.</div>
+                  <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
+                    {expBtn(datevBusy?'Packt…':'Komplett-Paket (ZIP inkl. PDF-Belege)',()=>exportDatevZip(stY,true),true)}
+                    {expBtn('DATEV EXTF (CSV)',()=>exportDatevCsv(stY))}
+                    {expBtn('Buchungsliste (CSV)',()=>exportBookingsCsv(stY))}
+                    {expBtn('ZIP ohne Belege',()=>exportDatevZip(stY,false))}
+                  </div>
+                </div>
+                <div style={{fontSize:11,color:C.mut,lineHeight:1.5,maxWidth:680}}>Das EXTF-Format ist der DATEV-Buchungsstapel (SKR03, Gegenkonto 1200/Bank, BU-Schlüssel 2/3 = USt 7/19 %, 8/9 = Vorsteuer 7/19 %). Beim Komplett-Paket liegen die PDF-Belege im Ordner „Belege".</div>
+              </>); })()}
+            </>);
+          })()}
+
           {/* ══ STEUER ══ */}
           {tab==='steuer' && <>
             <div style={{marginBottom:20}}>
@@ -5541,7 +5855,7 @@ function App({session}) {
               </button>
             </div>
             <button onClick={()=>setBotOpen(o=>!o)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',color:botOpen?C.pri:C.sub,paddingTop:8,position:'relative'}}><Ic p={P.spark} sz={20} col={botOpen?C.pri:C.sub}/><span style={{fontSize:10,fontWeight:600}}>Assistent</span>{botUnread>0 && <span style={{position:'absolute',top:3,right:'calc(50% - 21px)',minWidth:17,height:17,borderRadius:99,background:C.red,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',boxSizing:'border-box'}}>{botUnread}</span>}</button>
-            {cell('mehr','Sonstiges',P.menu,['mehr','kal','yr','steuer'])}
+            {cell('mehr','Sonstiges',P.menu,['mehr','kal','yr','steuer','steuern'])}
           </div>
         );
       })()}
