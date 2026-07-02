@@ -42,6 +42,8 @@ Deno.serve(async (req) => {
       messages: body.messages,
     };
     if (body.system) payload.system = body.system;
+    if (body.tools) payload.tools = body.tools;
+    if (body.tool_choice) payload.tool_choice = body.tool_choice;
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

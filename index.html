@@ -192,6 +192,13 @@ const evalAmount = s => {
 const uid  = () => Math.random().toString(36).slice(2,9);
 const newItem = (name='') => ({id:uid(), name, amount:0, recurring:false, note:'', filePath:null, fileName:'', fileData:null});
 const CATS = ['Allgemein','Miete','Nebenkosten','Versicherung','Material','Personal','Steuern','Software','Marketing','Reise','Bewirtung','Bank & Gebühren','Sonstiges'];
+// P2.2: echte Claude-Tools für den Bot-Assistenten (statt reinem Text-Parsing) – bewusst klein gehalten,
+// ergänzt die bestehenden regelbasierten Flows (Rechnungs-Wizard etc.), ersetzt sie nicht.
+const BOT_TOOLS = [
+  { name:'get_overdue_invoices', description:'Liefert die Liste der aktuell überfälligen, unbezahlten Rechnungen mit Kunde, Rechnungsnummer, Betrag und Tagen überfällig.', input_schema:{ type:'object', properties:{}, required:[] } },
+  { name:'prepare_payment_reminder', description:'Bereitet eine Zahlungserinnerung/Mahnung für eine bestimmte Rechnung vor. Öffnet einen E-Mail-Entwurf zur Bestätigung durch den Nutzer – sendet NICHT automatisch.', input_schema:{ type:'object', properties:{ invoiceNumber:{type:'string', description:'Rechnungsnummer, z. B. RE-2026-014'} }, required:['invoiceNumber'] } },
+  { name:'open_app_tab', description:'Öffnet einen Bereich der App für den Nutzer.', input_schema:{ type:'object', properties:{ tab:{type:'string', enum:['rechnung','belege','import','kal','yr','steuer','kosten','settings']} }, required:['tab'] } },
+];
 // Kategorie aus Name/Verwendungszweck automatisch erraten (lokal, keyword-basiert)
 const CAT_RULES = [
   ['Miete', /miete|kaltmiete|warmmiete|pacht|nettomiete/i],
@@ -2827,14 +2834,45 @@ function App({session}) {
     try{ const ob=openBelegeList?openBelegeList().length:0; lines.push('Offene Belege (noch nicht per Bankauszug bestätigt): '+ob+'.'); }catch(_){ }
     const dr=(data.drafts||[]).length; if(dr) lines.push('Unbearbeitete Kontoauszug-Buchungen: '+dr+'.');
   }catch(e){ lines.push('(Kontext teilweise nicht lesbar)'); } return lines.join('\n'); };
+  // P2.2: Tools, die die KI im Chat wirklich aufrufen kann (echte Daten/Aktionen statt nur Text)
+  const runBotTool = async (name, input)=>{
+    if(name==='get_overdue_invoices'){
+      const list=overdueInvoices().map(iv=>{ const c=invCustomer(iv); const due=iv.due||addDays(iv.date,14); const days=Math.max(1,Math.round((Date.now()-new Date(due).getTime())/86400000)); return { rechnungsnummer:iv.number, kunde:c.name||'', betrag:invTotals(iv.items).gross, tageUeberfaellig:days }; });
+      return { anzahl:list.length, rechnungen:list };
+    }
+    if(name==='prepare_payment_reminder'){
+      const inv=(data.invoices||[]).find(iv=>String(iv.number||'').toLowerCase()===String((input&&input.invoiceNumber)||'').toLowerCase());
+      if(!inv) return { ok:false, error:'Rechnung mit dieser Nummer nicht gefunden.' };
+      await startMahnung(inv);
+      return { ok:true, hinweis:'E-Mail-Entwurf wurde geöffnet – der Nutzer muss ihn noch prüfen und senden.' };
+    }
+    if(name==='open_app_tab'){
+      setTab((input&&input.tab)||'rechnung');
+      return { ok:true };
+    }
+    return { ok:false, error:'Unbekanntes Tool: '+name };
+  };
   const botAskAI = async (q)=>{ setBotBusy(true);
     try{ const ctx=buildFinanceContext();
-      const sys="Du bist der persönliche KI-Buchhalter und Steuerberater-Assistent der Finanz-App des Nutzers. Du kennst dessen komplette Finanzdaten (siehe KONTEXT). Sprich wie ein erfahrener, vertrauter CFO/Steuerberater: einfache, klare Sprache, proaktiv – erkläre Zahlen verständlich, weise früh auf Risiken hin und schlage konkrete nächste Schritte vor. Du bist eine KI, aber persönlich und zupackend (z. B. ‚klar, ich mach das für dich', ‚schau es dir kurz an, dann erledige ich den Rest'). Kein Markdown, keine Tabellen, kurz und konkret, Beträge in Euro. Wenn Daten fehlen, sag es ehrlich. Schließe steuerliche Aussagen mit einem kurzen Hinweis, dass der Steuerberater final entscheidet.";
+      const sys="Du bist der persönliche KI-Buchhalter und Steuerberater-Assistent der Finanz-App des Nutzers. Du kennst dessen komplette Finanzdaten (siehe KONTEXT) und hast Werkzeuge für überfällige Rechnungen, Mahnungen und Navigation – nutze sie, statt zu raten. Sprich wie ein erfahrener, vertrauter CFO/Steuerberater: einfache, klare Sprache, proaktiv – erkläre Zahlen verständlich, weise früh auf Risiken hin und schlage konkrete nächste Schritte vor. Du bist eine KI, aber persönlich und zupackend (z. B. ‚klar, ich mach das für dich', ‚schau es dir kurz an, dann erledige ich den Rest'). Kein Markdown, keine Tabellen, kurz und konkret, Beträge in Euro. Wenn Daten fehlen, sag es ehrlich. Schließe steuerliche Aussagen mit einem kurzen Hinweis, dass der Steuerberater final entscheidet.";
       const usr="KONTEXT (aktuelle Finanzdaten des Nutzers):\n"+ctx+"\n\nFrage des Nutzers: "+q;
-      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:900, system:sys, messages:[{role:'user',content:[{type:'text',text:usr}]}] } });
-      if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
-      const t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'(keine Antwort)';
-      setBotMsgs(m=>[...m,{role:'assistant',content:t}]);
+      let messages=[{role:'user',content:[{type:'text',text:usr}]}];
+      let finalText=null;
+      for(let guard=0; guard<3 && finalText===null; guard++){
+        const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:900, system:sys, messages, tools:BOT_TOOLS } });
+        if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
+        const blocks=(resp&&resp.content)||[];
+        const toolUses=blocks.filter(b=>b.type==='tool_use');
+        if(!toolUses.length){ finalText=blocks.map(b=>b.text).filter(Boolean).join('\n')||'(keine Antwort)'; break; }
+        messages=[...messages, {role:'assistant', content:blocks}];
+        const toolResults=[];
+        for(const tu of toolUses){
+          let result; try{ result=await runBotTool(tu.name, tu.input||{}); }catch(e){ result={ok:false,error:String(e.message||e)}; }
+          toolResults.push({type:'tool_result', tool_use_id:tu.id, content:JSON.stringify(result)});
+        }
+        messages=[...messages, {role:'user', content:toolResults}];
+      }
+      setBotMsgs(m=>[...m,{role:'assistant',content:finalText||'(keine Antwort)'}]);
     }catch(e){ setBotMsgs(m=>[...m,{role:'assistant',content:'Sorry, das konnte ich gerade nicht beantworten ('+(e.message||e)+'). Frag mich gern nochmal oder etwas konkreter.'}]); }
     setBotBusy(false);
   };
