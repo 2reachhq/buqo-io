@@ -1478,9 +1478,10 @@ function App({session}) {
   const setChat = updater => setData(prev=>{ const cur=prev.chat||[]; const next=(typeof updater==='function'?updater(cur):updater).slice(-40); return {...prev, chat:next}; });
   const [chatInput,setChatInput]= useState('');
   const [aiBusy,setAiBusy]= useState(false);
-  const [botOpen,setBotOpen]= useState(false);     // In-App-Assistent (Chatbot)
+  const [botOpen,setBotOpen]= useState(false);     // In-App-Assistent (Chatbot) — als Splitscreen rechts
   const [botInput,setBotInput]= useState('');
-  const [botMax,setBotMax]= useState(false);         // Assistent: Fenster vergrößert
+  const [botWidth,setBotWidth]= useState(()=>Math.round(Math.min(460, Math.max(340, (typeof window!=='undefined'?window.innerWidth:1200)*0.3))));  // Splitscreen-Breite, ziehbar
+  const botResizing=useRef(false);
   const [botRecOn,setBotRecOn]= useState(false);     // Assistent: Sprachaufnahme aktiv
   const botRecRef=useRef(null);
   const [botFile,setBotFile]= useState(null);        // an den Assistenten angehängte Datei
@@ -3191,6 +3192,25 @@ function App({session}) {
     r.onerror=()=>{ setBotRecOn(false); }; r.onend=()=>{ setBotRecOn(false); };
     botRecRef.current=r; try{ r.start(); setBotRecOn(true); }catch(_){ setToast('Aufnahme konnte nicht gestartet werden.'); }
   };
+  // Assistent-Splitscreen: Breite per Ziehgriff anpassen (min 320px, max 60% Fensterbreite)
+  const startBotResize = (e)=>{
+    e.preventDefault();
+    botResizing.current = true;
+    document.body.style.userSelect = 'none';
+    const onMove = (ev)=>{
+      if(!botResizing.current) return;
+      const w = window.innerWidth - ev.clientX;
+      setBotWidth(Math.min(Math.round(window.innerWidth*0.6), Math.max(320, w)));
+    };
+    const onUp = ()=>{
+      botResizing.current = false;
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
   // P0.3: Proaktiver Hinweis beim ersten Öffnen des Assistenten – offene Belege, Dubletten, überfällige Rechnungen
   useEffect(()=>{
     if(!botOpen || botMsgs.length!==1) return;
@@ -3513,6 +3533,8 @@ function App({session}) {
     {id:'belege', label:'Belege',       icon:P.clip},
     {id:'rechnung',label:'Rechnungen',  icon:P.receipt},
     {id:'kontoauszug',label:'Bank', icon:P.bank, onClick:()=>{setTab('import');setImportTab('bank');}, active:(tab==='import'&&importTab==='bank')},
+    {id:'kunden', label:'Kunden',       icon:P.prson},
+    {id:'aufgaben', label:'Aufgaben',   icon:P.check},
     {id:'mehr',   label:'Mehr',         icon:P.menu},
   ];
   // Einheitlicher Tab-/Toggle-Stil (wie Import „Beleg/Bankkontoauszug")
@@ -3686,7 +3708,7 @@ function App({session}) {
               return (
                 <button key={id} className="railBtn" onClick={onClick||(()=>setTab(id))} style={{
                   width:48,height:48,borderRadius:14,
-                  background:active?hexA(C.pri,0.16):'transparent',
+                  background:active?('linear-gradient(155deg, '+hexA(C.pri,0.26)+' 0%, transparent 65%)'):'transparent',
                 }}>
                   <Ic p={icon} sz={21} col={active?C.pri:C.sub}/>
                   <span className="railTip">{label}</span>
@@ -3694,6 +3716,13 @@ function App({session}) {
               );
             })}
           </div>
+          <button className="railBtn" onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} style={{
+            width:44,height:44,borderRadius:14,marginBottom:10,
+            background:calOpen?hexA(C.pri,0.16):'transparent',
+          }}>
+            <Ic p={P.cal} sz={20} col={calOpen?C.pri:C.sub}/>
+            <span className="railTip">{MONTHS[mo].slice(0,3)} {yr}</span>
+          </button>
           <button className="railBtn" onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
             width:40,height:40,borderRadius:'50%',flexShrink:0,
             background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,
@@ -3708,14 +3737,14 @@ function App({session}) {
       {!isMobile && tab==='quellen' && (
         <div className="glassPanel" style={{position:'fixed',left:railW,top:0,bottom:0,width:secW,zIndex:45,display:'flex',flexDirection:'column',background:hexA(C.surf,0.55),borderRight:'1px solid '+C.bdr,padding:'22px 14px'}}>
           <div style={{fontSize:20,fontWeight:800,letterSpacing:'-0.02em',marginBottom:16,padding:'0 6px',flexShrink:0}}>Konten</div>
-          <button onClick={()=>setOpenAcct(null)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:!openAcct?hexA(C.pri,0.14):'transparent',border:'none',borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:!openAcct?700:500,color:!openAcct?C.pri:C.txt,textAlign:'left',marginBottom:10,flexShrink:0}}>
+          <button onClick={()=>setOpenAcct(null)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:!openAcct?('linear-gradient(155deg, '+hexA(C.pri,0.20)+' 0%, transparent 65%)'):'transparent',border:'none',borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:!openAcct?700:500,color:!openAcct?C.pri:C.txt,textAlign:'left',marginBottom:10,flexShrink:0}}>
             <Ic p={P.grid} sz={16} col={!openAcct?C.pri:C.sub}/> Alle Konten
           </button>
           <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:2}}>
             {sideKonten.map(k=>{
               const c=acol(k.key); const active=openAcct===k.key;
               return (
-                <button key={k.key} onClick={()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:active?hexA(c,0.14):'transparent',border:'none',borderRadius:10,padding:'9px 8px',cursor:'pointer',fontFamily:'inherit'}}>
+                <button key={k.key} onClick={()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:active?('linear-gradient(155deg, '+hexA(c,0.20)+' 0%, transparent 65%)'):'transparent',border:'none',borderRadius:10,padding:'9px 8px',cursor:'pointer',fontFamily:'inherit'}}>
                   <span style={{width:10,height:10,borderRadius:'50%',background:c,flexShrink:0}}/>
                   <span style={{flex:1,fontSize:14,fontWeight:active?700:500,color:active?C.txt:C.sub,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'left'}}>{k.name}</span>
                   <span onClick={e=>{e.stopPropagation(); const top=e.currentTarget.getBoundingClientRect().top; setAcctMenuOpen(o=>(o&&o.key===k.key)?null:{key:k.key,top});}} style={{color:C.mut,fontSize:16,padding:'2px 6px',borderRadius:6,cursor:'pointer'}}>⋮</span>
@@ -3739,38 +3768,35 @@ function App({session}) {
         </div>
       </>); })()}
 
-      {/* ═══ TOP BAR (nur Monatsnavigation + Profil) ═══ */}
+      {/* ═══ TOP BAR — nur Mobile (Logo + Monatsnavigation + Profil); Desktop hat all das in der Rail ═══ */}
       <header style={{
         flexShrink:0,background:'transparent',
-        display:'flex',alignItems:'center',gap:12,padding:isMobile?'8px 14px':'14px 30px',minHeight:isMobile?60:72,
+        display:'flex',alignItems:'center',gap:12,padding:isMobile?'8px 14px':0,minHeight:isMobile?60:0,
         position:'sticky',top:0,zIndex:40,marginLeft:railW,
       }}>
-        {isMobile && (
+        {isMobile && (<>
           <button onClick={()=>{setTab('quellen');setOpenAcct(null);}} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
-        )}
 
-        <div style={{flex:1}} />
+          <div style={{flex:1}} />
 
-        {/* Monats-Navigation + Profil (nur Mobile, Desktop-Profil sitzt in der Rail) */}
-        <div style={{display:'flex',alignItems:'center',gap:isMobile?6:8,flexShrink:0}}>
-          <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>‹</button>
-          <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 12px',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600,display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
-            <Ic p={P.cal} sz={14} col={C.sub}/> {MONTHS[mo].slice(0,3)} {yr}
-          </button>
-          <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>›</button>
-          {isMobile && (
+          <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
+            <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>‹</button>
+            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 12px',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600,display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
+              <Ic p={P.cal} sz={14} col={C.sub}/> {MONTHS[mo].slice(0,3)} {yr}
+            </button>
+            <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>›</button>
             <button onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
               marginLeft:4,width:36,height:36,borderRadius:'50%',flexShrink:0,cursor:'pointer',
               background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,
               display:'flex',alignItems:'center',justifyContent:'center',
             }}>{((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase()}</button>
-          )}
-        </div>
+          </div>
+        </>)}
 
-        {/* Kalender-Popover */}
+        {/* Kalender-Popover — Desktop: verankert am Kalender-Icon in der Rail; Mobile: oben rechts */}
         {calOpen && (
           <div onClick={()=>setCalOpen(false)} style={{position:'fixed',inset:0,zIndex:90}}>
-            <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:54,right:isMobile?12:64,width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+            <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:70}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
                 <button onClick={()=>setCalYr(y=>y-1)} style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>‹</button>
                 <div style={{fontSize:15,fontWeight:700}}>{calYr}</div>
@@ -3823,7 +3849,7 @@ function App({session}) {
       {/* Mobile hat bereits eine eigene untere Tab-Leiste weiter unten im Code (mit Beleg-Kamera-FAB + Assistent) — hier keine zweite Bar. */}
 
       {/* ═══ CONTENT ═══ */}
-      <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg,marginLeft:railW+secW}}>
+      <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg,marginLeft:railW+secW,marginRight:(!isMobile&&botOpen)?botWidth:0}}>
         <div style={{padding:isMobile?'18px 14px 96px':'28px 28px',maxWidth:(tab==='rechnung'&&invEdit)?1320:1020,margin:'0 auto'}}>
 
           {/* ══ STARTSEITE (Home): Gesamtsumme + horizontaler Slider + inline E/A ══ */}
@@ -4253,7 +4279,11 @@ function App({session}) {
                 <div style={{fontSize:13,color:C.sub}}>Weitere Bereiche</div>
               </div>
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                {[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'Aufgaben',icon:P.check},{id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}].map(m=>(
+                {[
+                  // Auf dem Desktop haben Rechnungen/Bank/Kunden/Aufgaben schon ein eigenes Icon in der Rail — hier nur auf Mobile zusätzlich zeigen (dort gibt's keine Rail).
+                  ...(isMobile?[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'Aufgaben',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
+                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},
+                ].map(m=>(
                   <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
                   </button>
@@ -6830,13 +6860,15 @@ function App({session}) {
         </div>
       )}
 
-      {/* ── Schwebender In-App-Assistent (Chatbot) ── */}
+      {/* ── In-App-Assistent (Chatbot) — Desktop: ziehbarer Splitscreen rechts; Mobile: schwebende Karte ── */}
       {botOpen && (
-        <div style={{position:'fixed',right:isMobile?12:24,bottom:isMobile?86:24,width:isMobile?'calc(100vw - 24px)':(botMax?'min(900px, 94vw)':440),maxWidth:'calc(100vw - 24px)',height:isMobile?'62vh':(botMax?'92vh':'min(720px, 82vh)'),maxHeight:isMobile?'72vh':'94vh',zIndex:120,background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,boxShadow:'0 24px 60px rgba(0,0,0,0.55)',display:'flex',flexDirection:'column',overflow:'hidden',transition:'width .2s ease, height .2s ease'}}>
+        <div style={{position:'fixed',right:0,top:isMobile?'auto':0,bottom:isMobile?86:0,left:isMobile?12:'auto',width:isMobile?'calc(100vw - 24px)':botWidth,maxWidth:'calc(100vw - 24px)',height:isMobile?'62vh':'100vh',maxHeight:isMobile?'72vh':'100vh',zIndex:120,background:C.surf,borderLeft:isMobile?'1px solid '+C.bdr:'1px solid '+C.bdr,border:isMobile?'1px solid '+C.bdr:'none',borderRadius:isMobile?20:0,boxShadow:'0 24px 60px rgba(0,0,0,0.55)',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+          {!isMobile && (
+            <div onMouseDown={startBotResize} title="Breite anpassen" style={{position:'absolute',left:-4,top:0,bottom:0,width:8,cursor:'col-resize',zIndex:2}}/>
+          )}
           <div style={{display:'flex',alignItems:'center',gap:9,padding:'14px 16px',borderBottom:'1px solid '+C.sep,flexShrink:0}}>
             <span style={{width:30,height:30,borderRadius:9,background:hexA(C.pri,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={16} col={C.pri}/></span>
             <div style={{flex:1}}><div style={{fontSize:14,fontWeight:700,color:C.txt}}>Assistent</div><div style={{fontSize:11,color:C.mut}}>navigiert & rechnet lokal · liest Dateien per KI</div></div>
-            {!isMobile && <button onClick={()=>setBotMax(m=>!m)} title={botMax?'Verkleinern':'Vergrößern'} style={{background:C.surf2,border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={botMax?P.minimize:P.maximize} sz={15} col={C.sub}/></button>}
             <button onClick={()=>setBotOpen(false)} style={{background:C.surf2,border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontSize:18,lineHeight:1,fontFamily:'inherit'}}>×</button>
           </div>
           <div style={{flex:1,overflowY:'auto',padding:'14px 16px',display:'flex',flexDirection:'column',gap:10}}>
