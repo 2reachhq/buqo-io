@@ -1318,8 +1318,8 @@ function App({session}) {
   const [belKindF,setBelKindF]= useState('alle');          // Belege-Art: alle|einmalig|wied
   const [belStatusF,setBelStatusF]= useState('alle');      // Belege-Status: alle|offen|erledigt
   const [belAcct,setBelAcct]= useState('alle');            // Belege-Konten-Filter ('alle' | Konto-Key)
-  const [todoForm,setTodoForm]= useState(null);      // Aufgabe im Editor {id?,title,note,ref}
-  const [todoFilter,setTodoFilter]= useState('offen'); // Aufgaben-Filter: offen|erledigt|alle
+  const [todoDetail,setTodoDetail]= useState(null);  // Aufgabe im Detail/Editor (Kanban-Karte geöffnet)
+  const [todoAiBusy,setTodoAiBusy]= useState(false); // KI-Frage zu einer Aufgabe läuft
   const [instForm,setInstForm]= useState(null);       // Rate/Kredit im Editor
   const [instOpen,setInstOpen]= useState(null);       // Rate/Kredit-Detailansicht (id)
   const [invRecurDlg,setInvRecurDlg]= useState(false); // „Wiederkehrend"-Dialog (Start/Ende/Intervall) im Rechnungs-Editor
@@ -2562,6 +2562,27 @@ function App({session}) {
       if(tracked && !seen.has(t.autoKey)){ changed=true; return {...t, done:true, doneAt:new Date().toISOString(), autoResolved:true}; } return t; });
     return changed ? {...prev, todos:list} : prev;
   }); };
+  // Kanban-Spalte einer Aufgabe: 'erledigt' folgt weiterhin aus done (Auto-Todos verlassen sich darauf), sonst status (Standard: offen)
+  const todoColumn = (t) => t.done ? 'erledigt' : (t.status||'offen');
+  const TODO_COLS = [['offen','Offen'],['in_arbeit','In Arbeit'],['erledigt','Erledigt']];
+  const moveTodoTo = (id, col) => { const t=todos.find(x=>x.id===id); if(!t) return;
+    if(col==='erledigt'){ if(!t.done) updateTodo(id,{done:true, doneAt:new Date().toISOString()}); }
+    else if(todoColumn(t)!==col){ updateTodo(id, {done:false, doneAt:null, status:col}); }
+  };
+  const addTodoComment = (id, text, author) => { const tt=String(text||'').trim(); if(!tt) return; setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>t.id===id?{...t, comments:[...(t.comments||[]), {id:uid(), author:author||'user', text:tt, createdAt:new Date().toISOString()}]}:t)})); };
+  // KI-Frage zu einer konkreten Aufgabe – Antwort landet als Kommentar (gleiches aiInvoke wie askInvoiceTax)
+  const askTodoAI = async (todo, question) => { const qq=String(question||'').trim(); if(!qq){ setToast('Bitte eine Frage eingeben.'); return; }
+    addTodoComment(todo.id, qq, 'user'); setTodoAiBusy(true);
+    try{
+      const sys="Du bist ein hilfreicher Buchhaltungs-Assistent für eine deutsche Selbstständigen-/Kleinunternehmer-App. Beantworte Fragen zu einer konkreten Aufgabe kurz und konkret in Klartext (KEIN Markdown, keine Aufzählungszeichen). Geht es um Steuern, weise kurz darauf hin, dass eine verbindliche Einschätzung nur der Steuerberater geben kann.";
+      const usr="Aufgabe: \""+(todo.title||'')+"\". Notiz: \""+(todo.note||'')+"\". Bisherige Kommentare: "+((todo.comments||[]).map(c=>(c.author==='ai'?'KI':'Nutzer')+': '+c.text).join(' | ')||'—')+". Frage: \""+qq+"\"";
+      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:600, system:sys, messages:[{ role:'user', content:[{ type:'text', text:usr }] }] } });
+      if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
+      const t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'(keine Antwort)';
+      addTodoComment(todo.id, t, 'ai');
+    }catch(e){ addTodoComment(todo.id, 'Konnte nicht antworten: '+(e.message||e), 'ai'); }
+    setTodoAiBusy(false);
+  };
 
   /* ── Ratenzahlungen & Kredite (Sonstiges): Übersicht laufender Raten mit Buchungs-Verknüpfung ── */
   const installments = data.installments || [];
@@ -5317,68 +5338,94 @@ function App({session}) {
           })()}
           {/* ══ AUFGABEN (manuell + automatisch aus überfälligen Rechnungen/offenen Belegen/Dubletten) ══ */}
           {tab==='aufgaben' && (()=>{
-            const allT = todos;
-            const openT = allT.filter(t=>!t.done);
-            const doneT = allT.filter(t=>t.done);
-            const shown = todoFilter==='offen'?openT:todoFilter==='erledigt'?doneT:allT;
             const bookings = allBookingsFlat();
-            const startNew = ()=> setTodoForm({title:'',note:'',ref:null});
-            const saveTodoForm = ()=>{
-              const title=(todoForm.title||'').trim();
-              if(!title){ setToast('Bitte einen Titel eingeben.'); return; }
-              if(todoForm.id) updateTodo(todoForm.id, {title, note:todoForm.note||'', ref:todoForm.ref||null});
-              else addTodo({title, note:todoForm.note||'', ref:todoForm.ref||null, source:'user'});
-              setTodoForm(null);
-            };
+            const openDetail = (t) => setTodoDetail({...t, comments:t.comments||[], flaggedByAdvisor:!!t.flaggedByAdvisor, advisorNote:t.advisorNote||''});
+            const openNew = (col) => setTodoDetail({isNew:true, title:'', note:'', ref:null, status:col, comments:[], flaggedByAdvisor:false, advisorNote:''});
             return (
               <>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
                   <div>
                     <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Aufgaben</div>
-                    <div style={{fontSize:13,color:C.sub,marginTop:4}}>Eigene Aufgaben und automatische Hinweise der KI an einem Ort – nur sichtbar, wenn wirklich etwas ansteht.</div>
+                    <div style={{fontSize:13,color:C.sub,marginTop:4}}>Eigene Aufgaben und automatische Hinweise der KI an einem Ort – zwischen den Spalten per Drag &amp; Drop verschiebbar.</div>
                   </div>
-                  <button onClick={startNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Aufgabe erstellen</button>
                 </div>
-                {todoForm && (
-                  <div style={{...SC,marginBottom:16}}>
-                    <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:12}}>{todoForm.id?'Aufgabe bearbeiten':'Neue Aufgabe'}</div>
-                    <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                      <input autoFocus value={todoForm.title} onChange={e=>setTodoForm({...todoForm,title:e.target.value})} placeholder="Titel…" style={{...SS,padding:'11px 13px',fontSize:14}}/>
-                      <textarea value={todoForm.note} onChange={e=>setTodoForm({...todoForm,note:e.target.value})} placeholder="Notiz (optional)…" rows={3} style={{...SS,padding:'11px 13px',fontSize:13.5,resize:'vertical'}}/>
-                      <BookingSelect bookings={bookings} value={todoForm.ref&&todoForm.ref.type==='booking'?todoForm.ref:null} onPick={b=>setTodoForm(f=>({...f, ref: b?{type:'booking',id:b.id,year:b.year}:null}))}/>
-                    </div>
-                    <div style={{display:'flex',gap:10,marginTop:14}}>
-                      <button onClick={saveTodoForm} style={{flex:1,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Speichern</button>
-                      <button onClick={()=>setTodoForm(null)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:11,padding:'11px 18px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
-                    </div>
-                  </div>
-                )}
-                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
-                  {[['offen','Offen',openT.length],['erledigt','Erledigt',doneT.length],['alle','Alle',allT.length]].map(([k,label,n])=>{ const on=todoFilter===k; return (
-                    <button key={k} onClick={()=>setTodoFilter(k)} style={{background:on?hexA(C.pri,0.16):C.surf2,border:'1px solid '+(on?hexA(C.pri,0.4):C.bdr),color:on?C.pri:C.mut,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}{n?' · '+n:''}</button>
-                  ); })}
-                </div>
-                {shown.length? (
-                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                    {shown.map(t=>(
-                      <div key={t.id} style={{display:'flex',alignItems:'flex-start',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',opacity:t.done?0.6:1}}>
-                        <button onClick={()=>toggleTodoDone(t.id)} title={t.done?'Als offen markieren':'Erledigt'} style={{width:22,height:22,flexShrink:0,marginTop:1,borderRadius:7,border:'1.5px solid '+(t.done?C.grn:C.bdrM),background:t.done?C.grn:'none',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>{t.done && <Ic p={P.check} sz={13} col="#0A0A0A"/>}</button>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:14.5,fontWeight:700,color:C.txt,textDecoration:t.done?'line-through':'none',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                            {t.title}
-                            {t.source==='ai' && <span style={{fontSize:10,fontWeight:800,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 7px'}}>KI</span>}
-                          </div>
-                          {t.note && <div style={{fontSize:12.5,color:C.sub,marginTop:3}}>{t.note}</div>}
-                          {t.ref && <button onClick={()=>openTodoRef(t)} style={{marginTop:7,display:'inline-flex',alignItems:'center',gap:5,background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'5px 10px',fontSize:11.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.clip} sz={12} col={C.sub}/> Verknüpfte Buchung ansehen</button>}
+                <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'repeat(3,1fr)',gap:14,alignItems:'flex-start'}}>
+                  {TODO_COLS.map(([colKey,colLabel])=>{
+                    const items = todos.filter(t=>todoColumn(t)===colKey);
+                    return (
+                      <div key={colKey} onDragOver={e=>e.preventDefault()} onDrop={e=>{ e.preventDefault(); const id=e.dataTransfer.getData('text/plain'); if(id) moveTodoTo(id, colKey); }} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:16,padding:12,minHeight:120}}>
+                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,padding:'2px 4px'}}>
+                          <div style={{fontSize:13.5,fontWeight:700,color:C.txt}}>{colLabel} <span style={{color:C.mut,fontWeight:500}}>· {items.length}</span></div>
+                          <button onClick={()=>openNew(colKey)} title="Aufgabe hinzufügen" style={{background:C.surf3,border:'none',color:C.sub,width:26,height:26,borderRadius:8,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.plus} sz={14} col={C.sub}/></button>
                         </div>
-                        <div style={{display:'flex',gap:6,flexShrink:0}}>
-                          {t.source==='user' && <button onClick={()=>setTodoForm({id:t.id,title:t.title,note:t.note||'',ref:t.ref||null})} title="Bearbeiten" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.note} sz={13} col={C.mut}/></button>}
-                          <button onClick={()=>askConfirm('Aufgabe „'+(t.title||'')+'" löschen?',()=>removeTodo(t.id))} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.red,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={13} col={C.red}/></button>
+                        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                          {items.map(t=>(
+                            <div key={t.id} draggable onDragStart={e=>e.dataTransfer.setData('text/plain', t.id)} onClick={()=>openDetail(t)} style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:'11px 12px',cursor:'grab'}}>
+                              <div style={{fontSize:13.5,fontWeight:700,color:C.txt,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                                {t.title}
+                                {t.source==='ai' && <span style={{fontSize:9.5,fontWeight:800,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 6px'}}>KI</span>}
+                                {t.flaggedByAdvisor && <span style={{fontSize:9.5,fontWeight:800,color:C.grn,background:hexA(C.grn,0.14),borderRadius:6,padding:'2px 6px'}}>Steuerberater</span>}
+                              </div>
+                              {t.note && <div style={{fontSize:12,color:C.sub,marginTop:4,overflow:'hidden',textOverflow:'ellipsis',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{t.note}</div>}
+                              <div style={{display:'flex',alignItems:'center',gap:8,marginTop:8}}>
+                                {t.ref && <span title="Buchung verknüpft" style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:22,height:22,borderRadius:7,background:C.surf3}}><Ic p={P.clip} sz={11} col={C.sub}/></span>}
+                                {(t.comments||[]).length>0 && <span style={{fontSize:11,color:C.mut}}>{(t.comments||[]).length} Kommentar{(t.comments||[]).length>1?'e':''}</span>}
+                              </div>
+                            </div>
+                          ))}
+                          {!items.length && <div style={{fontSize:12,color:C.mut,padding:'10px 4px',textAlign:'center'}}>Leer</div>}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                ) : <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>{todoFilter==='offen'?'Keine offenen Aufgaben – alles erledigt. ✔':todoFilter==='erledigt'?'Noch keine erledigten Aufgaben.':'Noch keine Aufgaben. Lege oben deine erste Aufgabe an.'}</div>}
+                    );
+                  })}
+                </div>
+
+                {todoDetail && (()=>{ const live = !todoDetail.isNew ? todos.find(x=>x.id===todoDetail.id) : null; const d = live ? {...todoDetail, comments:live.comments||[]} : todoDetail;
+                  const save = ()=>{ const title=(d.title||'').trim(); if(!title){ setToast('Bitte einen Titel eingeben.'); return; }
+                    if(d.isNew) addTodo({title, note:d.note||'', ref:d.ref||null, status:d.status||'offen', source:'user', flaggedByAdvisor:!!d.flaggedByAdvisor, advisorNote:d.advisorNote||''});
+                    else updateTodo(d.id, {title, note:d.note||'', ref:d.ref||null, flaggedByAdvisor:!!d.flaggedByAdvisor, advisorNote:d.advisorNote||''});
+                    setTodoDetail(null);
+                  };
+                  return (
+                    <Sheet title={d.isNew?'Neue Aufgabe':'Aufgabe'} onClose={()=>setTodoDetail(null)} maxWidth={480}>
+                      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                        <input autoFocus value={d.title} onChange={e=>setTodoDetail({...d,title:e.target.value})} placeholder="Titel…" style={{...SS,padding:'11px 13px',fontSize:14,textAlign:'left'}}/>
+                        <textarea value={d.note} onChange={e=>setTodoDetail({...d,note:e.target.value})} placeholder="Notiz (optional)…" rows={3} style={{...SS,padding:'11px 13px',fontSize:13.5,resize:'vertical',textAlign:'left'}}/>
+                        <BookingSelect bookings={bookings} value={d.ref&&d.ref.type==='booking'?d.ref:null} onPick={b=>setTodoDetail({...d, ref: b?{type:'booking',id:b.id,year:b.year}:null})}/>
+                        {d.ref && !d.isNew && <button onClick={()=>openTodoRef(d)} style={{alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:5,background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'6px 10px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.clip} sz={12} col={C.sub}/> Verknüpfte Buchung ansehen</button>}
+                        <label style={{display:'flex',alignItems:'center',gap:9,fontSize:13,color:C.txt,cursor:'pointer',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,padding:'10px 12px'}}>
+                          <input type="checkbox" checked={!!d.flaggedByAdvisor} onChange={e=>setTodoDetail({...d,flaggedByAdvisor:e.target.checked})}/>
+                          Vom Steuerberater markiert / nachgefragt
+                        </label>
+                        {d.flaggedByAdvisor && <textarea value={d.advisorNote} onChange={e=>setTodoDetail({...d,advisorNote:e.target.value})} placeholder="Was genau hat der Steuerberater angemerkt?…" rows={2} style={{...SS,padding:'11px 13px',fontSize:13,resize:'vertical',textAlign:'left'}}/>}
+                      </div>
+                      <div style={{display:'flex',gap:10,marginTop:14}}>
+                        <button onClick={save} style={{flex:1,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Speichern</button>
+                        {!d.isNew && <button onClick={()=>askConfirm('Aufgabe „'+(d.title||'')+'" löschen?',()=>{removeTodo(d.id);setTodoDetail(null);})} style={{background:C.redL,border:'none',color:C.red,borderRadius:11,padding:'11px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',gap:7}}><Ic p={P.trash} sz={14} col={C.red}/> Löschen</button>}
+                      </div>
+
+                      {!d.isNew && (
+                        <div style={{marginTop:18,paddingTop:14,borderTop:'1px solid '+C.sep}}>
+                          <div style={{fontSize:12.5,fontWeight:700,color:C.sub,marginBottom:10,letterSpacing:'0.02em'}}>KOMMENTARE &amp; KI-FRAGEN</div>
+                          <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:10,maxHeight:220,overflowY:'auto'}}>
+                            {(d.comments||[]).length===0 && <div style={{fontSize:12.5,color:C.mut}}>Noch keine Kommentare.</div>}
+                            {(d.comments||[]).map(c=>(
+                              <div key={c.id} style={{background:c.author==='ai'?hexA(C.pri,0.10):C.surf2,border:'1px solid '+(c.author==='ai'?hexA(C.pri,0.25):C.bdr),borderRadius:10,padding:'9px 11px'}}>
+                                <div style={{fontSize:10.5,fontWeight:700,color:c.author==='ai'?C.pri:C.mut,marginBottom:3}}>{c.author==='ai'?'KI':'Du'}</div>
+                                <div style={{fontSize:13,color:C.txt,whiteSpace:'pre-wrap',lineHeight:1.45}}>{c.text}</div>
+                              </div>
+                            ))}
+                            {todoAiBusy && <div style={{fontSize:12.5,color:C.mut,display:'flex',alignItems:'center',gap:6}}><Ic p={P.spark} sz={13} col={C.pri}/> Ich denk grad nach…</div>}
+                          </div>
+                          <div style={{display:'flex',gap:8}}>
+                            <input id="todoCommentInput" placeholder="Kommentar schreiben oder KI etwas fragen…" onKeyDown={e=>{ if(e.key==='Enter'){ const el=e.target; if(el.value.trim()) addTodoComment(d.id, el.value, 'user'); el.value=''; } }} style={{...SS,flex:1,textAlign:'left'}}/>
+                            <button disabled={todoAiBusy} onClick={()=>{ const el=document.getElementById('todoCommentInput'); const v=el?el.value.trim():''; if(!v){ setToast('Bitte erst etwas eingeben.'); return; } if(el) el.value=''; askTodoAI(d, v); }} title="KI fragen" style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:10,padding:'0 14px',cursor:todoAiBusy?'default':'pointer',opacity:todoAiBusy?0.6:1,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={16} col="#fff"/></button>
+                          </div>
+                        </div>
+                      )}
+                    </Sheet>
+                  );
+                })()}
               </>
             );
           })()}
