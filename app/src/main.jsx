@@ -1321,6 +1321,7 @@ function App({session}) {
   const [todoDetail,setTodoDetail]= useState(null);  // Aufgabe im Detail/Editor (Kanban-Karte geöffnet)
   const [todoAiBusy,setTodoAiBusy]= useState(false); // KI-Frage zu einer Aufgabe läuft
   const [instForm,setInstForm]= useState(null);       // Rate/Kredit im Editor
+  const [instTaxBusy,setInstTaxBusy]= useState(null); // id des Kredits, für den gerade ein KI-Steuerhinweis geholt wird
   const [instOpen,setInstOpen]= useState(null);       // Rate/Kredit-Detailansicht (id)
   const [invRecurDlg,setInvRecurDlg]= useState(false); // „Wiederkehrend"-Dialog (Start/Ende/Intervall) im Rechnungs-Editor
   const [recInvEdit,setRecInvEdit]= useState(null);  // Editor wiederkehrende Rechnung
@@ -2060,7 +2061,7 @@ function App({session}) {
       const pr=md.privat; if(pr){ (pr.einnahmen||[]).forEach(it=>out.push({it,acct:names.privatLabel||'Privat',y:+y,m:+m,kind:'ein'})); (pr.items||[]).forEach(it=>out.push({it,acct:names.privatLabel||'Privat',y:+y,m:+m,kind:'aus'})); }
     }); }); return out; };
   // Flache, suchbare Liste aller Buchungen (für Verknüpfung bei Aufgaben/Raten) – neueste zuerst
-  const allBookingsFlat = ()=>{ const out=existingBookings().map(b=>({id:b.it.id, year:b.y, month:b.m, name:b.it.name||'', amount:num(b.it.amount), date:b.it.datum||'', kind:b.kind, acctLabel:b.acct})); out.sort((a,b)=>(b.year-a.year)||(b.month-a.month)); return out; };
+  const allBookingsFlat = ()=>{ const out=existingBookings().map(b=>({id:b.it.id, year:b.y, month:b.m, name:b.it.name||'', amount:num(b.it.amount), date:b.it.datum||'', kind:b.kind, acctLabel:b.acct, recurring:!!b.it.recurring, item:b.it})); out.sort((a,b)=>(b.year-a.year)||(b.month-a.month)); return out; };
   const normName = s => String(s||'').toLowerCase().replace(/[^a-z0-9äöü]/g,'');
   const toISO = s => { if(!s) return ''; s=String(s); if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10); const m=s.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})/); if(m){ let y=m[3]; if(y.length===2)y='20'+y; return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0'); } return ''; };
   const addDays = (iso,n)=>{ try{ const d=new Date(iso); if(isNaN(d.getTime())) return ''; d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }catch(e){ return ''; } };
@@ -2591,13 +2592,25 @@ function App({session}) {
   const removeInstallment = (id) => setData(prev=>({...prev, installments:(prev.installments||[]).filter(x=>x.id!==id)}));
   const toggleInstallmentLink = (instId, booking) => setData(prev=>({...prev, installments:(prev.installments||[]).map(x=>{ if(x.id!==instId) return x; const has=(x.linkedIds||[]).some(l=>l.id===booking.id&&l.year===booking.year); const linkedIds = has ? (x.linkedIds||[]).filter(l=>!(l.id===booking.id&&l.year===booking.year)) : [...(x.linkedIds||[]), {id:booking.id, year:booking.year}]; return {...x, linkedIds}; })}));
   const installmentPaid = (inst) => { let sum=0; (inst.linkedIds||[]).forEach(l=>{ try{ const loc=findItemLocation(l.id,l.year); const it=loc?fullBelegItem(loc):null; if(it) sum+=num(it.amount); }catch(e){} }); return sum; };
+  // Kurzer KI-Hinweis zur steuerlichen Absetzbarkeit einer Rate/eines Kredits (gleiches aiInvoke wie askInvoiceTax)
+  const askInstallmentTax = async (inst) => { setInstTaxBusy(inst.id);
+    try{
+      const sys="Du bist ein Buchhaltungs-Assistent für deutsche Selbstständige/Kleinunternehmer. Gib zu einer laufenden Rate/einem Kredit einen KURZEN, sachlichen Hinweis (2-3 Sätze, KEIN Markdown), ob und wie das ggf. steuerlich absetzbar sein könnte. Du bist KEIN zugelassener Steuerberater und ersetzt keine steuerliche Beratung – weise kurz darauf hin, im Zweifel den Steuerberater zu fragen.";
+      const usr="Rate/Kredit: \""+(inst.name||'')+"\", Konto: "+acctNameOf(normAcct(inst.account))+", monatliche Rate: "+fmt(num(inst.monthlyAmount))+(inst.note?(", Notiz: "+inst.note):'');
+      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:400, system:sys, messages:[{ role:'user', content:[{ type:'text', text:usr }] }] } });
+      if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
+      const t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'(keine Antwort)';
+      updateInstallment(inst.id, {taxHint:t});
+    }catch(e){ setToast('Konnte keinen Hinweis abrufen: '+(e.message||e)); }
+    setInstTaxBusy(null);
+  };
   // Steuerberater-KI: Frage zur aktuellen Rechnung beantworten
   const askInvoiceTax = async (inv, q)=>{ const qq=String(q||'').trim(); if(!qq){ setToast('Bitte eine Frage eingeben.'); return; } setInvTaxAsk({q:qq, answer:'', busy:true}); try{ const tot=invTotals(inv.items); const cust=invCustomer(inv); const sys="Du bist ein deutscher Steuerberater-Assistent (Standort NRW). Beantworte Fragen zur Rechnungsstellung/Abrechnung kurz, konkret, in Klartext (KEIN Markdown, keine Aufzählungszeichen). Schließe mit einem kurzen Satz, dass der Steuerberater final entscheidet."; const usr="Kontext einer Ausgangsrechnung: Kunde "+((cust&&cust.name)||inv.custName||'—')+", Bereich "+((inv.domain||'unter')==='immo'?'Immobilien/Vermietung':'Firma')+", Positionen: "+((inv.items||[]).map(i=>i.desc+' '+fmt(num(i.price)*num(i.qty||1))+' ('+(i.mwst!=null?i.mwst:19)+'% MwSt)').join('; ')||'—')+", Gesamt brutto "+fmt(tot.gross)+". Frage des Nutzers: „"+qq+"\""; const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:800, system:sys, messages:[{ role:'user', content:[{ type:'text', text:usr }] }] } }); if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler'); const t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'(keine Antwort)'; setInvTaxAsk({q:qq, answer:t, busy:false}); }catch(e){ setInvTaxAsk({q:qq, answer:'Konnte nicht beantworten: '+(e.message||e), busy:false}); } };
   // Aus einem wiederkehrenden Posten eine Rechnung vorbereiten (öffnet den Editor)
   const makeRecurInvoice = (item, dom)=>{ const domain=dom||'unter'; const inv=newInvoice(domain); inv.fromRecurId=item.id; if(item.invCustomerId){ const c=customers.find(x=>x.id===item.invCustomerId); if(c){ inv.customerId=c.id; inv.custName=c.name||''; inv.custAddress=c.address||''; inv.custEmail=c.email||''; inv.saveCust=false; } } inv.items=[{desc:item.name||'Leistung', qty:1, price:num(item.amount), mwst:defMwstFor(domain)}]; setInvDomain(domain); setTab('rechnung'); setInvEdit(inv); setToast('Rechnung aus „'+(item.name||'Posten')+'" vorbereitet'); };
   const recurInvoicesFor = (id)=> (data.invoices||[]).filter(iv=>iv.fromRecurId===id);
   // Verlauf einer wiederkehrenden Buchung: alle Monate mit gleichem Namen (recurring) – {y,m,status,amount}
-  const recurInfoFn = (item)=>{ const nm=normName(item.name); if(!nm) return []; const occ=[]; Object.keys(data||{}).forEach(yk=>{ if(isNaN(+yk))return; const Y=data[yk]; if(!Y||typeof Y!=='object')return; Object.keys(Y).forEach(mk=>{ if(isNaN(+mk))return; const M=Y[mk]; if(!M)return; const scan=(arr)=>{ (arr||[]).forEach(it=>{ if(it.recurring && normName(it.name)===nm){ occ.push({y:+yk,m:+mk,status:it.status||'offen',amount:num(it.amount), payDate:(it.bankDate||it.datum||''), fileData:it.fileData||null, filePath:it.filePath||null, fileName:it.fileName||'', invId:it.invId||'', customerId:it.customerId||'', custName:it.custName||''}); } }); }; if(M.unternehmen){ scan(M.unternehmen.items); scan(M.unternehmen.clients); } if(M.privat){ scan(M.privat.items); scan(M.privat.einnahmen); } if(M.props)Object.keys(M.props).forEach(p=>{ const s=M.props[p]||{}; scan(s.einnahmen); scan(s.expenses); }); }); }); occ.sort((a,b)=> a.y-b.y || a.m-b.m); return occ; };
+  const recurInfoFn = (item)=>{ const nm=normName(item.name); if(!nm) return []; const occ=[]; Object.keys(data||{}).forEach(yk=>{ if(isNaN(+yk))return; const Y=data[yk]; if(!Y||typeof Y!=='object')return; Object.keys(Y).forEach(mk=>{ if(isNaN(+mk))return; const M=Y[mk]; if(!M)return; const scan=(arr)=>{ (arr||[]).forEach(it=>{ if(it.recurring && normName(it.name)===nm){ occ.push({id:it.id, y:+yk,m:+mk,status:it.status||'offen',amount:num(it.amount), payDate:(it.bankDate||it.datum||''), fileData:it.fileData||null, filePath:it.filePath||null, fileName:it.fileName||'', invId:it.invId||'', customerId:it.customerId||'', custName:it.custName||''}); } }); }; if(M.unternehmen){ scan(M.unternehmen.items); scan(M.unternehmen.clients); } if(M.privat){ scan(M.privat.items); scan(M.privat.einnahmen); } if(M.props)Object.keys(M.props).forEach(p=>{ const s=M.props[p]||{}; scan(s.einnahmen); scan(s.expenses); }); }); }); occ.sort((a,b)=> a.y-b.y || a.m-b.m); return occ; };
   // ── Wiederkehrende Rechnungen (Vorlagen → monatliche Auto-Erstellung) ──
   const recInvoices = data.recurInvoices || [];
   const setRecInvoices = updater => setData(prev=>{ const cur=prev.recurInvoices||[]; const next=typeof updater==='function'?updater(cur):updater; return {...prev, recurInvoices:next}; });
@@ -5433,15 +5446,22 @@ function App({session}) {
           {tab==='raten' && (()=>{
             const list = installments;
             const bookings = allBookingsFlat();
-            const startNew = ()=> setInstForm({name:'',account:bizAccts[0]||'unter',totalAmount:'',monthlyAmount:'',startDate:'',endDate:'',note:''});
+            const startNew = ()=> setInstForm({name:'',account:bizAccts[0]||'unter',totalAmount:'',monthlyAmount:'',startDate:'',endDate:'',note:'',mode:'manual'});
             const saveInstForm = ()=>{
               const name=(instForm.name||'').trim();
               if(!name){ setToast('Bitte eine Bezeichnung eingeben.'); return; }
               const patch = { name, account:instForm.account||'unter', totalAmount:num(instForm.totalAmount)||0, monthlyAmount:num(instForm.monthlyAmount)||0, startDate:instForm.startDate||'', endDate:instForm.endDate||'', note:instForm.note||'' };
+              if(instForm.linkedIds) patch.linkedIds = instForm.linkedIds;
               if(instForm.id) updateInstallment(instForm.id, patch);
               else addInstallment(patch);
               setInstForm(null);
             };
+            const pickRecurring = (c) => { const occ = recurInfoFn(c.item);
+              if(!occ.length){ setToast('Keine historischen Buchungen gefunden.'); return; }
+              const first=occ[0], last=occ[occ.length-1];
+              setInstForm(f=>({...f, name:c.name, monthlyAmount:String(last.amount||''), startDate:first.y+'-'+String(first.m+1).padStart(2,'0')+'-01', linkedIds:occ.map(o=>({id:o.id,year:o.y})), recurPicked:c.name }));
+            };
+            const recurringChoices = () => { const seen={}; bookings.filter(b=>b.recurring).forEach(b=>{ const key=normName(b.name); const ex=seen[key]; if(!ex || b.year>ex.year || (b.year===ex.year&&b.month>ex.month)) seen[key]=b; }); return Object.values(seen).sort((a,b)=>a.name.localeCompare(b.name)); };
             const smallBtn={background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0};
             return (
               <>
@@ -5456,6 +5476,28 @@ function App({session}) {
                   <div style={{...SC,marginBottom:16}}>
                     <div style={{fontSize:13,fontWeight:700,color:C.txt,marginBottom:12}}>{instForm.id?'Bearbeiten':'Neue Rate / Kredit'}</div>
                     <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                      {!instForm.id && (
+                        <div style={{display:'flex',gap:8}}>
+                          <button onClick={()=>setInstForm({...instForm, mode:'manual', linkedIds:undefined, recurPicked:null})} style={{flex:1,background:(instForm.mode||'manual')==='manual'?C.act:C.surf2,color:(instForm.mode||'manual')==='manual'?C.actTxt:C.sub,border:'none',borderRadius:9,padding:'9px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Manuell anlegen</button>
+                          <button onClick={()=>setInstForm({...instForm, mode:'recurring'})} style={{flex:1,background:instForm.mode==='recurring'?C.act:C.surf2,color:instForm.mode==='recurring'?C.actTxt:C.sub,border:'none',borderRadius:9,padding:'9px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Wiederkehrende Buchung verknüpfen</button>
+                        </div>
+                      )}
+                      {instForm.mode==='recurring' && !instForm.recurPicked && (()=>{ const choices=recurringChoices(); return (
+                        <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:220,overflowY:'auto',border:'1px solid '+C.bdr,borderRadius:10,padding:8}}>
+                          {choices.length? choices.map(c=>(
+                            <button key={c.id+':'+c.year} onClick={()=>pickRecurring(c)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:9,padding:'9px 11px',fontSize:13,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                              <span>{c.name}</span>
+                              <span style={{fontSize:11.5,color:C.mut,...NUM}}>{fmt(c.amount)}</span>
+                            </button>
+                          )) : <div style={{fontSize:12.5,color:C.mut,padding:'8px 4px'}}>Keine wiederkehrenden Buchungen gefunden. Markiere eine Buchung in Belege/Kontoauszug als „wiederkehrend", dann taucht sie hier auf.</div>}
+                        </div>
+                      ); })()}
+                      {instForm.mode==='recurring' && instForm.recurPicked && (
+                        <div style={{background:hexA(C.grn,0.10),border:'1px solid '+hexA(C.grn,0.3),borderRadius:10,padding:'9px 11px',fontSize:12.5,color:C.txt,display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+                          <span>„{instForm.recurPicked}" verknüpft – {(instForm.linkedIds||[]).length} historische Buchung{(instForm.linkedIds||[]).length===1?'':'en'} automatisch übernommen.</span>
+                          <button onClick={()=>setInstForm({...instForm, recurPicked:null, linkedIds:undefined})} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:12,fontWeight:600,fontFamily:'inherit',flexShrink:0}}>Ändern</button>
+                        </div>
+                      )}
                       <input autoFocus value={instForm.name} onChange={e=>setInstForm({...instForm,name:e.target.value})} placeholder="Bezeichnung (z. B. Firmenwagen-Finanzierung)…" style={{...SS,padding:'11px 13px',fontSize:14}}/>
                       {showAcctSel && (
                         <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -5514,6 +5556,15 @@ function App({session}) {
                             <span>{pct}%</span>
                             <span>Offen <b style={{color:total>0?C.exp:C.txt,...NUM}}>{fmt(open)}</b></span>
                           </div>
+                          {inst.taxHint ? (
+                            <div style={{background:hexA(C.pri,0.08),border:'1px solid '+hexA(C.pri,0.25),borderRadius:10,padding:'9px 11px',fontSize:12.5,color:C.txt,marginBottom:14,lineHeight:1.5,display:'flex',gap:8,alignItems:'flex-start'}}>
+                              <Ic p={P.spark} sz={14} col={C.pri}/> <span style={{flex:1}}>{inst.taxHint}</span>
+                            </div>
+                          ) : (
+                            <button onClick={()=>askInstallmentTax(inst)} disabled={instTaxBusy===inst.id} style={{marginBottom:14,display:'inline-flex',alignItems:'center',gap:7,background:'none',border:'1px dashed '+C.bdrM,color:C.sub,borderRadius:9,padding:'7px 11px',fontSize:12,fontWeight:600,cursor:instTaxBusy===inst.id?'default':'pointer',fontFamily:'inherit'}}>
+                              <Ic p={P.spark} sz={13} col={C.pri}/> {instTaxBusy===inst.id?'Hole Hinweis…':'Steuer-Hinweis von KI holen'}
+                            </button>
+                          )}
                           <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:8}}>Verknüpfte Buchungen ({linked.length})</div>
                           {linked.length? (
                             <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:10}}>
