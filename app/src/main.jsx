@@ -61,10 +61,10 @@ const hexA=(hex,a)=>{ const n=parseInt(String(hex).slice(1),16); return 'rgba('+
 const relLum=(hex)=>{ try{ const n=parseInt(String(hex).slice(1),16); const r=((n>>16)&255)/255,g=((n>>8)&255)/255,b=(n&255)/255; return 0.2126*r+0.7152*g+0.0722*b; }catch(e){ return 0; } };
 const idealText=(hex)=> relLum(hex)>0.58 ? '#0A0A0A' : '#FFFFFF';
 // Konto-Farben in Anzeige-Reihenfolge (Limette · Blau · Violett · Rot · Hellblau) – aus der Buqo-Konto-Palette
-// Reserve (noch ungenutzt, aber in der Auswahl verfügbar): Orange #F6511D
+// Pastellpalette — dieselben 6 Töne wie bei den Immobilien, damit Konten- und Objektfarben app-weit konsistent sind.
 const ACCT_ORDER=['unter','p1','p2','p3','privat'];
-const ACCT_PAL  =['#BBF451','#007AFF','#5F00BA','#FF0000','#A8DADC'];
-const acctColor=(key)=>{ const i=ACCT_ORDER.indexOf(key); return ACCT_PAL[i>=0?i:0]; };
+const ACCT_PAL  =['#8FE3C6','#ABC4FF','#FFC7A6','#E8A39E','#C9B6FF','#9FD8FF'];
+const acctColor=(key)=>{ const i=ACCT_ORDER.indexOf(key); return ACCT_PAL[i>=0?(i%ACCT_PAL.length):0]; };
 
 /* ══ Helpers ══ */
 const FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', system-ui, sans-serif";
@@ -3515,7 +3515,7 @@ function App({session}) {
   const bizAccts = ['unter',...PROPS].filter(acctCreated);   // echte Konten ohne Privat
   const showAcctSel = bizAccts.length>=2;                     // Konten-Auswahl nur ab 2 echten Konten
   const normAcct = (k)=> k==='immo' ? (bizAccts.find(a=>a!=='unter')||'p1') : (k||'unter'); // Legacy „immo" → erstes Objekt-Konto
-  const ACCT_COLOR_CHOICES=['#BBF451','#007AFF','#5F00BA','#FF0000','#A8DADC','#F6511D'];
+  const ACCT_COLOR_CHOICES=['#8FE3C6','#ABC4FF','#FFC7A6','#E8A39E','#C9B6FF','#9FD8FF'];
   // Akzentfarbe des aktuell geöffneten/aktiven Kontos (Zahlen bleiben grün)
   const activeAcct = (tab==='quellen'||tab==='home') ? openAcct : (tab==='immo' ? sp : tab==='unter' ? 'unter' : tab==='privat' ? 'privat' : null);
   const secAccent = activeAcct ? acol(activeAcct) : C.pri;
@@ -3655,7 +3655,7 @@ function App({session}) {
               return (
                 <button key={id} className="railBtn" onClick={onClick||(()=>setTab(id))} style={{
                   width:48,height:48,borderRadius:14,
-                  background:active?('linear-gradient(155deg, '+hexA(C.pri,0.26)+' 0%, transparent 65%)'):'transparent',
+                  background:active?C.surf3:'transparent',
                 }}>
                   <Ic p={icon} sz={21} col={active?C.pri:C.sub}/>
                   <span className="railTip">{label}</span>
@@ -3665,9 +3665,9 @@ function App({session}) {
           </div>
           <button className="railBtn" onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} style={{
             width:44,height:44,borderRadius:14,marginBottom:10,
-            background:calOpen?hexA(C.pri,0.16):'transparent',
+            background:calOpen?hexA(C.grn,0.16):'transparent',
           }}>
-            <Ic p={P.cal} sz={20} col={calOpen?C.pri:C.sub}/>
+            <Ic p={P.cal} sz={20} col={calOpen?C.grn:C.sub}/>
             <span className="railTip">{MONTHS[mo].slice(0,3)} {yr}</span>
           </button>
           <button className="railBtn" onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
@@ -3684,14 +3684,14 @@ function App({session}) {
       {!isMobile && tab==='quellen' && (
         <div className="glassPanel" style={{position:'fixed',left:railW,top:0,bottom:0,width:secW,zIndex:45,display:'flex',flexDirection:'column',background:hexA(C.surf,0.55),borderRight:'1px solid '+C.bdr,padding:'22px 14px'}}>
           <div style={{fontSize:20,fontWeight:800,letterSpacing:'-0.02em',marginBottom:16,padding:'0 6px',flexShrink:0}}>Konten</div>
-          <button onClick={()=>setOpenAcct(null)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:!openAcct?('linear-gradient(155deg, '+hexA(C.pri,0.20)+' 0%, transparent 65%)'):'transparent',border:'none',borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:!openAcct?700:500,color:!openAcct?C.pri:C.txt,textAlign:'left',marginBottom:10,flexShrink:0}}>
+          <button onClick={()=>setOpenAcct(null)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:!openAcct?C.surf3:'transparent',border:'none',borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:!openAcct?700:500,color:!openAcct?C.pri:C.txt,textAlign:'left',marginBottom:10,flexShrink:0}}>
             <Ic p={P.grid} sz={16} col={!openAcct?C.pri:C.sub}/> Alle Konten
           </button>
           <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:2}}>
             {sideKonten.map(k=>{
               const c=acol(k.key); const active=openAcct===k.key;
               return (
-                <button key={k.key} onClick={()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:active?('linear-gradient(155deg, '+hexA(c,0.20)+' 0%, transparent 65%)'):'transparent',border:'none',borderRadius:10,padding:'9px 8px',cursor:'pointer',fontFamily:'inherit'}}>
+                <button key={k.key} onClick={()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:active?C.surf3:'transparent',border:'none',borderRadius:10,padding:'9px 8px',cursor:'pointer',fontFamily:'inherit'}}>
                   <span style={{width:10,height:10,borderRadius:'50%',background:c,flexShrink:0}}/>
                   <span style={{flex:1,fontSize:14,fontWeight:active?700:500,color:active?C.txt:C.sub,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'left'}}>{k.name}</span>
                   <span onClick={e=>{e.stopPropagation(); const top=e.currentTarget.getBoundingClientRect().top; setAcctMenuOpen(o=>(o&&o.key===k.key)?null:{key:k.key,top});}} style={{color:C.mut,fontSize:16,padding:'2px 6px',borderRadius:6,cursor:'pointer'}}>⋮</span>
@@ -3739,59 +3739,62 @@ function App({session}) {
             }}>{((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase()}</button>
           </div>
         </>)}
+      </header>
 
-        {/* Kalender-Popover — Desktop: verankert am Kalender-Icon in der Rail; Mobile: oben rechts */}
-        {calOpen && (
-          <div onClick={()=>setCalOpen(false)} style={{position:'fixed',inset:0,zIndex:90}}>
-            <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:70}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
-                <button onClick={()=>setCalYr(y=>y-1)} style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>‹</button>
-                <div style={{fontSize:15,fontWeight:700}}>{calYr}</div>
-                <button onClick={()=>setCalYr(y=>y+1)} style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>›</button>
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
-                {MONTHS.map((mn,i)=>{ const sel=(i===mo&&calYr===yr); return (
-                  <button key={i} onClick={()=>{ setMo(i); setYr(calYr); setCalOpen(false); }} style={{
-                    background:sel?C.pri:C.surf2, color:sel?C.priTxt:C.txt, border:'none', borderRadius:9,
-                    padding:'10px 0', cursor:'pointer', fontFamily:'inherit', fontSize:13, fontWeight:sel?700:500,
-                  }}>{mn.slice(0,3)}</button>
+      {/* Kalender-Popover & Profil-Menü — als eigene Top-Level-Overlays gerendert (nicht im <header>), damit ihr z-index
+          global gegen Rail/Sidebar gewinnt statt nur innerhalb des <header>-Stacking-Contexts (der war niedriger als beide). */}
+
+      {/* Kalender-Popover — Desktop: verankert am Kalender-Icon in der Rail; Mobile: oben rechts */}
+      {calOpen && (
+        <div onClick={()=>setCalOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:70}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+              <button onClick={()=>setCalYr(y=>y-1)} style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>‹</button>
+              <div style={{fontSize:15,fontWeight:700}}>{calYr}</div>
+              <button onClick={()=>setCalYr(y=>y+1)} style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>›</button>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+              {MONTHS.map((mn,i)=>{ const sel=(i===mo&&calYr===yr); return (
+                <button key={i} onClick={()=>{ setMo(i); setYr(calYr); setCalOpen(false); }} style={{
+                  background:sel?C.grn:C.surf2, color:sel?'#fff':C.txt, border:'none', borderRadius:9,
+                  padding:'10px 0', cursor:'pointer', fontFamily:'inherit', fontSize:13, fontWeight:sel?700:500,
+                }}>{mn.slice(0,3)}</button>
+              ); })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Profil-Menü — Desktop: verankert an der Rail unten links; Mobile: oben rechts */}
+      {profOpen && (
+        <div onClick={()=>setProfOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:16}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+            <div style={{fontSize:12,color:C.sub,padding:'6px 10px 6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(session&&session.user&&session.user.email)||'Angemeldet'}</div>
+            <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
+              <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
+            </div>
+            <button onClick={()=>{ setProfOpen(false); setSettingsTab('abo'); setTab('settings'); }} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+              <span style={{display:'flex',alignItems:'center',gap:10}}><Ic p={P.spark} sz={16} col={C.sub}/> <span>AI-Guthaben</span></span>
+              <span style={{fontSize:13,fontWeight:700,color:balanceCents!=null&&balanceCents<=0?C.red:C.grn}}>{balanceCents==null?'—':((balanceCents/100).toFixed(2).replace('.',',')+' €')}</span>
+            </button>
+            <button onClick={()=>{ setProfOpen(false); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+              <Ic p={P.gear} sz={16} col={C.sub}/> <span>Einstellungen</span>
+            </button>
+            <div style={{padding:'8px 10px 6px',borderTop:'1px solid '+C.sep,marginTop:4}}>
+              <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:7,letterSpacing:'0.03em'}}>DARSTELLUNG</div>
+              <div style={{display:'flex',gap:5,background:C.surf2,borderRadius:10,padding:4}}>
+                {[['light','Hell'],['dark','Dunkel'],['system','System']].map(([k,l])=>{ const on=theme===k; return (
+                  <button key={k} onClick={()=>setTheme(k)} style={{flex:1,background:on?C.pri:'transparent',color:on?C.priTxt:C.sub,border:'none',borderRadius:7,padding:'7px 4px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>
                 ); })}
               </div>
             </div>
+            <div style={{height:1,background:C.sep,margin:'4px 0'}}/>
+            <button onClick={()=>{ setProfOpen(false); sb.auth.signOut(); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.red,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+              <Ic p={P.out} sz={16} col={C.red}/> <span>Abmelden</span>
+            </button>
           </div>
-        )}
-
-        {/* Profil-Menü — Desktop: verankert an der Rail unten links; Mobile: oben rechts */}
-        {profOpen && (
-          <div onClick={()=>setProfOpen(false)} style={{position:'fixed',inset:0,zIndex:90}}>
-            <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:16}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
-              <div style={{fontSize:12,color:C.sub,padding:'6px 10px 6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(session&&session.user&&session.user.email)||'Angemeldet'}</div>
-              <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
-                <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
-              </div>
-              <button onClick={()=>{ setProfOpen(false); setSettingsTab('abo'); setTab('settings'); }} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
-                <span style={{display:'flex',alignItems:'center',gap:10}}><Ic p={P.spark} sz={16} col={C.sub}/> <span>AI-Guthaben</span></span>
-                <span style={{fontSize:13,fontWeight:700,color:balanceCents!=null&&balanceCents<=0?C.red:C.grn}}>{balanceCents==null?'—':((balanceCents/100).toFixed(2).replace('.',',')+' €')}</span>
-              </button>
-              <button onClick={()=>{ setProfOpen(false); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
-                <Ic p={P.gear} sz={16} col={C.sub}/> <span>Einstellungen</span>
-              </button>
-              <div style={{padding:'8px 10px 6px',borderTop:'1px solid '+C.sep,marginTop:4}}>
-                <div style={{fontSize:11,fontWeight:600,color:C.sub,marginBottom:7,letterSpacing:'0.03em'}}>DARSTELLUNG</div>
-                <div style={{display:'flex',gap:5,background:C.surf2,borderRadius:10,padding:4}}>
-                  {[['light','Hell'],['dark','Dunkel'],['system','System']].map(([k,l])=>{ const on=theme===k; return (
-                    <button key={k} onClick={()=>setTheme(k)} style={{flex:1,background:on?C.pri:'transparent',color:on?C.priTxt:C.sub,border:'none',borderRadius:7,padding:'7px 4px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>
-                  ); })}
-                </div>
-              </div>
-              <div style={{height:1,background:C.sep,margin:'4px 0'}}/>
-              <button onClick={()=>{ setProfOpen(false); sb.auth.signOut(); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.red,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
-                <Ic p={P.out} sz={16} col={C.red}/> <span>Abmelden</span>
-              </button>
-            </div>
-          </div>
-        )}
-      </header>
+        </div>
+      )}
 
       {/* Mobile hat bereits eine eigene untere Tab-Leiste weiter unten im Code (mit Beleg-Kamera-FAB + Assistent) — hier keine zweite Bar. */}
 
@@ -4806,7 +4809,7 @@ function App({session}) {
                   {advisorNotes.map(n=>(
                     <div key={n.id} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 0',borderBottom:'1px solid '+C.sep}}>
                       <div style={{flex:1,fontSize:13,color:C.txt,whiteSpace:'pre-wrap',lineHeight:1.5}}>{n.text}</div>
-                      <button onClick={()=>delNote(n.id)} title="Notiz löschen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:16,lineHeight:1,flexShrink:0}}>×</button>
+                      <button onClick={()=>delNote(n.id)} title="Notiz löschen" style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:16,lineHeight:1,flexShrink:0}}>×</button>
                     </div>
                   ))}
                 </div>
@@ -5103,7 +5106,7 @@ function App({session}) {
                             <div style={{fontSize:12.5,color:C.sub,marginTop:2}}>{MONTHS[r.fromM].slice(0,3)} {r.fromY} – {MONTHS[r.toM].slice(0,3)} {r.toY} · {gen.length} erzeugt{r.active===false?' · pausiert':''}</div>
                           </div>
                           <div style={{fontSize:16,fontWeight:800,...NUM,color:C.txt,whiteSpace:'nowrap'}}>{fmt(t.gross)}/Mon.</div>
-                          <button onClick={e=>{e.stopPropagation();askConfirm('Wiederkehrende Rechnung löschen? Bereits erzeugte Rechnungen bleiben erhalten.',()=>delRecInvoice(r.id));}} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',flexShrink:0,width:32,height:32,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={14} col={C.mut}/></button>
+                          <button onClick={e=>{e.stopPropagation();askConfirm('Wiederkehrende Rechnung löschen? Bereits erzeugte Rechnungen bleiben erhalten.',()=>delRecInvoice(r.id));}} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.red,cursor:'pointer',flexShrink:0,width:32,height:32,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={14} col={C.red}/></button>
                         </div>
                         {gen.length>0 && (<div style={{borderTop:'1px solid '+C.sep,padding:'10px 15px'}}>
                           <div style={{display:'flex',gap:14,flexWrap:'wrap',alignItems:'center',fontSize:12,marginBottom:recExpand[r.id]?8:0}}>
@@ -5306,7 +5309,7 @@ function App({session}) {
                       <div style={{fontSize:15.5,fontWeight:700,color:C.txt}}>{c.name||'(ohne Name)'}</div>
                       <div style={{fontSize:13,color:C.sub,marginTop:2}}>{[c.custNo?('Nr. '+c.custNo):'',showAcctSel?acctNameOf(normAcct(c.domain)):'',c.email].filter(Boolean).join(' · ')||'—'}</div>
                     </div>
-                    <button onClick={e=>{e.stopPropagation();askConfirm('Kunde „'+(c.name||'')+'" löschen?',()=>delCustomer(c.id));}} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',flexShrink:0,width:34,height:34,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={15} col={C.mut}/></button>
+                    <button onClick={e=>{e.stopPropagation();askConfirm('Kunde „'+(c.name||'')+'" löschen?',()=>delCustomer(c.id));}} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.red,cursor:'pointer',flexShrink:0,width:34,height:34,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={15} col={C.red}/></button>
                   </div>
                 ))}</div> : <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'26px 18px'}}>{q?'Keine Treffer.':'Noch keine Kunden. Lege oben deinen ersten Kunden an.'}</div>; })()}
               </>
@@ -5370,7 +5373,7 @@ function App({session}) {
                         </div>
                         <div style={{display:'flex',gap:6,flexShrink:0}}>
                           {t.source==='user' && <button onClick={()=>setTodoForm({id:t.id,title:t.title,note:t.note||'',ref:t.ref||null})} title="Bearbeiten" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.note} sz={13} col={C.mut}/></button>}
-                          <button onClick={()=>askConfirm('Aufgabe „'+(t.title||'')+'" löschen?',()=>removeTodo(t.id))} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={13} col={C.mut}/></button>
+                          <button onClick={()=>askConfirm('Aufgabe „'+(t.title||'')+'" löschen?',()=>removeTodo(t.id))} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.red,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={13} col={C.red}/></button>
                         </div>
                       </div>
                     ))}
@@ -5453,7 +5456,7 @@ function App({session}) {
                             </div>
                             <div style={{display:'flex',gap:6,flexShrink:0}}>
                               <button onClick={()=>setInstForm({id:inst.id,name:inst.name,account:inst.account,totalAmount:String(inst.totalAmount||''),monthlyAmount:String(inst.monthlyAmount||''),startDate:inst.startDate||'',endDate:inst.endDate||'',note:inst.note||''})} title="Bearbeiten" style={smallBtn}><Ic p={P.note} sz={13} col={C.mut}/></button>
-                              <button onClick={()=>askConfirm('„'+(inst.name||'')+'" löschen?',()=>removeInstallment(inst.id))} title="Löschen" style={smallBtn}><Ic p={P.trash} sz={13} col={C.mut}/></button>
+                              <button onClick={()=>askConfirm('„'+(inst.name||'')+'" löschen?',()=>removeInstallment(inst.id))} title="Löschen" style={smallBtn}><Ic p={P.trash} sz={13} col={C.red}/></button>
                             </div>
                           </div>
                           <div style={{height:10,borderRadius:99,background:C.surf3,overflow:'hidden',marginBottom:6}}>
@@ -5714,7 +5717,7 @@ function App({session}) {
                     <div key={f.id} style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                       <input value={f.name} onChange={e=>setFixed(arr=>arr.map(x=>x.id===f.id?{...x,name:e.target.value}:x))} placeholder="z. B. Supabase, Domain, Resend…" style={{...SS,flex:1,minWidth:140,textAlign:'left'}}/>
                       <div style={{display:'flex',alignItems:'center',gap:4}}><input value={f.amount} onChange={e=>setFixed(arr=>arr.map(x=>x.id===f.id?{...x,amount:e.target.value}:x))} inputMode="decimal" placeholder="0" style={{...SS,width:90,...NUM}}/><span style={{fontSize:13,color:C.mut}}>€</span></div>
-                      <button onClick={()=>setFixed(arr=>arr.filter(x=>x.id!==f.id))} title="Entfernen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.mut,width:34,height:34,borderRadius:9,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.trash} sz={14} col={C.mut}/></button>
+                      <button onClick={()=>setFixed(arr=>arr.filter(x=>x.id!==f.id))} title="Entfernen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.red,width:34,height:34,borderRadius:9,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.trash} sz={14} col={C.red}/></button>
                     </div>
                   ))}</div> : <div style={{fontSize:13,color:C.mut,lineHeight:1.5}}>Noch keine Fixkosten. Trag hier z. B. Supabase, Domain, Resend oder andere monatliche Abos ein – sie gelten für jeden Monat.</div>}
                 </div>
