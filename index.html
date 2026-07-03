@@ -49,6 +49,10 @@
     .typing span:nth-child(3){animation-delay:.36s}
     @keyframes typingbounce{0%,60%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-5px);opacity:1}}
     .navlink.active { color:#fff; }
+    .railBtn{position:relative;background:none;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+    .railTip{position:absolute;left:calc(100% + 12px);top:50%;transform:translateY(-50%) translateX(-4px);background:rgba(28,28,30,0.92);color:#fff;font-size:12.5px;font-weight:600;font-family:inherit;padding:6px 10px;border-radius:8px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .14s ease, transform .14s ease;box-shadow:0 6px 18px rgba(0,0,0,0.35);z-index:60;}
+    .railBtn:hover .railTip{opacity:1;transform:translateY(-50%) translateX(0);}
+    .glassPanel{backdrop-filter:blur(22px) saturate(1.4);-webkit-backdrop-filter:blur(22px) saturate(1.4);}
   </style>
 </head>
 <body>
@@ -1510,6 +1514,7 @@ function App({session}) {
   const [immoView,setImmoView]= useState('einnahmen'); // Immobilien: Toggle
   const [iconPick,setIconPick]= useState(null);     // Standort-Icon-Auswahl (pid)
   const [addAcctOpen,setAddAcctOpen]= useState(false); // Neues Konto anlegen
+  const [acctMenuOpen,setAcctMenuOpen]= useState(null); // Konto-Kontextmenü (⋮) offen für welchen Key
   const toggleSel = id => setSelIds(s=> s.includes(id)? s.filter(x=>x!==id) : [...s,id]);
   const exitSel = () => { setSelKey(null); setSelIds([]); };
   /* Eigene URL pro Bereich + pro Konto (Hash-Routing) */
@@ -3507,7 +3512,8 @@ function App({session}) {
     {id:'quellen',label:'Konten',       icon:P.grid, onClick:()=>{setTab('quellen');setOpenAcct(null);}},
     {id:'belege', label:'Belege',       icon:P.clip},
     {id:'rechnung',label:'Rechnungen',  icon:P.receipt},
-    {id:'kontoauszug',label:'Kontoauszug', icon:P.bank, onClick:()=>{setTab('import');setImportTab('bank');}, active:(tab==='import'&&importTab==='bank')},
+    {id:'kontoauszug',label:'Bank', icon:P.bank, onClick:()=>{setTab('import');setImportTab('bank');}, active:(tab==='import'&&importTab==='bank')},
+    {id:'mehr',   label:'Mehr',         icon:P.menu},
   ];
   // Einheitlicher Tab-/Toggle-Stil (wie Import „Beleg/Bankkontoauszug")
   const PillTabs = ({tabs, value, onChange, style})=>(
@@ -3517,15 +3523,6 @@ function App({session}) {
       ))}
     </div>
   );
-  const SONSTIGES = [
-    {id:'kunden', label:'Kunden',       icon:P.prson},
-    {id:'aufgaben', label:'Aufgaben',   icon:P.check},
-    {id:'raten',  label:'Raten & Kredite', icon:P.bank},
-    {id:'download', label:'Download',   icon:P.down},
-    {id:'yr',     label:'Analyse',      icon:P.cal},
-    {id:'steuer', label:'Steuer-Assistent', icon:P.doc},
-    {id:'kosten', label:'Betriebskosten', icon:P.spark},
-  ];
   // Steuern-Bereich: 6 Auswertungen, alle deterministisch aus den Buchungen berechnet
   const STEUERN_MENU = [
     {id:'ustva', label:'UStVA', sub:'Umsatzsteuervoranmeldung', icon:P.doc},
@@ -3663,89 +3660,111 @@ function App({session}) {
     );
   };
 
+  /* Linke Icon-Rail (Desktop) + zweite Kontext-Sidebar (Konten) + Bottom-Tabbar (Mobile) */
+  const railW = isMobile?0:76;
+  const secW  = (!isMobile && tab==='quellen') ? 240 : 0;
+  const sideKonten = (()=>{
+    const ICONS2={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
+    const iconFor2=(key,def)=>ICONS2[(names.propIcon&&names.propIcon[key])||def]||P.house;
+    return [
+      {key:'unter',kind:'tab',name:names.unternehmen,icon:iconFor2('unter','brief')},
+      ...PROPS.map(p=>({key:p,kind:'prop',pid:p,name:names[p],icon:iconFor2(p,'house')})),
+      {key:'privat',kind:'tab',name:(names.privatLabel||'Privat'),icon:iconFor2('privat','prson')},
+    ];
+  })();
+
   return (
     <div style={{display:'flex',flexDirection:'column',height:'100vh',fontFamily:FONT,color:C.txt,fontSize:14,overflow:'hidden',background:C.bg}}>
 
-      {/* ═══ TOP BAR ═══ */}
-      <header style={{
-        flexShrink:0,background:'transparent',
-        display:'flex',alignItems:'center',gap:isMobile?12:30,padding:isMobile?'8px 14px':'14px 30px',minHeight:isMobile?60:72,
-        position:'sticky',top:0,zIndex:40,
-      }}>
-        {/* Logo — Klick = Konten */}
-        <button onClick={()=>{setTab('home');setOpenAcct('unter');}} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:isMobile?18:23,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={isMobile?24:28}/> Buqo</button>
-
-        {/* Nav items — rechtsbündig, nur Desktop */}
-        {!isMobile && (
-          <nav style={{display:'flex',alignItems:'center',gap:6,flex:1,justifyContent:'flex-end'}}>
+      {/* ═══ PRIMÄRE ICON-RAIL (Desktop) ═══ */}
+      {!isMobile && (
+        <div className="glassPanel" style={{position:'fixed',left:0,top:0,bottom:0,width:railW,zIndex:50,display:'flex',flexDirection:'column',alignItems:'center',padding:'16px 0',background:hexA(C.surf,0.72),borderRight:'1px solid '+C.bdr}}>
+          <button onClick={()=>{setTab('quellen');setOpenAcct(null);}} title="Buqo" style={{background:'none',border:'none',cursor:'pointer',padding:0,marginBottom:26,flexShrink:0}}><BuqoMark sz={30}/></button>
+          <div style={{display:'flex',flexDirection:'column',gap:6,flex:1}}>
             {NAV.map(({id,label,icon,onClick,active:activeFn})=>{
               const active = activeFn!=null?activeFn:(tab===id);
               return (
-                <button key={id} onClick={onClick||(()=>setTab(id))} className={'navlink'+(active?' active':'')} style={{
-                  display:'flex',alignItems:'center',gap:8,padding:'8px 14px',
-                  fontFamily:'inherit',fontSize:15,fontWeight:active?700:500,
-                  whiteSpace:'nowrap',flexShrink:0,color:active?C.txt:C.sub,
+                <button key={id} className="railBtn" onClick={onClick||(()=>setTab(id))} style={{
+                  width:48,height:48,borderRadius:14,
+                  background:active?hexA(C.pri,0.16):'transparent',
                 }}>
-                  <Ic p={icon} sz={16} col={active?C.txt:C.sub}/>
-                  <span>{label}</span>
+                  <Ic p={icon} sz={21} col={active?C.pri:C.sub}/>
+                  <span className="railTip">{label}</span>
                 </button>
               );
             })}
-            {/* Steuern-Dropdown */}
-            <div style={{position:'relative'}}>
-              {(()=>{ const sa=tab==='steuern'; return (
-              <button onClick={()=>{setSteuernOpen(o=>!o); setSonstOpen(false);}} className={'navlink'+(sa?' active':'')} style={{
-                display:'flex',alignItems:'center',gap:6,padding:'8px 14px',
-                fontFamily:'inherit',fontSize:15,fontWeight:sa?700:500,whiteSpace:'nowrap',color:sa?C.txt:C.sub,
-              }}><span>Steuern</span> <span style={{display:'inline-flex',transition:'transform .16s',transform:steuernOpen?'rotate(180deg)':'none'}}><Ic p={P.down} sz={14} col={sa?C.txt:C.sub}/></span></button>
-              ); })()}
-              {steuernOpen && (<>
-                <div onClick={()=>setSteuernOpen(false)} style={{position:'fixed',inset:0,zIndex:90}} />
-                <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'calc(100% + 8px)',right:0,zIndex:91,width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
-                  {STEUERN_MENU.map(({id,label,sub,icon})=>(
-                    <button key={id} onClick={()=>{setTab('steuern');setSteuernTab(id);setSteuernOpen(false);}} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 12px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
-                      <Ic p={icon} sz={16} col={(tab==='steuern'&&steuernTab===id)?C.txt:C.sub}/>
-                      <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:14,color:C.txt,fontWeight:600}}>{label}</span><span style={{display:'block',fontSize:11,color:C.mut}}>{sub}</span></span>
-                    </button>
-                  ))}
-                </div>
-              </>)}
-            </div>
-            {/* Sonstiges-Dropdown */}
-            <div style={{position:'relative'}}>
-              {(()=>{ const sa=SONSTIGES.some(s=>s.id===tab); return (
-              <button onClick={()=>{setSonstOpen(o=>!o); setSteuernOpen(false);}} className={'navlink'+(sa?' active':'')} style={{
-                display:'flex',alignItems:'center',gap:6,padding:'8px 14px',
-                fontFamily:'inherit',fontSize:15,fontWeight:sa?700:500,whiteSpace:'nowrap',color:sa?C.txt:C.sub,
-              }}><span>Sonstiges</span> <span style={{display:'inline-flex',transition:'transform .16s',transform:sonstOpen?'rotate(180deg)':'none'}}><Ic p={P.down} sz={14} col={sa?C.txt:C.sub}/></span></button>
-              ); })()}
-              {sonstOpen && (<>
-                <div onClick={()=>setSonstOpen(false)} style={{position:'fixed',inset:0,zIndex:90}} />
-                <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'calc(100% + 8px)',right:0,zIndex:91,width:210,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
-                  {SONSTIGES.map(({id,label,icon})=>(
-                    <button key={id} onClick={()=>{setTab(id);setSonstOpen(false);}} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={icon} sz={16} col={tab===id?C.txt:C.sub}/> <span>{label}</span></button>
-                  ))}
-                </div>
-              </>)}
-            </div>
-          </nav>
+          </div>
+          <button className="railBtn" onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
+            width:40,height:40,borderRadius:'50%',flexShrink:0,
+            background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,
+          }}>
+            {((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase()}
+            <span className="railTip">{(session&&session.user&&session.user.email)||'Profil'}</span>
+          </button>
+        </div>
+      )}
+
+      {/* ═══ ZWEITE SIDEBAR: KONTEN (Desktop, nur wenn Konten aktiv) ═══ */}
+      {!isMobile && tab==='quellen' && (
+        <div className="glassPanel" style={{position:'fixed',left:railW,top:0,bottom:0,width:secW,zIndex:45,display:'flex',flexDirection:'column',background:hexA(C.surf,0.55),borderRight:'1px solid '+C.bdr,padding:'22px 14px'}}>
+          <div style={{fontSize:20,fontWeight:800,letterSpacing:'-0.02em',marginBottom:16,padding:'0 6px',flexShrink:0}}>Konten</div>
+          <button onClick={()=>setOpenAcct(null)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:!openAcct?hexA(C.pri,0.14):'transparent',border:'none',borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:!openAcct?700:500,color:!openAcct?C.pri:C.txt,textAlign:'left',marginBottom:10,flexShrink:0}}>
+            <Ic p={P.grid} sz={16} col={!openAcct?C.pri:C.sub}/> Alle Konten
+          </button>
+          <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:2}}>
+            {sideKonten.map(k=>{
+              const c=acol(k.key); const active=openAcct===k.key;
+              return (
+                <button key={k.key} onClick={()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:active?hexA(c,0.14):'transparent',border:'none',borderRadius:10,padding:'9px 8px',cursor:'pointer',fontFamily:'inherit'}}>
+                  <span style={{width:10,height:10,borderRadius:'50%',background:c,flexShrink:0}}/>
+                  <span style={{flex:1,fontSize:14,fontWeight:active?700:500,color:active?C.txt:C.sub,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'left'}}>{k.name}</span>
+                  <span onClick={e=>{e.stopPropagation(); const top=e.currentTarget.getBoundingClientRect().top; setAcctMenuOpen(o=>(o&&o.key===k.key)?null:{key:k.key,top});}} style={{color:C.mut,fontSize:16,padding:'2px 6px',borderRadius:6,cursor:'pointer'}}>⋮</span>
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={()=>setAddAcctOpen(true)} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'1.5px dashed '+C.bdrM,borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,fontWeight:600,color:C.sub,marginTop:10,flexShrink:0}}>
+            <Ic p={P.plus} sz={15} col="currentColor"/> Konto hinzufügen
+          </button>
+        </div>
+      )}
+
+      {/* Konto-Kontextmenü — als fixed außerhalb der scrollbaren Liste gerendert, damit es nicht abgeschnitten wird */}
+      {!isMobile && acctMenuOpen && (()=>{ const k=sideKonten.find(x=>x.key===acctMenuOpen.key); if(!k) return null; return (<>
+        <div onClick={()=>setAcctMenuOpen(null)} style={{position:'fixed',inset:0,zIndex:90}}/>
+        <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:railW+secW+8,top:acctMenuOpen.top,zIndex:91,width:206,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <button onClick={()=>{setAcctMenuOpen(null); setIconPick(k.key);}} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,color:C.txt,textAlign:'left'}}><Ic p={P.gear} sz={14} col={C.sub}/> Konto bearbeiten</button>
+          <button onClick={()=>{ setAcctMenuOpen(null); setTeamInvite(t=>({...t,accounts:t.accounts.includes(k.key)?t.accounts:[...t.accounts,k.key]})); setSettingsTab('team'); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,color:C.txt,textAlign:'left'}}><Ic p={P.prson} sz={14} col={C.sub}/> Teammitglied einladen</button>
+          <button disabled title="Bald verfügbar" style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',fontFamily:'inherit',fontSize:13.5,color:C.mut,textAlign:'left'}}><Ic p={P.out} sz={14} col={C.mut}/> Konto schließen<span style={{marginLeft:'auto',fontSize:10,color:C.mut}}>bald</span></button>
+        </div>
+      </>); })()}
+
+      {/* ═══ TOP BAR (nur Monatsnavigation + Profil) ═══ */}
+      <header style={{
+        flexShrink:0,background:'transparent',
+        display:'flex',alignItems:'center',gap:12,padding:isMobile?'8px 14px':'14px 30px',minHeight:isMobile?60:72,
+        position:'sticky',top:0,zIndex:40,marginLeft:railW,
+      }}>
+        {isMobile && (
+          <button onClick={()=>{setTab('quellen');setOpenAcct(null);}} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
         )}
 
-        {isMobile && <div style={{flex:1}} />}
+        <div style={{flex:1}} />
 
-        {/* Monats-Navigation (Kalender-Popover) + Profil */}
+        {/* Monats-Navigation + Profil (nur Mobile, Desktop-Profil sitzt in der Rail) */}
         <div style={{display:'flex',alignItems:'center',gap:isMobile?6:8,flexShrink:0}}>
           <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>‹</button>
           <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 12px',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600,display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
             <Ic p={P.cal} sz={14} col={C.sub}/> {MONTHS[mo].slice(0,3)} {yr}
           </button>
           <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'8px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15,lineHeight:1}}>›</button>
-          {/* Profil-Avatar */}
-          <button onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
-            marginLeft:4,width:36,height:36,borderRadius:'50%',flexShrink:0,cursor:'pointer',
-            background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,
-            display:'flex',alignItems:'center',justifyContent:'center',
-          }}>{((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase()}</button>
+          {isMobile && (
+            <button onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
+              marginLeft:4,width:36,height:36,borderRadius:'50%',flexShrink:0,cursor:'pointer',
+              background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,
+              display:'flex',alignItems:'center',justifyContent:'center',
+            }}>{((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase()}</button>
+          )}
         </div>
 
         {/* Kalender-Popover */}
@@ -3769,10 +3788,10 @@ function App({session}) {
           </div>
         )}
 
-        {/* Profil-Menü */}
+        {/* Profil-Menü — Desktop: verankert an der Rail unten links; Mobile: oben rechts */}
         {profOpen && (
           <div onClick={()=>setProfOpen(false)} style={{position:'fixed',inset:0,zIndex:90}}>
-            <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:54,right:12,width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+            <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:16}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
               <div style={{fontSize:12,color:C.sub,padding:'6px 10px 6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(session&&session.user&&session.user.email)||'Angemeldet'}</div>
               <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
                 <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
@@ -3801,58 +3820,10 @@ function App({session}) {
         )}
       </header>
 
-      {/* ═══ MOBILE NAV-DRAWER ═══ */}
-      {isMobile && navOpen && (
-        <>
-          <div onClick={()=>setNavOpen(false)} style={{position:'fixed',top:56,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.55)',zIndex:30}} />
-          <div style={{
-            position:'fixed',top:56,left:0,right:0,zIndex:35,
-            background:C.surf,borderBottom:'1px solid '+C.bdr,
-            padding:'10px 12px 16px',boxShadow:'0 18px 44px rgba(0,0,0,0.55)',
-            maxHeight:'calc(100vh - 56px)',overflowY:'auto',
-          }}>
-            {NAV.map(({id,label,icon,onClick,active:activeFn})=>{
-              const active = activeFn!=null?activeFn:(tab===id);
-              return (
-                <button key={id} onClick={()=>{ (onClick||(()=>setTab(id)))(); setNavOpen(false); }} style={{
-                  display:'flex',alignItems:'center',gap:13,width:'100%',
-                  padding:'13px 14px',borderRadius:12,border:'none',marginBottom:2,
-                  background:active?'rgba(62,207,142,0.16)':'transparent',
-                  color:active?C.pri:C.txt,
-                  fontFamily:'inherit',fontSize:16,fontWeight:active?600:500,
-                  cursor:'pointer',textAlign:'left',
-                }}>
-                  <Ic p={icon} sz={20}/>
-                  <span>{label}</span>
-                </button>
-              );
-            })}
-            <div style={{borderTop:'1px solid '+C.sep,marginTop:10,paddingTop:12,display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
-              <span style={{fontSize:13,color:saved?C.mut:C.amb,fontWeight:500,display:'flex',alignItems:'center',gap:6}}>
-                <span style={{width:7,height:7,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}} />
-                {saved?'Gespeichert':'Speichern…'}
-              </span>
-              <div style={{display:'flex',gap:8}}>
-                {canUndo && (
-                  <button onClick={()=>{undo();}} style={{
-                    display:'flex',alignItems:'center',gap:6,
-                    background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,
-                    borderRadius:9,padding:'9px 13px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:500,
-                  }}>↩︎ <span>Rückgängig</span></button>
-                )}
-                <button onClick={()=>sb.auth.signOut()} style={{
-                  display:'flex',alignItems:'center',gap:6,
-                  background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,
-                  borderRadius:9,padding:'9px 13px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:500,
-                }}><Ic p={P.out} sz={15}/><span>Abmelden</span></button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
+      {/* Mobile hat bereits eine eigene untere Tab-Leiste weiter unten im Code (mit Beleg-Kamera-FAB + Assistent) — hier keine zweite Bar. */}
 
       {/* ═══ CONTENT ═══ */}
-      <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg}}>
+      <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg,marginLeft:railW+secW}}>
         <div style={{padding:isMobile?'18px 14px 96px':'28px 28px',maxWidth:(tab==='rechnung'&&invEdit)?1320:1020,margin:'0 auto'}}>
 
           {/* ══ STARTSEITE (Home): Gesamtsumme + horizontaler Slider + inline E/A ══ */}
@@ -4282,8 +4253,8 @@ function App({session}) {
                 <div style={{fontSize:13,color:C.sub}}>Weitere Bereiche</div>
               </div>
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                {[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'Aufgaben',icon:P.check},{id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},{id:'settings',label:'Einstellungen',icon:P.gear}].map(m=>(
-                  <button key={m.id} onClick={()=>setTab(m.id)} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
+                {[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'Aufgaben',icon:P.check},{id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}].map(m=>(
+                  <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
                   </button>
                 ))}
