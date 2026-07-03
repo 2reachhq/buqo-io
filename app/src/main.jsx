@@ -1318,8 +1318,9 @@ function App({session}) {
   const [belKindF,setBelKindF]= useState('alle');          // Belege-Art: alle|einmalig|wied
   const [belStatusF,setBelStatusF]= useState('alle');      // Belege-Status: alle|offen|erledigt
   const [belAcct,setBelAcct]= useState('alle');            // Belege-Konten-Filter ('alle' | Konto-Key)
-  const [todoDetail,setTodoDetail]= useState(null);  // Aufgabe im Detail/Editor (Kanban-Karte geöffnet)
+  const [todoDetail,setTodoDetail]= useState(null);  // Aufgabe im Detailpanel (rechts angedockt) geöffnet
   const [todoAiBusy,setTodoAiBusy]= useState(false); // KI-Frage zu einer Aufgabe läuft
+  const [todoFilter,setTodoFilter]= useState('offen'); // To-do-Filter: offen|erledigt|alle
   const [instForm,setInstForm]= useState(null);       // Rate/Kredit im Editor
   const [instTaxBusy,setInstTaxBusy]= useState(null); // id des Kredits, für den gerade ein KI-Steuerhinweis geholt wird
   const [instOpen,setInstOpen]= useState(null);       // Rate/Kredit-Detailansicht (id)
@@ -2563,13 +2564,6 @@ function App({session}) {
       if(tracked && !seen.has(t.autoKey)){ changed=true; return {...t, done:true, doneAt:new Date().toISOString(), autoResolved:true}; } return t; });
     return changed ? {...prev, todos:list} : prev;
   }); };
-  // Kanban-Spalte einer Aufgabe: 'erledigt' folgt weiterhin aus done (Auto-Todos verlassen sich darauf), sonst status (Standard: offen)
-  const todoColumn = (t) => t.done ? 'erledigt' : (t.status||'offen');
-  const TODO_COLS = [['offen','Offen'],['in_arbeit','In Arbeit'],['erledigt','Erledigt']];
-  const moveTodoTo = (id, col) => { const t=todos.find(x=>x.id===id); if(!t) return;
-    if(col==='erledigt'){ if(!t.done) updateTodo(id,{done:true, doneAt:new Date().toISOString()}); }
-    else if(todoColumn(t)!==col){ updateTodo(id, {done:false, doneAt:null, status:col}); }
-  };
   const addTodoComment = (id, text, author) => { const tt=String(text||'').trim(); if(!tt) return; setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>t.id===id?{...t, comments:[...(t.comments||[]), {id:uid(), author:author||'user', text:tt, createdAt:new Date().toISOString()}]}:t)})); };
   // KI-Frage zu einer konkreten Aufgabe – Antwort landet als Kommentar (gleiches aiInvoke wie askInvoiceTax)
   const askTodoAI = async (todo, question) => { const qq=String(question||'').trim(); if(!qq){ setToast('Bitte eine Frage eingeben.'); return; }
@@ -3515,7 +3509,7 @@ function App({session}) {
     {id:'rechnung',label:'Rechnungen',  icon:P.receipt},
     {id:'kontoauszug',label:'Bank', icon:P.bank, onClick:()=>{setTab('import');setImportTab('bank');}, active:(tab==='import'&&importTab==='bank')},
     {id:'kunden', label:'Kunden',       icon:P.prson},
-    {id:'aufgaben', label:'Aufgaben',   icon:P.check},
+    {id:'aufgaben', label:'To-do',   icon:P.check},
     {id:'mehr',   label:'Mehr',         icon:P.menu},
   ];
   // Einheitlicher Tab-/Toggle-Stil (wie Import „Beleg/Bankkontoauszug")
@@ -3699,9 +3693,9 @@ function App({session}) {
           </div>
           <button className="railBtn" onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} style={{
             width:44,height:44,borderRadius:14,marginBottom:10,
-            background:calOpen?hexA(C.grn,0.16):'transparent',
+            background:calOpen?C.accent:'transparent',
           }}>
-            <Ic p={P.cal} sz={20} col={calOpen?C.grn:C.sub}/>
+            <Ic p={P.cal} sz={20} col={calOpen?C.accentTxt:C.sub}/>
             <span className="railTip">{MONTHS[mo].slice(0,3)} {yr}</span>
           </button>
           <button className="railBtn" onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
@@ -3790,7 +3784,7 @@ function App({session}) {
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
               {MONTHS.map((mn,i)=>{ const sel=(i===mo&&calYr===yr); return (
                 <button key={i} onClick={()=>{ setMo(i); setYr(calYr); setCalOpen(false); }} style={{
-                  background:sel?C.grn:C.surf2, color:sel?'#fff':C.txt, border:'none', borderRadius:9,
+                  background:sel?C.accent:C.surf2, color:sel?C.accentTxt:C.txt, border:'none', borderRadius:9,
                   padding:'10px 0', cursor:'pointer', fontFamily:'inherit', fontSize:13, fontWeight:sel?700:500,
                 }}>{mn.slice(0,3)}</button>
               ); })}
@@ -3833,7 +3827,7 @@ function App({session}) {
       {/* Mobile hat bereits eine eigene untere Tab-Leiste weiter unten im Code (mit Beleg-Kamera-FAB + Assistent) — hier keine zweite Bar. */}
 
       {/* ═══ CONTENT ═══ */}
-      <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg,marginLeft:railW+secW,marginRight:(!isMobile&&botOpen)?botWidth:0}}>
+      <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg,marginLeft:railW+secW,marginRight:isMobile?0:(botOpen?botWidth:(todoDetail?420:0))}}>
         <div style={{padding:isMobile?'18px 14px 96px':'28px 28px',maxWidth:(tab==='rechnung'&&invEdit)?1320:1020,margin:'0 auto'}}>
 
           {/* ══ STARTSEITE (Home): Gesamtsumme + horizontaler Slider + inline E/A ══ */}
@@ -4265,7 +4259,7 @@ function App({session}) {
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
                 {[
                   // Auf dem Desktop haben Rechnungen/Bank/Kunden/Aufgaben schon ein eigenes Icon in der Rail — hier nur auf Mobile zusätzlich zeigen (dort gibt's keine Rail).
-                  ...(isMobile?[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'Aufgaben',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
+                  ...(isMobile?[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
                   {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},
                 ].map(m=>(
                   <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
@@ -4906,7 +4900,7 @@ function App({session}) {
                   <button onClick={()=>setRecInvEdit(null)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:10}}>‹ Rechnungen</button>
                   <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap'}}>
                     <div style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em'}}>Wiederkehrende Rechnung</div>
-                    <span style={{fontSize:12,fontWeight:600,color:A.c,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),borderRadius:8,padding:'4px 11px'}}>{acctNameOf(normAcct(r.domain))}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:idealText(A.c),background:A.c,borderRadius:8,padding:'4px 11px'}}>{acctNameOf(normAcct(r.domain))}</span>
                   </div>
                   <div style={{maxWidth:680,display:'flex',flexDirection:'column',gap:14}}>
                     <div style={{...SC,display:'flex',flexDirection:'column',gap:12}}>
@@ -4970,11 +4964,11 @@ function App({session}) {
                     <button onClick={()=>setInvEdit(null)} title="Zurück" style={{display:'flex',alignItems:'center',gap:7,background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:10,padding:'8px 14px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><span style={{fontSize:16,lineHeight:1}}>←</span> Zurück</button>
                     <div style={{display:'flex',alignItems:'center',gap:10}}>
                       <div style={{fontSize:17,fontWeight:800,color:C.txt,letterSpacing:'-0.02em'}}>Rechnung erstellen</div>
-                      <span style={{fontSize:12,fontWeight:600,color:A.c,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),borderRadius:8,padding:'4px 11px'}}>{acctNameOf(normAcct(invEdit.domain))}</span>
+                      <span style={{fontSize:12,fontWeight:700,color:idealText(A.c),background:A.c,borderRadius:8,padding:'4px 11px'}}>{acctNameOf(normAcct(invEdit.domain))}</span>
                     </div>
                     <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12}}>
                       <span style={{fontSize:13,color:C.mut}}>Nr. {invEdit.number}</span>
-                      <button onClick={()=>{ setRecText(''); setAiCap({parsed:null}); }} style={{display:'flex',alignItems:'center',gap:7,background:hexA(A.c,0.16),border:'1px solid '+hexA(A.c,0.4),color:A.c,borderRadius:10,padding:'8px 15px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><span style={{fontSize:15}}>✨</span> KI erfassen</button>
+                      <button onClick={()=>{ setRecText(''); setAiCap({parsed:null}); }} style={{display:'flex',alignItems:'center',gap:7,background:A.c,color:idealText(A.c),border:'none',borderRadius:10,padding:'8px 15px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><span style={{fontSize:15}}>✨</span> KI erfassen</button>
                     </div>
                   </div>
                   <div style={{flex:1,minHeight:0,overflowY:'auto',padding:isMobile?'16px 14px 60px':'26px 36px 72px'}}>
@@ -4993,7 +4987,7 @@ function App({session}) {
                           <div style={{flex:1,minWidth:120}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Nachname</div><input value={invEdit.lastName||''} onChange={e=>setI({lastName:e.target.value,customerId:'',custName:(invEdit.company||[invEdit.firstName,e.target.value].filter(Boolean).join(' ')),saveCust:true})} style={fld}/></div>
                         </div>
                         <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Firma <span style={{color:C.mut}}>(optional)</span></div><input value={invEdit.company||''} onChange={e=>setI({company:e.target.value,customerId:'',custName:(e.target.value||[invEdit.firstName,invEdit.lastName].filter(Boolean).join(' ')),saveCust:true})} style={fld}/></div>
-                        {(()=>{ if(invEdit.customerId) return null; const q=(invEdit.company||invEdit.lastName||invEdit.firstName||invEdit.custName||'').trim().toLowerCase(); if(q.length<2) return null; const sug=customersFor(invEdit.domain||'unter').filter(c=>(c.name||'').toLowerCase().includes(q)).slice(0,4); if(!sug.length) return null; return (<div style={{display:'flex',gap:7,flexWrap:'wrap',alignItems:'center'}}><span style={{fontSize:11,color:C.mut}}>Passende Kunden:</span>{sug.map(c=><button key={c.id} onClick={()=>setI({customerId:c.id,custName:c.name||'',custAddress:c.address||'',custEmail:c.email||'',firstName:c.firstName||'',lastName:c.lastName||'',company:c.company||'',anrede:c.anrede||'',saveCust:false})} style={{display:'flex',alignItems:'center',gap:5,background:hexA(A.c,0.14),border:'1px solid '+hexA(A.c,0.35),color:A.c,borderRadius:8,padding:'5px 10px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.prson} sz={11} col={A.c}/>{c.name}</button>)}</div>); })()}
+                        {(()=>{ if(invEdit.customerId) return null; const q=(invEdit.company||invEdit.lastName||invEdit.firstName||invEdit.custName||'').trim().toLowerCase(); if(q.length<2) return null; const sug=customersFor(invEdit.domain||'unter').filter(c=>(c.name||'').toLowerCase().includes(q)).slice(0,4); if(!sug.length) return null; return (<div style={{display:'flex',gap:7,flexWrap:'wrap',alignItems:'center'}}><span style={{fontSize:11,color:C.mut}}>Passende Kunden:</span>{sug.map(c=><button key={c.id} onClick={()=>setI({customerId:c.id,custName:c.name||'',custAddress:c.address||'',custEmail:c.email||'',firstName:c.firstName||'',lastName:c.lastName||'',company:c.company||'',anrede:c.anrede||'',saveCust:false})} style={{display:'flex',alignItems:'center',gap:5,background:A.c,color:idealText(A.c),border:'none',borderRadius:8,padding:'5px 10px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.prson} sz={11} col={idealText(A.c)}/>{c.name}</button>)}</div>); })()}
                         <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse <span style={{color:C.red}}>*</span></div><textarea value={invEdit.custAddress||''} onChange={e=>setI({custAddress:e.target.value})} placeholder="Straße, PLZ Ort" rows={2} style={{...fld,resize:'vertical'}}/></div>
                         <input value={invEdit.custEmail||''} onChange={e=>setI({custEmail:e.target.value})} placeholder="E-Mail (optional)" style={fld}/>
                         {!invEdit.customerId && (invEdit.firstName||invEdit.lastName||invEdit.company||invEdit.custName||'').trim() && (
@@ -5134,7 +5128,7 @@ function App({session}) {
                     {(()=>{ const q=invSearch.trim().toLowerCase(); const list=recInvoices.filter(r=>invDomain==='alle'||normAcct(r.domain)===normAcct(invDomain)).filter(r=>{ if(!q)return true; const c=customers.find(x=>x.id===r.customerId); const nm=(c&&c.name)||r.company||[r.firstName,r.lastName].filter(Boolean).join(' ')||r.custName||''; return String(nm).toLowerCase().includes(q); }); if(!list.length) return <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>{recInvoices.filter(r=>invDomain==='alle'||normAcct(r.domain)===normAcct(invDomain)).length?'Keine Treffer.':'Noch keine wiederkehrenden Rechnungen. Lege eine an – sie wird dann automatisch jeden Monat erzeugt.'}</div>; return <div style={{display:'flex',flexDirection:'column',gap:10}}>{list.map(r=>{ const c=customers.find(x=>x.id===r.customerId); const nm=(c&&c.name)||r.company||[r.firstName,r.lastName].filter(Boolean).join(' ')||r.custName||'—'; const gen=recurInvoicesFor(r.id); const paidN=gen.filter(g=>g.paid).length; const openN=gen.length-paidN; const paidSum=gen.filter(g=>g.paid).reduce((s,g)=>s+(g.total||0),0); const openSum=gen.filter(g=>!g.paid).reduce((s,g)=>s+(g.total||0),0); const t=invTotals(r.items); const limited=!(r.fromY===r.toY && r.fromM===0 && r.toM===11) || true; return (
                       <div key={r.id} style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,overflow:'hidden'}}>
                         <div onClick={()=>setRecInvEdit(r)} style={{display:'flex',alignItems:'center',gap:13,padding:'13px 15px',cursor:'pointer'}}>
-                          <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:hexA(KONTO_COLORS.unter.c,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.repeat} sz={20} col={KONTO_COLORS.unter.c}/></div>
+                          <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:KONTO_COLORS.unter.c,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.repeat} sz={20} col={idealText(KONTO_COLORS.unter.c)}/></div>
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:15.5,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nm}</div>
                             <div style={{fontSize:12.5,color:C.sub,marginTop:2}}>{MONTHS[r.fromM].slice(0,3)} {r.fromY} – {MONTHS[r.toM].slice(0,3)} {r.toY} · {gen.length} erzeugt{r.active===false?' · pausiert':''}</div>
@@ -5189,7 +5183,7 @@ function App({session}) {
                           const c=customers.find(x=>x.id===inv.customerId); const name=(c&&c.name)||inv.custName||'—'; const total=inv.total!=null?inv.total:invTotals(inv.items).gross; const sent=inv.sentDate||inv.date;
                           return (
                             <div key={inv.id} onClick={()=>setInvView(inv)} onContextMenu={e=>{e.preventDefault();setInvCtx({x:e.clientX,y:e.clientY,inv});}} title="Ansehen · Rechtsklick für Optionen" style={{display:'flex',alignItems:'center',gap:13,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',cursor:'pointer'}}>
-                              <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:hexA(KONTO_COLORS.unter.c,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.prson} sz={20} col={KONTO_COLORS.unter.c}/></div>
+                              <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:KONTO_COLORS.unter.c,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.prson} sz={20} col={idealText(KONTO_COLORS.unter.c)}/></div>
                               <div style={{flex:1,minWidth:0}}>
                                 <div style={{fontSize:15.5,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:9}}><span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{name}</span><span style={{flexShrink:0,fontSize:11,fontWeight:700,color:inv.paid?C.grn:C.exp,background:hexA(inv.paid?C.grn:C.exp,0.14),borderRadius:6,padding:'2px 8px'}}>{inv.paid?'Bezahlt':'Offen'}</span>{inv.emailedAt && <span title={'Per E-Mail gesendet am '+toISO(inv.emailedAt)} style={{flexShrink:0,fontSize:12,color:C.pri}}>✉</span>}</div>
                                 <div style={{fontSize:12.5,color:C.sub,display:'flex',alignItems:'center',gap:13,marginTop:3,flexWrap:'wrap'}}>
@@ -5351,95 +5345,102 @@ function App({session}) {
           })()}
           {/* ══ AUFGABEN (manuell + automatisch aus überfälligen Rechnungen/offenen Belegen/Dubletten) ══ */}
           {tab==='aufgaben' && (()=>{
-            const bookings = allBookingsFlat();
-            const openDetail = (t) => setTodoDetail({...t, comments:t.comments||[], flaggedByAdvisor:!!t.flaggedByAdvisor, advisorNote:t.advisorNote||''});
-            const openNew = (col) => setTodoDetail({isNew:true, title:'', note:'', ref:null, status:col, comments:[], flaggedByAdvisor:false, advisorNote:''});
+            const openDetail = (t) => { setBotOpen(false); setTodoDetail({...t, comments:t.comments||[], flaggedByAdvisor:!!t.flaggedByAdvisor, advisorNote:t.advisorNote||''}); };
+            const openNew = () => { setBotOpen(false); setTodoDetail({isNew:true, title:'', note:'', ref:null, comments:[], flaggedByAdvisor:false, advisorNote:''}); };
+            const allT = todos;
+            const openT = allT.filter(t=>!t.done);
+            const doneT = allT.filter(t=>t.done);
+            const shown = todoFilter==='offen'?openT:todoFilter==='erledigt'?doneT:allT;
             return (
               <>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
                   <div>
-                    <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Aufgaben</div>
-                    <div style={{fontSize:13,color:C.sub,marginTop:4}}>Eigene Aufgaben und automatische Hinweise der KI an einem Ort – zwischen den Spalten per Drag &amp; Drop verschiebbar.</div>
+                    <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>To-do</div>
+                    <div style={{fontSize:13,color:C.sub,marginTop:4}}>Eigene Aufgaben und automatische Hinweise der KI an einem Ort – nur sichtbar, wenn wirklich etwas ansteht.</div>
                   </div>
+                  <button onClick={openNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> To-do erstellen</button>
                 </div>
-                <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'repeat(3,1fr)',gap:14,alignItems:'flex-start'}}>
-                  {TODO_COLS.map(([colKey,colLabel])=>{
-                    const items = todos.filter(t=>todoColumn(t)===colKey);
-                    return (
-                      <div key={colKey} onDragOver={e=>e.preventDefault()} onDrop={e=>{ e.preventDefault(); const id=e.dataTransfer.getData('text/plain'); if(id) moveTodoTo(id, colKey); }} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:16,padding:12,minHeight:120}}>
-                        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,padding:'2px 4px'}}>
-                          <div style={{fontSize:13.5,fontWeight:700,color:C.txt}}>{colLabel} <span style={{color:C.mut,fontWeight:500}}>· {items.length}</span></div>
-                          <button onClick={()=>openNew(colKey)} title="Aufgabe hinzufügen" style={{background:C.surf3,border:'none',color:C.sub,width:26,height:26,borderRadius:8,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.plus} sz={14} col={C.sub}/></button>
-                        </div>
-                        <div style={{display:'flex',flexDirection:'column',gap:8}}>
-                          {items.map(t=>(
-                            <div key={t.id} draggable onDragStart={e=>e.dataTransfer.setData('text/plain', t.id)} onClick={()=>openDetail(t)} style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:'11px 12px',cursor:'grab'}}>
-                              <div style={{fontSize:13.5,fontWeight:700,color:C.txt,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-                                {t.title}
-                                {t.source==='ai' && <span style={{fontSize:9.5,fontWeight:800,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 6px'}}>KI</span>}
-                                {t.flaggedByAdvisor && <span style={{fontSize:9.5,fontWeight:800,color:C.grn,background:hexA(C.grn,0.14),borderRadius:6,padding:'2px 6px'}}>Steuerberater</span>}
-                              </div>
-                              {t.note && <div style={{fontSize:12,color:C.sub,marginTop:4,overflow:'hidden',textOverflow:'ellipsis',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{t.note}</div>}
-                              <div style={{display:'flex',alignItems:'center',gap:8,marginTop:8}}>
-                                {t.ref && <span title="Buchung verknüpft" style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:22,height:22,borderRadius:7,background:C.surf3}}><Ic p={P.clip} sz={11} col={C.sub}/></span>}
-                                {(t.comments||[]).length>0 && <span style={{fontSize:11,color:C.mut}}>{(t.comments||[]).length} Kommentar{(t.comments||[]).length>1?'e':''}</span>}
-                              </div>
-                            </div>
-                          ))}
-                          {!items.length && <div style={{fontSize:12,color:C.mut,padding:'10px 4px',textAlign:'center'}}>Leer</div>}
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+                  {[['offen','Offen',openT.length],['erledigt','Erledigt',doneT.length],['alle','Alle',allT.length]].map(([k,label,n])=>{ const on=todoFilter===k; return (
+                    <button key={k} onClick={()=>setTodoFilter(k)} style={{background:on?hexA(C.pri,0.16):C.surf2,border:'1px solid '+(on?hexA(C.pri,0.4):C.bdr),color:on?C.pri:C.mut,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}{n?' · '+n:''}</button>
+                  ); })}
                 </div>
-
-                {todoDetail && (()=>{ const live = !todoDetail.isNew ? todos.find(x=>x.id===todoDetail.id) : null; const d = live ? {...todoDetail, comments:live.comments||[]} : todoDetail;
-                  const save = ()=>{ const title=(d.title||'').trim(); if(!title){ setToast('Bitte einen Titel eingeben.'); return; }
-                    if(d.isNew) addTodo({title, note:d.note||'', ref:d.ref||null, status:d.status||'offen', source:'user', flaggedByAdvisor:!!d.flaggedByAdvisor, advisorNote:d.advisorNote||''});
-                    else updateTodo(d.id, {title, note:d.note||'', ref:d.ref||null, flaggedByAdvisor:!!d.flaggedByAdvisor, advisorNote:d.advisorNote||''});
-                    setTodoDetail(null);
-                  };
-                  return (
-                    <Sheet title={d.isNew?'Neue Aufgabe':'Aufgabe'} onClose={()=>setTodoDetail(null)} maxWidth={480}>
-                      <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                        <input autoFocus value={d.title} onChange={e=>setTodoDetail({...d,title:e.target.value})} placeholder="Titel…" style={{...SS,padding:'11px 13px',fontSize:14,textAlign:'left'}}/>
-                        <textarea value={d.note} onChange={e=>setTodoDetail({...d,note:e.target.value})} placeholder="Notiz (optional)…" rows={3} style={{...SS,padding:'11px 13px',fontSize:13.5,resize:'vertical',textAlign:'left'}}/>
-                        <BookingSelect bookings={bookings} value={d.ref&&d.ref.type==='booking'?d.ref:null} onPick={b=>setTodoDetail({...d, ref: b?{type:'booking',id:b.id,year:b.year}:null})}/>
-                        {d.ref && !d.isNew && <button onClick={()=>openTodoRef(d)} style={{alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:5,background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'6px 10px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.clip} sz={12} col={C.sub}/> Verknüpfte Buchung ansehen</button>}
-                        <label style={{display:'flex',alignItems:'center',gap:9,fontSize:13,color:C.txt,cursor:'pointer',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,padding:'10px 12px'}}>
-                          <input type="checkbox" checked={!!d.flaggedByAdvisor} onChange={e=>setTodoDetail({...d,flaggedByAdvisor:e.target.checked})}/>
-                          Vom Steuerberater markiert / nachgefragt
-                        </label>
-                        {d.flaggedByAdvisor && <textarea value={d.advisorNote} onChange={e=>setTodoDetail({...d,advisorNote:e.target.value})} placeholder="Was genau hat der Steuerberater angemerkt?…" rows={2} style={{...SS,padding:'11px 13px',fontSize:13,resize:'vertical',textAlign:'left'}}/>}
-                      </div>
-                      <div style={{display:'flex',gap:10,marginTop:14}}>
-                        <button onClick={save} style={{flex:1,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Speichern</button>
-                        {!d.isNew && <button onClick={()=>askConfirm('Aufgabe „'+(d.title||'')+'" löschen?',()=>{removeTodo(d.id);setTodoDetail(null);})} style={{background:C.redL,border:'none',color:C.red,borderRadius:11,padding:'11px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',gap:7}}><Ic p={P.trash} sz={14} col={C.red}/> Löschen</button>}
-                      </div>
-
-                      {!d.isNew && (
-                        <div style={{marginTop:18,paddingTop:14,borderTop:'1px solid '+C.sep}}>
-                          <div style={{fontSize:12.5,fontWeight:700,color:C.sub,marginBottom:10,letterSpacing:'0.02em'}}>KOMMENTARE &amp; KI-FRAGEN</div>
-                          <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:10,maxHeight:220,overflowY:'auto'}}>
-                            {(d.comments||[]).length===0 && <div style={{fontSize:12.5,color:C.mut}}>Noch keine Kommentare.</div>}
-                            {(d.comments||[]).map(c=>(
-                              <div key={c.id} style={{background:c.author==='ai'?hexA(C.pri,0.10):C.surf2,border:'1px solid '+(c.author==='ai'?hexA(C.pri,0.25):C.bdr),borderRadius:10,padding:'9px 11px'}}>
-                                <div style={{fontSize:10.5,fontWeight:700,color:c.author==='ai'?C.pri:C.mut,marginBottom:3}}>{c.author==='ai'?'KI':'Du'}</div>
-                                <div style={{fontSize:13,color:C.txt,whiteSpace:'pre-wrap',lineHeight:1.45}}>{c.text}</div>
-                              </div>
-                            ))}
-                            {todoAiBusy && <div style={{fontSize:12.5,color:C.mut,display:'flex',alignItems:'center',gap:6}}><Ic p={P.spark} sz={13} col={C.pri}/> Ich denk grad nach…</div>}
+                {shown.length? (
+                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                    {shown.map(t=>(
+                      <div key={t.id} onClick={()=>openDetail(t)} style={{display:'flex',alignItems:'flex-start',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',opacity:t.done?0.6:1,cursor:'pointer'}}>
+                        <button onClick={e=>{e.stopPropagation();toggleTodoDone(t.id);}} title={t.done?'Als offen markieren':'Erledigt'} style={{width:22,height:22,flexShrink:0,marginTop:1,borderRadius:'50%',border:'1.5px solid '+(t.done?C.accent:C.bdrM),background:t.done?C.accent:'none',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>{t.done && <Ic p={P.check} sz={13} col={C.accentTxt}/>}</button>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:14.5,fontWeight:700,color:C.txt,textDecoration:t.done?'line-through':'none',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                            {t.title}
+                            {t.source==='ai' && <span style={{fontSize:10,fontWeight:800,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 7px'}}>KI</span>}
+                            {t.flaggedByAdvisor && <span style={{fontSize:10,fontWeight:800,color:idealText(C.accent),background:C.accent,borderRadius:6,padding:'2px 7px'}}>Steuerberater</span>}
                           </div>
-                          <div style={{display:'flex',gap:8}}>
-                            <input id="todoCommentInput" placeholder="Kommentar schreiben oder KI etwas fragen…" onKeyDown={e=>{ if(e.key==='Enter'){ const el=e.target; if(el.value.trim()) addTodoComment(d.id, el.value, 'user'); el.value=''; } }} style={{...SS,flex:1,textAlign:'left'}}/>
-                            <button disabled={todoAiBusy} onClick={()=>{ const el=document.getElementById('todoCommentInput'); const v=el?el.value.trim():''; if(!v){ setToast('Bitte erst etwas eingeben.'); return; } if(el) el.value=''; askTodoAI(d, v); }} title="KI fragen" style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:10,padding:'0 14px',cursor:todoAiBusy?'default':'pointer',opacity:todoAiBusy?0.6:1,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={16} col="#fff"/></button>
+                          {t.note && <div style={{fontSize:12.5,color:C.sub,marginTop:3,textDecoration:t.done?'line-through':'none'}}>{t.note}</div>}
+                          <div style={{display:'flex',alignItems:'center',gap:10,marginTop:6}}>
+                            {t.ref && <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11.5,color:C.mut}}><Ic p={P.clip} sz={12} col={C.mut}/> Buchung verknüpft</span>}
+                            {(t.comments||[]).length>0 && <span style={{fontSize:11.5,color:C.mut}}>{(t.comments||[]).length} Kommentar{(t.comments||[]).length>1?'e':''}</span>}
                           </div>
                         </div>
-                      )}
-                    </Sheet>
-                  );
-                })()}
+                        <button onClick={e=>{e.stopPropagation();askConfirm('Aufgabe „'+(t.title||'')+'" löschen?',()=>removeTodo(t.id));}} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.red,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.trash} sz={13} col={C.red}/></button>
+                      </div>
+                    ))}
+                  </div>
+                ) : <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>{todoFilter==='offen'?'Keine offenen To-dos – alles erledigt. ✔':todoFilter==='erledigt'?'Noch keine erledigten To-dos.':'Noch keine To-dos. Lege oben das erste an.'}</div>}
               </>
+            );
+          })()}
+
+          {/* ══ TO-DO DETAILPANEL — rechts angedockt wie der Assistent; nie gleichzeitig mit dem Assistenten offen ══ */}
+          {todoDetail && (()=>{ const bookings = allBookingsFlat(); const live = !todoDetail.isNew ? todos.find(x=>x.id===todoDetail.id) : null; const d = live ? {...todoDetail, comments:live.comments||[]} : todoDetail;
+            const save = ()=>{ const title=(d.title||'').trim(); if(!title){ setToast('Bitte einen Titel eingeben.'); return; }
+              if(d.isNew) addTodo({title, note:d.note||'', ref:d.ref||null, source:'user', flaggedByAdvisor:!!d.flaggedByAdvisor, advisorNote:d.advisorNote||''});
+              else updateTodo(d.id, {title, note:d.note||'', ref:d.ref||null, flaggedByAdvisor:!!d.flaggedByAdvisor, advisorNote:d.advisorNote||''});
+              setTodoDetail(null);
+            };
+            return (
+              <div style={{position:'fixed',right:0,top:isMobile?'auto':0,bottom:isMobile?86:0,left:isMobile?12:'auto',width:isMobile?'calc(100vw - 24px)':420,maxWidth:'calc(100vw - 24px)',height:isMobile?'70vh':'100vh',maxHeight:isMobile?'80vh':'100vh',zIndex:120,background:C.surf,borderLeft:'1px solid '+C.bdr,border:isMobile?'1px solid '+C.bdr:'none',borderRadius:isMobile?20:0,boxShadow:isMobile?'0 24px 60px rgba(0,0,0,0.55)':'none',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+                <div style={{display:'flex',alignItems:'center',gap:9,padding:'14px 16px',borderBottom:'1px solid '+C.sep,flexShrink:0}}>
+                  <div style={{flex:1,fontSize:15,fontWeight:700,color:C.txt}}>{d.isNew?'Neues To-do':'To-do'}</div>
+                  <button onClick={()=>setTodoDetail(null)} style={{background:C.surf2,border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontSize:18,lineHeight:1,fontFamily:'inherit'}}>×</button>
+                </div>
+                <div style={{flex:1,overflowY:'auto',padding:16,display:'flex',flexDirection:'column',gap:10}}>
+                  <input autoFocus value={d.title} onChange={e=>setTodoDetail({...d,title:e.target.value})} placeholder="Titel…" style={{...SS,padding:'11px 13px',fontSize:14,textAlign:'left'}}/>
+                  <textarea value={d.note} onChange={e=>setTodoDetail({...d,note:e.target.value})} placeholder="Notiz (optional)…" rows={3} style={{...SS,padding:'11px 13px',fontSize:13.5,resize:'vertical',textAlign:'left'}}/>
+                  <BookingSelect bookings={bookings} value={d.ref&&d.ref.type==='booking'?d.ref:null} onPick={b=>setTodoDetail({...d, ref: b?{type:'booking',id:b.id,year:b.year}:null})}/>
+                  {d.ref && !d.isNew && <button onClick={()=>openTodoRef(d)} style={{alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:5,background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'6px 10px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.clip} sz={12} col={C.sub}/> Verknüpfte Buchung ansehen</button>}
+                  <label style={{display:'flex',alignItems:'center',gap:9,fontSize:13,color:C.txt,cursor:'pointer',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,padding:'10px 12px'}}>
+                    <input type="checkbox" checked={!!d.flaggedByAdvisor} onChange={e=>setTodoDetail({...d,flaggedByAdvisor:e.target.checked})}/>
+                    Vom Steuerberater markiert / nachgefragt
+                  </label>
+                  {d.flaggedByAdvisor && <textarea value={d.advisorNote} onChange={e=>setTodoDetail({...d,advisorNote:e.target.value})} placeholder="Was genau hat der Steuerberater angemerkt?…" rows={2} style={{...SS,padding:'11px 13px',fontSize:13,resize:'vertical',textAlign:'left'}}/>}
+                  <div style={{display:'flex',gap:10}}>
+                    <button onClick={save} style={{flex:1,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Speichern</button>
+                    {!d.isNew && <button onClick={()=>askConfirm('Aufgabe „'+(d.title||'')+'" löschen?',()=>{removeTodo(d.id);setTodoDetail(null);})} style={{background:C.redL,border:'none',color:C.red,borderRadius:11,padding:'11px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',gap:7}}><Ic p={P.trash} sz={14} col={C.red}/> Löschen</button>}
+                  </div>
+                  {!d.isNew && (
+                    <div style={{marginTop:8,paddingTop:14,borderTop:'1px solid '+C.sep}}>
+                      <div style={{fontSize:12.5,fontWeight:700,color:C.sub,marginBottom:10,letterSpacing:'0.02em'}}>KOMMENTARE &amp; KI-FRAGEN</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                        {(d.comments||[]).length===0 && <div style={{fontSize:12.5,color:C.mut}}>Noch keine Kommentare.</div>}
+                        {(d.comments||[]).map(c=>(
+                          <div key={c.id} style={{background:c.author==='ai'?hexA(C.pri,0.10):C.surf2,border:'1px solid '+(c.author==='ai'?hexA(C.pri,0.25):C.bdr),borderRadius:10,padding:'9px 11px'}}>
+                            <div style={{fontSize:10.5,fontWeight:700,color:c.author==='ai'?C.pri:C.mut,marginBottom:3}}>{c.author==='ai'?'KI':'Du'}</div>
+                            <div style={{fontSize:13,color:C.txt,whiteSpace:'pre-wrap',lineHeight:1.45}}>{c.text}</div>
+                          </div>
+                        ))}
+                        {todoAiBusy && <div style={{fontSize:12.5,color:C.mut,display:'flex',alignItems:'center',gap:6}}><Ic p={P.spark} sz={13} col={C.pri}/> Ich denk grad nach…</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {!d.isNew && (
+                  <div style={{padding:'10px 14px 12px',borderTop:'1px solid '+C.sep,flexShrink:0,display:'flex',gap:8}}>
+                    <input id="todoCommentInput" placeholder="Kommentar schreiben oder KI etwas fragen…" onKeyDown={e=>{ if(e.key==='Enter'){ const el=e.target; if(el.value.trim()) addTodoComment(d.id, el.value, 'user'); el.value=''; } }} style={{...SS,flex:1,textAlign:'left'}}/>
+                    <button disabled={todoAiBusy} onClick={()=>{ const el=document.getElementById('todoCommentInput'); const v=el?el.value.trim():''; if(!v){ setToast('Bitte erst etwas eingeben.'); return; } if(el) el.value=''; askTodoAI(d, v); }} title="KI fragen" style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:10,padding:'0 14px',cursor:todoAiBusy?'default':'pointer',opacity:todoAiBusy?0.6:1,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={16} col="#fff"/></button>
+                  </div>
+                )}
+              </div>
             );
           })()}
           {/* ══ RATEN & KREDITE (Sonstiges): laufende Ratenzahlungen/Kredite mit Buchungs-Verknüpfung + Fortschritt ══ */}
@@ -6325,7 +6326,7 @@ function App({session}) {
                 <Ic p={P.camera} sz={24} col={C.actTxt}/>
               </button>
             </div>
-            <button onClick={()=>setBotOpen(o=>!o)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',color:botOpen?C.pri:C.sub,paddingTop:8,position:'relative'}}><Ic p={P.spark} sz={20} col={botOpen?C.pri:C.sub}/><span style={{fontSize:10,fontWeight:600}}>Assistent</span>{botUnread>0 && <span style={{position:'absolute',top:3,right:'calc(50% - 21px)',minWidth:17,height:17,borderRadius:99,background:C.red,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',boxSizing:'border-box'}}>{botUnread}</span>}</button>
+            <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',color:botOpen?C.pri:C.sub,paddingTop:8,position:'relative'}}><Ic p={P.spark} sz={20} col={botOpen?C.pri:C.sub}/><span style={{fontSize:10,fontWeight:600}}>Assistent</span>{botUnread>0 && <span style={{position:'absolute',top:3,right:'calc(50% - 21px)',minWidth:17,height:17,borderRadius:99,background:C.red,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',boxSizing:'border-box'}}>{botUnread}</span>}</button>
             {cell('mehr','Sonstiges',P.menu,['mehr','kal','yr','steuer','steuern','aufgaben','raten','kunden','download','kosten'])}
           </div>
         );
@@ -6975,7 +6976,7 @@ function App({session}) {
         </div>
       )}
       {!isMobile && !botOpen && (
-        <button onClick={()=>setBotOpen(o=>!o)} title="Assistent" style={{position:'fixed',right:24,bottom:24,width:56,height:56,borderRadius:'50%',background:AI_GRADIENT,border:'none',cursor:'pointer',zIndex:115,boxShadow:'0 10px 30px rgba(0,0,0,0.45)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} title="Assistent" style={{position:'fixed',right:24,bottom:24,width:56,height:56,borderRadius:'50%',background:AI_GRADIENT,border:'none',cursor:'pointer',zIndex:115,boxShadow:'0 10px 30px rgba(0,0,0,0.45)',display:'flex',alignItems:'center',justifyContent:'center'}}>
           <Ic p={P.spark} sz={24} col={'#FFFFFF'}/>
           {botUnread>0 && <span style={{position:'absolute',top:-4,right:-4,minWidth:21,height:21,borderRadius:99,background:C.red,color:'#fff',fontSize:11.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg,boxSizing:'border-box'}}>{botUnread}</span>}
         </button>
