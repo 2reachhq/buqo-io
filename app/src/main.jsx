@@ -3,6 +3,8 @@ import * as ReactDOM from 'react-dom/client';
 import { createClient } from '@supabase/supabase-js';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
+import TaxCockpit from './tax/TaxCockpit.jsx';
+import { YEARS as TAX_YEARS, berechneSteuer } from './tax/estg.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 window.pdfjsLib = pdfjsLib; // pdfToLines() below still reads it off window, unchanged
@@ -42,8 +44,8 @@ const THEME_DARK = {
   sep:'rgba(255,255,255,0.07)',
 };
 const THEME_LIGHT = {
-  bg:'#F5F5F5', surf:'#FFFFFF', surf2:'#EEF0F3', surf3:'#E3E6EB',
-  bdr:'rgba(15,18,24,0.10)', bdrM:'rgba(15,18,24,0.18)',
+  bg:'#F6F6F7', surf:'#FFFFFF', surf2:'#F2F3F5', surf3:'#E8EAEE',
+  bdr:'rgba(15,18,24,0.08)', bdrM:'rgba(15,18,24,0.16)',
   pri:'#007AFF', priL:'rgba(0,122,255,0.14)', priTxt:'#FFFFFF',
   act:'#007AFF', actL:'rgba(0,122,255,0.14)', actTxt:'#FFFFFF',
   accent:'#BBF451', accentL:'rgba(187,244,81,0.18)', accentTxt:'#0A0A0A',
@@ -276,14 +278,6 @@ const calcTotals = (md, y, m) => {
   const totalInc=immoInc+unterInc, totalExp=immoExp+unterExp+privatExp;
   return {immoInc,immoExp,unterInc,unterExp,privatExp,totalInc,totalExp,net:totalInc-totalExp,acct};
 };
-const estESt = g => {
-  if(g<=11784)  return 0;
-  if(g<=17005)  return Math.round((g-11784)*0.22);
-  if(g<=66760)  return Math.round(1148+(g-17005)*0.30);
-  if(g<=277825) return Math.round(16074+(g-66760)*0.42);
-  return Math.round(104741+(g-277825)*0.45);
-};
-
 /* ══ Style atoms ══ */
 const SI  = {background:C.surf3,border:'none',borderRadius:8,color:C.txt,padding:'6px 10px',fontSize:13,textAlign:'right',outline:'none',fontFamily:'inherit'};
 const SS  = {background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'7px 10px',fontSize:13,outline:'none',cursor:'pointer',fontFamily:'inherit',width:'100%'};
@@ -347,6 +341,12 @@ const P = {
   dload:'M12 3v13 M7 12l5 5 5-5 M5 21h14',
   mail:  'M4 4h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2z M22 6l-10 7L2 6',
   refresh:'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0114.13-3.36L23 10 M1 14l5.36 4.36A9 9 0 0020.49 15',
+  bell:  'M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9 M13.7 21a2 2 0 01-3.4 0',
+  panel: 'M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1z M9 5v14',
+  chart: 'M3 3v18h18 M7 15l4-4 4 4 5-6',
+  percent:'M19 5L5 19 M6.5 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5z M17.5 20a2.5 2.5 0 100-5 2.5 2.5 0 000 5z',
+  home:  'M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6h-6v6H4a1 1 0 01-1-1z',
+  wallet:'M3 7h18v12H3z M3 7l3-3h12l3 3 M16 13h2',
 };
 
 /* ══ Icon component ══ */
@@ -1135,36 +1135,62 @@ function Splash({text}) {
   return <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',color:C.sub,fontFamily:FONT,fontSize:14}}>{text}</div>;
 }
 
+// Klartext-Grund für Auth-Fehler (Supabase liefert englische Codes; die App zeigte bisher nur „Login fehlgeschlagen")
+function authErrorText(error){
+  const code=String((error&&error.code)||'').toLowerCase(); const msg=String((error&&error.message)||'').toLowerCase();
+  if(code==='email_not_confirmed'||/not confirmed/.test(msg)) return {kind:'unconfirmed', text:'Deine E-Mail-Adresse ist noch nicht bestätigt. Klick den Link in der Bestätigungs-Mail (auch im Spam-Ordner nachsehen).'};
+  if(code==='invalid_credentials'||/invalid login credentials|invalid_grant/.test(msg)) return {kind:'credentials', text:'E-Mail oder Passwort stimmen nicht. Noch kein Konto? Dann unten registrieren.'};
+  if(code==='over_request_rate_limit'||code==='over_email_send_rate_limit'||/rate limit/.test(msg)) return {kind:'rate', text:'Zu viele Versuche. Bitte ein paar Minuten warten und erneut probieren.'};
+  if(code==='user_already_exists'||/already registered|already exists/.test(msg)) return {kind:'exists', text:'Für diese E-Mail gibt es schon ein Konto. Bitte einloggen oder Passwort zurücksetzen.'};
+  if(code==='weak_password'||/password should be|weak/.test(msg)) return {kind:'weak', text:'Das Passwort ist zu schwach. Mindestens 6 Zeichen.'};
+  if(/fetch|network|failed to|load failed|timeout/.test(msg)) return {kind:'network', text:'Supabase ist nicht erreichbar. Ist das Projekt pausiert (kostenloser Tarif pausiert nach 7 Tagen ohne Nutzung) oder bist du offline? Im Supabase-Dashboard „Restore project" klicken.'};
+  return {kind:'other', text:'Login fehlgeschlagen: '+((error&&error.message)||'unbekannter Fehler')};
+}
+// Rücksprung-Adresse für Bestätigungs-/Reset-Mails: die App liegt unter /buqo-io/, nicht unter /
+const appUrl=(q)=>{ try{ return window.location.origin+window.location.pathname+(q||''); }catch(e){ return '/'; } };
+
 function Login({inviteToken}) {
-  const [mode,setMode]=useState('login');            // 'login' | 'signup'
+  const [mode,setMode]=useState('login');            // 'login' | 'signup' | 'reset'
   const [role,setRole]=useState(inviteToken?'advisor':'user'); // Rolle bei Registrierung
   const [email,setEmail]=useState('');
   const [pw,setPw]=useState('');
   const [name,setName]=useState('');
   const [err,setErr]=useState('');
+  const [errKind,setErrKind]=useState('');
   const [info,setInfo]=useState('');
   const [busy,setBusy]=useState(false);
+  const fail=(error)=>{ const e=authErrorText(error); setErr(e.text); setErrKind(e.kind); setBusy(false); };
   const submit=async e=>{
     e.preventDefault();
-    setBusy(true); setErr(''); setInfo('');
+    setBusy(true); setErr(''); setErrKind(''); setInfo('');
+    if(mode==='reset'){
+      const {error}=await sb.auth.resetPasswordForEmail(email.trim(),{redirectTo:appUrl()});
+      if(error){ fail(error); return; }
+      setInfo('Falls ein Konto zu '+email.trim()+' existiert, ist jetzt eine Mail mit einem Link zum Zurücksetzen unterwegs. Der Link öffnet Buqo, dort setzt du das neue Passwort.'); setBusy(false);
+      return;
+    }
     if(mode==='login'){
       const {error}=await sb.auth.signInWithPassword({email:email.trim(),password:pw});
-      if(error){ setErr('Login fehlgeschlagen. Bitte E-Mail und Passwort prüfen.'); setBusy(false); }
+      if(error){ fail(error); }
       return;
     }
     // Registrierung
     const {data,error}=await sb.auth.signUp({
       email:email.trim(), password:pw,
-      options:{ data:{ role, full_name:name.trim()||null }, emailRedirectTo: window.location.origin+(inviteToken?('/?advisor_invite='+inviteToken):'/') }
+      options:{ data:{ role, full_name:name.trim()||null }, emailRedirectTo: appUrl(inviteToken?('?advisor_invite='+inviteToken):'') }
     });
-    if(error){ setErr(error.message||'Registrierung fehlgeschlagen.'); setBusy(false); return; }
+    if(error){ fail(error); return; }
     if(data && data.session){ /* auto eingeloggt → Root übernimmt */ }
+    else if(data && data.user && Array.isArray(data.user.identities) && data.user.identities.length===0){ setErr('Für diese E-Mail gibt es schon ein Konto. Bitte einloggen oder Passwort zurücksetzen.'); setErrKind('exists'); setBusy(false); }
     else { setInfo('Fast fertig! Bitte bestätige deine E-Mail-Adresse über den Link, den wir dir gerade geschickt haben.'); setBusy(false); }
   };
+  const resendConfirm=async()=>{ if(!email.trim()) return; setBusy(true); const {error}=await sb.auth.resend({type:'signup',email:email.trim(),options:{emailRedirectTo:appUrl()}}); setBusy(false); if(error){ fail(error); return; } setErr(''); setErrKind(''); setInfo('Bestätigungs-Mail wurde erneut an '+email.trim()+' geschickt.'); };
   const inp = {width:'100%',background:C.surf3,border:'none',borderRadius:10,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit'};
+  const link = {background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0};
   const roleBtn=(k,label)=>{ const on=role===k; return (
     <button type="button" onClick={()=>setRole(k)} style={{flex:1,background:on?C.act:C.surf3,color:on?C.actTxt:C.sub,border:'1px solid '+(on?C.act:C.bdr),borderRadius:10,padding:'9px 8px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
   ); };
+  const switchMode=(m)=>{ setMode(m); setErr(''); setErrKind(''); setInfo(''); };
   return (
     <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:FONT,padding:20,overflow:'auto'}}>
       <form onSubmit={submit} style={{width:'100%',maxWidth:360,background:C.surf,borderRadius:18,padding:28,border:'1px solid '+C.bdr,margin:'auto'}}>
@@ -1177,7 +1203,7 @@ function Login({inviteToken}) {
             Du wurdest als <b>Steuerberater</b> eingeladen. {mode==='login'?'Melde dich an,':'Registriere dich,'} um den Zugriff anzunehmen.
           </div>
         ) : (
-          <div style={{fontSize:13,color:C.sub,marginBottom:20}}>{mode==='login'?'Bitte einloggen':'Konto erstellen'}</div>
+          <div style={{fontSize:13,color:C.sub,marginBottom:20}}>{mode==='login'?'Bitte einloggen':mode==='reset'?'Passwort zurücksetzen':'Konto erstellen'}</div>
         )}
         {mode==='signup' && (
           <div style={{marginBottom:14}}>
@@ -1191,18 +1217,44 @@ function Login({inviteToken}) {
         </>)}
         <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>E-Mail</label>
         <input type="email" value={email} onChange={e=>setEmail(e.target.value)} autoFocus required style={{...inp,marginBottom:14}} />
-        <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Passwort</label>
-        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required minLength={6} style={{...inp,marginBottom:(err||info)?10:18}} />
-        {err && <div style={{fontSize:12,color:C.red,marginBottom:14}}>{err}</div>}
+        {mode!=='reset' && (<>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:6}}>
+            <label style={{fontSize:12,color:C.sub}}>Passwort</label>
+            {mode==='login' && <button type="button" onClick={()=>switchMode('reset')} style={{...link,fontSize:12}}>Passwort vergessen?</button>}
+          </div>
+          <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required minLength={6} autoComplete={mode==='login'?'current-password':'new-password'} style={{...inp,marginBottom:(err||info)?10:18}} />
+        </>)}
+        {err && <div style={{fontSize:12.5,color:C.red,marginBottom:14,lineHeight:1.5}}>{err}{errKind==='unconfirmed' && <div style={{marginTop:6}}><button type="button" onClick={resendConfirm} disabled={busy} style={link}>Bestätigungs-Mail erneut senden</button></div>}{errKind==='credentials' && <div style={{marginTop:6}}><button type="button" onClick={()=>switchMode('reset')} style={link}>Passwort zurücksetzen</button></div>}</div>}
         {info && <div style={{fontSize:12.5,color:C.grn,marginBottom:14,lineHeight:1.5}}>{info}</div>}
         <button type="submit" disabled={busy} style={{width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.6:1}}>
-          {busy?'Bitte warten…':(mode==='login'?'Einloggen':'Konto erstellen')}
+          {busy?'Bitte warten…':(mode==='login'?'Einloggen':mode==='reset'?'Link zum Zurücksetzen senden':'Konto erstellen')}
         </button>
         <div style={{textAlign:'center',marginTop:16,fontSize:13,color:C.sub}}>
           {mode==='login'
-            ? <span>Noch kein Konto? <button type="button" onClick={()=>{setMode('signup');setErr('');setInfo('');}} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>Registrieren</button></span>
-            : <span>Schon ein Konto? <button type="button" onClick={()=>{setMode('login');setErr('');setInfo('');}} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>Einloggen</button></span>}
+            ? <span>Noch kein Konto? <button type="button" onClick={()=>switchMode('signup')} style={link}>Registrieren</button></span>
+            : <span>Schon ein Konto? <button type="button" onClick={()=>switchMode('login')} style={link}>Einloggen</button></span>}
         </div>
+      </form>
+    </div>
+  );
+}
+
+/* ══ Neues Passwort setzen (nach Klick auf den Reset-Link aus der Mail) ══ */
+function NewPassword({onDone}) {
+  const [pw,setPw]=useState(''); const [pw2,setPw2]=useState(''); const [err,setErr]=useState(''); const [busy,setBusy]=useState(false);
+  const inp = {width:'100%',background:C.surf3,border:'none',borderRadius:10,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit'};
+  const submit=async e=>{ e.preventDefault(); setErr(''); if(pw.length<6){ setErr('Mindestens 6 Zeichen.'); return; } if(pw!==pw2){ setErr('Die Passwörter stimmen nicht überein.'); return; } setBusy(true); const {error}=await sb.auth.updateUser({password:pw}); setBusy(false); if(error){ setErr(authErrorText(error).text); return; } onDone(); };
+  return (
+    <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:FONT,padding:20,overflow:'auto'}}>
+      <form onSubmit={submit} style={{width:'100%',maxWidth:360,background:C.surf,borderRadius:18,padding:28,border:'1px solid '+C.bdr,margin:'auto'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}><BuqoMark sz={30}/><div style={{fontSize:22,fontWeight:700,color:C.txt,letterSpacing:'-0.03em'}}>Buqo</div></div>
+        <div style={{fontSize:13,color:C.sub,marginBottom:20}}>Neues Passwort festlegen</div>
+        <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Neues Passwort</label>
+        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} autoFocus required minLength={6} autoComplete="new-password" style={{...inp,marginBottom:14}} />
+        <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Wiederholen</label>
+        <input type="password" value={pw2} onChange={e=>setPw2(e.target.value)} required minLength={6} autoComplete="new-password" style={{...inp,marginBottom:err?10:18}} />
+        {err && <div style={{fontSize:12.5,color:C.red,marginBottom:14,lineHeight:1.5}}>{err}</div>}
+        <button type="submit" disabled={busy} style={{width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.6:1}}>{busy?'Speichert…':'Passwort speichern'}</button>
       </form>
     </div>
   );
@@ -1282,7 +1334,7 @@ function App({session}) {
   const nowY = now.getFullYear(), nowM = now.getMonth();
   const isFuture = (y,m) => y>nowY || (y===nowY && m>nowM);
   // ══ Theme (Dark / Light / System) ══
-  const [theme,setTheme]= useState(()=>{ try{ return localStorage.getItem('sp_theme')||'dark'; }catch(_){ return 'dark'; } });
+  const [theme,setTheme]= useState(()=>{ try{ if(!localStorage.getItem('sp_theme_v2')){ localStorage.setItem('sp_theme_v2','1'); localStorage.setItem('sp_theme','light'); return 'light'; } return localStorage.getItem('sp_theme')||'light'; }catch(_){ return 'light'; } });
   const [sysDark,setSysDark]= useState(()=>{ try{ return !!(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches); }catch(_){ return true; } });
   useEffect(()=>{ try{ if(!window.matchMedia) return; const mq=window.matchMedia('(prefers-color-scheme: dark)'); const h=e=>setSysDark(e.matches); mq.addEventListener?mq.addEventListener('change',h):mq.addListener(h); return ()=>{ try{ mq.removeEventListener?mq.removeEventListener('change',h):mq.removeListener(h); }catch(_){} }; }catch(_){} },[]);
   const isDark = theme==='dark' || (theme==='system' && sysDark);
@@ -1290,7 +1342,11 @@ function App({session}) {
   useEffect(()=>{ try{ localStorage.setItem('sp_theme',theme); }catch(_){} try{ document.body.style.background=C.bg; document.body.style.color=C.txt; document.documentElement.style.background=C.bg; document.documentElement.style.colorScheme=isDark?'dark':'light'; }catch(_){} },[theme,sysDark,isDark]);
   const [yr,   setYr]   = useState(now.getFullYear());
   const [mo,   setMo]   = useState(now.getMonth());
-  const [tab,  setTab]  = useState('quellen');
+  const [tab,  setTab]  = useState('home');
+  const [sideOpen,setSideOpen]= useState(()=>{ try{ return localStorage.getItem('buqo_side')!=='0'; }catch(_){ return true; } }); // Sidebar aus-/eingeklappt
+  useEffect(()=>{ try{ localStorage.setItem('buqo_side',sideOpen?'1':'0'); }catch(_){} },[sideOpen]);
+  const [moreOpen,setMoreOpen]= useState(false);      // Sidebar-Gruppe „Mehr" aufgeklappt
+  const [belegDetails,setBelegDetails]= useState(false); // Beleg-Erfassung: Detailfelder sichtbar
   const [sonstOpen,setSonstOpen]= useState(false);
   const [gesamtHover,setGesamtHover]= useState(false);
   const [gesamtOpen,setGesamtOpen]= useState(false);
@@ -1344,6 +1400,7 @@ function App({session}) {
   const [steuernOpen,setSteuernOpen]= useState(false);    // Steuern-Dropdown im Header offen
   const [stY,setStY]= useState(now.getFullYear());        // Steuern: gewähltes Jahr
   const [stM,setStM]= useState(now.getMonth());           // Steuern: gewählter Monat (UStVA/BWA)
+  const [txY,setTxY]= useState(now.getFullYear());        // Steuerprognose: gewähltes Steuerjahr
   const [bwaBusy,setBwaBusy]= useState(false);            // BWA: KI-Bericht wird gerade erstellt
   const [datevBusy,setDatevBusy]= useState(false);        // DATEV-ZIP wird gerade gepackt
   const [settingsAcct,setSettingsAcct]= useState('unter'); // Konten-Unter-Tab in Einstellungen
@@ -1473,7 +1530,7 @@ function App({session}) {
   const subSlug = (v)=> v==='wied' ? 'wiederkehrend' : v;
   const parseSub = (s)=> s==='wiederkehrend' ? 'wied' : s;
   useEffect(()=>{
-    const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
+    const valid=new Set(['home','quellen','immo','unter','privat','import','berater','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
     const apply=()=>{ const raw=(window.location.hash||'').replace(/^#\/?/,''); if(!raw) return; const parts=raw.split('/'); const head=parts[0];
       if(head!=='erfassen') setCapture(null);
       if(head!=='rechnung-erstellen') setInvEdit(null);
@@ -1511,7 +1568,7 @@ function App({session}) {
   useEffect(()=>{
     let active=true;
     (async()=>{
-      const {data:row,error}=await sb.from('app_state').select('data,names').eq('id',1).single();
+      const {data:row,error}=await sb.from('app_state').select('data,names').eq('id',1).maybeSingle();
       if(!active) return;
       if(error){ setToast('Laden fehlgeschlagen: '+error.message); setReady(true); return; }
       let d = (row && row.data) || {};
@@ -1551,7 +1608,7 @@ function App({session}) {
     setSaved(false);
     const t=setTimeout(async()=>{
       const sig=JSON.stringify(data)+JSON.stringify(names);
-      const {error}=await sb.from('app_state').update({data,names,updated_at:new Date().toISOString()}).eq('id',1);
+      const {error}=await sb.from('app_state').upsert({id:1,data,names,updated_at:new Date().toISOString()},{onConflict:'id'});
       if(error){ setToast('Speichern fehlgeschlagen: '+error.message); }
       else { lastSigRef.current=sig; }
       setSaved(true);
@@ -2340,6 +2397,17 @@ function App({session}) {
     if(!rate) throw new Error('Kein Kurs gefunden');
     return { rate, date: j.date||iso };
   };
+  // Konto + Nutzung für einen neuen Beleg aus der Historie ableiten (gleicher Händler → gleiches Konto), sonst Firma
+  const BIZ_CLEAR_CATS=['Software','Marketing','Bank & Gebühren','Steuern','Personal','Material','Nebenkosten','Versicherung','Miete'];
+  const suggestBelegDest=(name,kind,category)=>{
+    const nn=normName(name); let hit=null;
+    if(nn.length>=3){ const all=existingBookings(); for(let i=all.length-1;i>=0;i--){ const b=all[i]; const bn=normName(b.it.name); if(bn && bn.length>=3 && b.kind===kind && (bn===nn || bn.includes(nn) || nn.includes(bn))){ hit=b; break; } } }
+    const acctKey = hit ? (hit.acct===names.unternehmen?'unter':hit.acct===(names.privatLabel||'Privat')?'privat':(PROPS.find(pp=>names[pp]===hit.acct)||'unter')) : 'unter';
+    const dest = acctKey==='unter' ? (kind==='ein'?'unterInc':'unterExp') : acctKey;
+    const nutzung = acctKey==='privat' ? null : (hit ? (hit.it.nutzung||'geschaeftlich') : (BIZ_CLEAR_CATS.includes(category)?'geschaeftlich':null));
+    const reason = hit ? ('wie „'+(hit.it.name||'')+'" im '+MONTHS[hit.m]+' '+hit.y) : (kind==='ein'?'Einnahme → Firma':'Standard: Firma-Ausgabe');
+    return {dest, nutzung, reason, category:(hit&&hit.it.category)||category||guessCategory(name)};
+  };
   const extractBeleg = async file => {
     setBelegBusy(true); setBelegRes(null);
     try{
@@ -2373,8 +2441,10 @@ function App({session}) {
           netto = netto ? Math.round(netto*rate*100)/100 : 0;
         }catch(e){ setToast('Fremdwährung ('+waehrung+') erkannt, Kurs konnte aber nicht automatisch geladen werden – bitte Betrag in EUR prüfen.'); }
       }
-      setBelegRes({ name:String(p.b||'Beleg').slice(0,70), amount:brutto, netto, mwst, kind:(p.k==='e'?'ein':'aus'), belegnr:String(p.r||''), datum, category:String(p.c||''), waehrung, fx, unsicher:!!p.unsicher, nutzung:null, nutzungAnteil:50, bewirtungMitwem:null, taxTip:'', taxTipBusy:false });
-      setBelegDest(d=> (p.k==='e' ? 'unterInc' : d));
+      const kindS=(p.k==='e'?'ein':'aus'); const sugg=suggestBelegDest(String(p.b||''), kindS, String(p.c||''));
+      const isoD=toISO(datum); if(isoD){ const dd=new Date(isoD); if(!isNaN(dd.getTime())){ setBelegY(dd.getFullYear()); setBelegM(dd.getMonth()); } }
+      setBelegDest(sugg.dest); setBelegDetails(!!p.unsicher);
+      setBelegRes({ name:String(p.b||'Beleg').slice(0,70), amount:brutto, netto, mwst, kind:kindS, belegnr:String(p.r||''), datum, category:sugg.category||'', waehrung, fx, unsicher:!!p.unsicher, nutzung:sugg.nutzung, nutzungAnteil:50, bewirtungMitwem:null, taxTip:'', taxTipBusy:false, suggReason:sugg.reason });
     }catch(e){ setToast('Beleg konnte nicht gelesen werden: '+(e.message||e)); }
     setBelegBusy(false);
   };
@@ -3022,7 +3092,7 @@ function App({session}) {
     if(/kund/.test(q)) return go('kunden','Kunden');
     if(/import|bankauszug|beleg.?import/.test(q)) return go('import','Import');
     if(/beleg/.test(q)) return go('belege','die Belege');
-    if(/steuer/.test(q)) return go('steuer','die Steuer-Übersicht');
+    if(/steuer/.test(q)) return go('steuer','die Steuerprognose');
     if(/einstellung|profil|firmendaten|logo/.test(q)) return go('settings','Einstellungen');
     if(/konto|konten|home|start/.test(q)) return go('quellen','die Konten');
     return null; // nicht lokal beantwortbar → echte KI mit Datenkontext
@@ -3234,29 +3304,29 @@ function App({session}) {
     if(taxBusy) return;
     setTaxBusy(true);
     try{
-      const monatswerte = Array.from({length:12},(_,i)=>{const t=calcTotals(getMD(yr,i),yr,i);return {monat:MONTHS[i],einnahmen:t.totalInc,ausgaben:t.totalExp,ergebnis:t.net};});
-      const prevAnswers = (data.taxNotes||{})[yr]&&(data.taxNotes||{})[yr].answers || {};
+      const monatswerte = Array.from({length:12},(_,i)=>{const t=calcTotals(getMD(txY,i),txY,i);return {monat:MONTHS[i],einnahmen:t.totalInc,ausgaben:t.totalExp,ergebnis:t.net};});
+      const prevAnswers = (data.taxNotes||{})[txY]&&(data.taxNotes||{})[txY].answers || {};
       // Privat-Daten NICHT an den Steuerberater übergeben (private Buchungen bleiben privat)
-      const jd={}; Object.keys(data[yr]||{}).forEach(m=>{ const mm={...((data[yr]||{})[m]||{})}; delete mm.privat; jd[m]=mm; });
-      const snapshot = { namen:names, jahr:yr, jahressumme:yrTot, monatswerte, jahresdaten:jd, hinweis:'Private Ausgaben/Einnahmen sind bewusst ausgeschlossen und nicht relevant.', beantworteteRueckfragen:prevAnswers };
+      const jd={}; Object.keys(data[txY]||{}).forEach(m=>{ const mm={...((data[txY]||{})[m]||{})}; delete mm.privat; jd[m]=mm; });
+      const snapshot = { namen:names, jahr:txY, jahressumme:monatswerte.reduce((a,s)=>({totalInc:a.totalInc+s.einnahmen,totalExp:a.totalExp+s.ausgaben,net:a.net+s.ergebnis}),{totalInc:0,totalExp:0,net:0}), monatswerte, jahresdaten:jd, hinweis:'Private Ausgaben/Einnahmen sind bewusst ausgeschlossen und nicht relevant.', beantworteteRueckfragen:prevAnswers };
       const system = "Du bist der persönliche Steuerberater-Assistent für einen Nutzer in Deutschland (Immobilien-Vermietung, ein Unternehmen, Privatausgaben). "
         + "Gib KURZE, konkrete Stichpunkt-Hinweise – KEINE langen Fließtexte. Jeder Hinweis: knapper Titel + 1-2 Sätze Detail. "
         + "Stelle auch gezielte Rückfragen, wenn dir Infos fehlen (z. B. „Wofür wurde dieser Laptop genutzt?“, „Privat oder geschäftlich?“, „Unternehmen oder Immobilien?“). Berücksichtige bereits beantwortete Rückfragen. "
         + "Wenn sich ein Hinweis oder eine Rückfrage auf EINE konkrete Buchung aus den Daten bezieht, gib zusätzlich deren \"id\"-Feld (aus den Buchungsobjekten in DATEN) als \"belegId\" zurück, sonst \"belegId\":\"\". "
         + "Antworte AUSSCHLIESSLICH mit minifiziertem JSON: {\"hinweise\":[{\"typ\":\"tipp|achtung|sparen|frage\",\"titel\":\"...\",\"detail\":\"...\",\"belegId\":\"...\"}]} . "
         + "typ=frage nur für echte Rückfragen. 5-10 Hinweise. Erfinde keine Zahlen oder IDs. Kein Text außerhalb des JSON.\n\nDATEN:\n"+JSON.stringify(snapshot);
-      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-sonnet-4-6', max_tokens:2000, system, messages:[{role:'user',content:'Analysiere meine Daten für '+yr+' als persönlicher Steuerberater. Kurze Stichpunkte + Rückfragen.'}] } });
+      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-sonnet-4-6', max_tokens:2000, system, messages:[{role:'user',content:'Analysiere meine Daten für '+txY+' als persönlicher Steuerberater. Kurze Stichpunkte + Rückfragen.'}] } });
       if(error) throw error;
       if(resp && resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
       let txt=(resp && resp.content && resp.content[0] && resp.content[0].text) || ''; txt=txt.replace(/```json|```/g,'').trim(); const mm=txt.match(/\{[\s\S]*\}/); if(mm)txt=mm[0];
       const parsed=JSON.parse(txt); const items=(parsed.hinweise||[]).map(h=>({typ:String(h.typ||'tipp'),titel:String(h.titel||''),detail:String(h.detail||''),belegId:String(h.belegId||'')})).filter(h=>h.titel);
-      setData(prev=>({...prev, taxNotes:{...(prev.taxNotes||{}), [yr]:{ items, answers:prevAnswers, ts:new Date().toISOString() }}}));
+      setData(prev=>({...prev, taxNotes:{...(prev.taxNotes||{}), [txY]:{ items, answers:prevAnswers, ts:new Date().toISOString() }}}));
       setTaxOpen({});
       setToast(items.length+' Hinweise erstellt');
     }catch(e){ setToast('Analyse fehlgeschlagen: '+(e.message||e)); }
     setTaxBusy(false);
   };
-  const setTaxAnswer = (q, a) => setData(prev=>{ const tn={...(prev.taxNotes||{})}; const cur=tn[yr]||{}; tn[yr]={...cur, answers:{...(cur.answers||{}), [q]:a}}; return {...prev, taxNotes:tn}; });
+  const setTaxAnswer = (q, a) => setData(prev=>{ const tn={...(prev.taxNotes||{})}; const cur=tn[txY]||{}; tn[txY]={...cur, answers:{...(cur.answers||{}), [q]:a}}; return {...prev, taxNotes:tn}; });
 
   /* ══ Steuer-Engine: alle Auswertungen (UStVA, EÜR, GuV, BWA, SuSa, DATEV) werden DETERMINISTISCH
      aus den Buchungsdaten berechnet – die KI erklärt die Ergebnisse nur, rechnet aber nie selbst. ══ */
@@ -3322,6 +3392,17 @@ function App({session}) {
       if(r.kind==='aus') map[k].soll+=r.netto; else map[k].haben+=r.netto; });
     return Object.values(map).map(x=>({ ...x, soll:r2(x.soll), haben:r2(x.haben), saldo:r2(x.haben-x.soll) })).sort((a,b)=>String(a.konto).localeCompare(String(b.konto)));
   };
+  // Fakten fürs Steuer-Cockpit: Netto-Einnahmen/-Ausgaben je Konto, Inserate-Auszahlungen, offene Punkte
+  const taxFactsFor = (year)=>{ const rows=collectBizBookings(year,null); const acct={}; ['unter',...PROPS].forEach(k=>acct[k]={inc:0,exp:0,inserate:0});
+    rows.forEach(r=>{ const a=acct[r.account]||(acct[r.account]={inc:0,exp:0,inserate:0}); if(r.kind==='ein') a.inc+=r.netto; else a.exp+=r.netto; });
+    for(let m=0;m<12;m++){ if(isFuture(year,m)) continue; const M=getMD(year,m); PROPS.forEach(pid=>{ const pr=M.props&&M.props[pid]; if(pr&&pr.income) acct[pid].inserate+=calcProp(pr,year,m).netto; }); }
+    Object.keys(acct).forEach(k=>{ acct[k].inc=r2(acct[k].inc); acct[k].exp=r2(acct[k].exp); acct[k].inserate=r2(acct[k].inserate); });
+    const ohne=rows.filter(r=>r.kind==='aus'&&!r.hasBeleg);
+    return { acct, umsatz:r2(rows.filter(r=>r.kind==='ein').reduce((s,r)=>s+r.brutto,0)), vorsteuer:r2(rows.filter(r=>r.kind==='aus').reduce((s,r)=>s+r.vat,0)),
+      ohneBeleg:{count:ohne.length,sum:r2(ohne.reduce((s,r)=>s+r.netto,0))}, ohneMwst:rows.filter(r=>!r.hasVatInfo).length,
+      personalKosten:r2(rows.filter(r=>r.kind==='aus'&&r.category==='Personal').reduce((s,r)=>s+r.netto,0)) }; };
+  // Steuerjahr vorbelegen: Vorjahr, solange das laufende Jahr noch keine Geschäftsbuchungen hat
+  useEffect(()=>{ if(!ready) return; try{ const y=now.getFullYear(); if(!collectBizBookings(y,null).length && collectBizBookings(y-1,null).length) setTxY(y-1); }catch(e){} },[ready]);
   // Datei-Download-Helfer
   const dlBlob=(name,blob)=>{ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); };
   const dlText=(name,text,mime)=>dlBlob(name,new Blob([text],{type:mime||'text/csv;charset=utf-8'}));
@@ -3400,11 +3481,6 @@ function App({session}) {
   const fInc = s => ['unter',...PROPS,'privat'].reduce((t,k)=> t + (yrFilter[k]!==false && s.acct && s.acct[k] ? s.acct[k].inc : 0), 0);
   const fExp = s => ['unter',...PROPS,'privat'].reduce((t,k)=> t + (yrFilter[k]!==false && s.acct && s.acct[k] ? s.acct[k].exp : 0), 0);
   const yrTotF = yrSum.reduce((a,s)=> s.fut?a:{totalInc:a.totalInc+fInc(s),totalExp:a.totalExp+fExp(s),net:a.net+(fInc(s)-fExp(s))},{totalInc:0,totalExp:0,net:0});
-  const taxESt   = estESt(Math.max(0,yrTot.net));
-  const taxUGwn  = yrTot.unterInc-yrTot.unterExp;
-  const taxGewSt = Math.max(0,taxUGwn-24500)*0.035*4.35;
-  const taxTotal = taxESt+taxGewSt;
-  const taxMonthly = taxTotal/12;
 
   /* Belegungskalender — abgeleitet */
   const fmtD = s => new Date(s).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'});
@@ -3510,6 +3586,7 @@ function App({session}) {
     {id:'kontoauszug',label:'Bank', icon:P.bank, onClick:()=>{setTab('import');setImportTab('bank');}, active:(tab==='import'&&importTab==='bank')},
     {id:'kunden', label:'Kunden',       icon:P.prson},
     {id:'aufgaben', label:'To-do',   icon:P.check},
+    {id:'steuer', label:'Steuern',      icon:P.doc},
     {id:'mehr',   label:'Mehr',         icon:P.menu},
   ];
   // Einheitlicher Tab-/Toggle-Stil (wie Import „Beleg/Bankkontoauszug")
@@ -3545,7 +3622,7 @@ function App({session}) {
   const normAcct = (k)=> k==='immo' ? (bizAccts.find(a=>a!=='unter')||'p1') : (k||'unter'); // Legacy „immo" → erstes Objekt-Konto
   const ACCT_COLOR_CHOICES=['#8FE3C6','#ABC4FF','#FFC7A6','#E8A39E','#C9B6FF','#9FD8FF'];
   // Akzentfarbe des aktuell geöffneten/aktiven Kontos (Zahlen bleiben grün)
-  const activeAcct = (tab==='quellen'||tab==='home') ? openAcct : (tab==='immo' ? sp : tab==='unter' ? 'unter' : tab==='privat' ? 'privat' : null);
+  const activeAcct = (tab==='quellen') ? openAcct : (tab==='immo' ? sp : tab==='unter' ? 'unter' : tab==='privat' ? 'privat' : null);
   const secAccent = activeAcct ? acol(activeAcct) : C.pri;
 
   const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn, rangeFn, srcKey, hideRecur, kind, sums, applyFn, addCtx, addLabel, addHeading) => {
@@ -3657,9 +3734,9 @@ function App({session}) {
     );
   };
 
-  /* Linke Icon-Rail (Desktop) + zweite Kontext-Sidebar (Konten) + Bottom-Tabbar (Mobile) */
-  const railW = isMobile?0:76;
-  const secW  = (!isMobile && tab==='quellen') ? 240 : 0;
+  /* Linke Sidebar (Desktop, ein-/ausklappbar) + Top-Leiste + Bottom-Tabbar (Mobile) */
+  const railW = isMobile?0:(sideOpen?256:76);
+  const secW  = 0;
   const sideKonten = (()=>{
     const ICONS2={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
     const iconFor2=(key,def)=>ICONS2[(names.propIcon&&names.propIcon[key])||def]||P.house;
@@ -3669,88 +3746,108 @@ function App({session}) {
       {key:'privat',kind:'tab',name:(names.privatLabel||'Privat'),icon:iconFor2('privat','prson')},
     ];
   })();
+  const openTodoCount = todos.filter(t=>!t.done).length;
+  const openBelegCount = (()=>{ try{ return openBelegeList().length; }catch(e){ return 0; } })();
+  const overdueCount = (()=>{ try{ return overdueInvoices().length; }catch(e){ return 0; } })();
+  const rightGap = isMobile?0:(botOpen?botWidth:(todoDetail?420:0));
+  const MORE_TABS=['raten','yr','kal','download','kosten'];
+  const SIDE_NAV=[
+    {id:'home',label:'Übersicht',icon:P.home},
+    {id:'belege',label:'Belege',icon:P.clip,badge:openBelegCount},
+    {key:'bank',id:'import',label:'Bank',icon:P.bank,badge:drafts.length,onClick:()=>{setTab('import');setImportTab('bank');}},
+    {id:'aufgaben',label:'To-do',icon:P.check,badge:openTodoCount},
+    {section:'Einnahmen'},
+    {id:'rechnung',label:'Rechnungen',icon:P.receipt,badge:overdueCount},
+    {id:'kunden',label:'Kunden',icon:P.prson},
+    {section:'Konten'},
+    ...sideKonten.filter(k=>k.key==='privat'||acctCreated(k.key)).map(k=>({key:'acct-'+k.key,id:'quellen',label:k.name,icon:k.icon,color:acol(k.key),active:(tab==='quellen'&&openAcct===k.key)||(tab==='immo'&&sp===k.key)||(tab==='unter'&&k.key==='unter')||(tab==='privat'&&k.key==='privat'),onClick:()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); setTab('quellen'); }})),
+    {key:'acct-all',id:'quellen',label:'Alle Konten',icon:P.grid,active:(tab==='quellen'&&!openAcct),onClick:()=>{ setOpenAcct(null); setTab('quellen'); }},
+    {section:'Steuern'},
+    {id:'steuer',label:'Steuerprognose',icon:P.percent},
+    {id:'steuern',label:'Auswertungen',icon:P.doc},
+    {id:'berater',label:'KI-Berater',icon:P.spark},
+    {section:'Mehr',toggle:true},
+    ...((moreOpen||MORE_TABS.includes(tab))?[
+      {id:'raten',label:'Raten & Kredite',icon:P.wallet},
+      {id:'yr',label:'Analyse',icon:P.chart},
+      {id:'kal',label:'Events',icon:P.cal},
+      {id:'download',label:'Download',icon:P.dload},
+      {id:'kosten',label:'KI-Kosten',icon:P.layers},
+    ]:[]),
+  ];
+  const navBtn=(item)=>{ const active=item.active!=null?item.active:(tab===item.id); const badge=item.badge||0; return (
+    <button key={item.key||item.id} className="railBtn" onClick={item.onClick||(()=>setTab(item.id))} style={{display:'flex',alignItems:'center',gap:11,width:'100%',height:42,borderRadius:12,padding:sideOpen?'0 12px':0,justifyContent:sideOpen?'flex-start':'center',background:active?C.surf2:'transparent',color:active?C.txt:C.sub,fontFamily:'inherit',fontSize:14.5,fontWeight:active?700:500,position:'relative',flexShrink:0}}>
+      {item.color ? <span style={{width:22,height:22,borderRadius:7,background:item.color,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={item.icon} sz={13} col="#0A0A0A"/></span> : <Ic p={item.icon} sz={19} col={active?C.pri:C.sub}/>}
+      {sideOpen && <span style={{flex:1,textAlign:'left',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>}
+      {sideOpen && badge>0 && <span style={{minWidth:22,height:22,borderRadius:99,background:C.txt,color:C.bg,fontSize:11.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 6px',...NUM}}>{badge}</span>}
+      {!sideOpen && badge>0 && <span style={{position:'absolute',top:7,right:9,width:8,height:8,borderRadius:'50%',background:C.pri,border:'2px solid '+C.surf}}/>}
+      {!sideOpen && <span className="railTip">{item.label}{badge>0?' · '+badge:''}</span>}
+    </button>
+  ); };
+  const topIconBtn={width:38,height:38,borderRadius:12,background:C.surf,border:'1px solid '+C.bdr,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit',flexShrink:0,position:'relative'};
+  const initial=((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase();
 
   return (
     <div style={{display:'flex',flexDirection:'column',height:'100vh',fontFamily:FONT,color:C.txt,fontSize:14,overflow:'hidden',background:C.bg}}>
 
-      {/* ═══ PRIMÄRE ICON-RAIL (Desktop) ═══ */}
+      {/* ═══ SIDEBAR (Desktop) ═══ */}
       {!isMobile && (
-        <div className="glassPanel" style={{position:'fixed',left:0,top:0,bottom:0,width:railW,zIndex:50,display:'flex',flexDirection:'column',alignItems:'center',padding:'16px 0',background:hexA(C.surf,0.72),borderRight:'1px solid '+C.bdr}}>
-          <button onClick={()=>{setTab('quellen');setOpenAcct(null);}} title="Buqo" style={{background:'none',border:'none',cursor:'pointer',padding:0,marginBottom:26,flexShrink:0}}><BuqoMark sz={30}/></button>
-          <div style={{display:'flex',flexDirection:'column',gap:6,flex:1}}>
-            {NAV.map(({id,label,icon,onClick,active:activeFn})=>{
-              const active = activeFn!=null?activeFn:(tab===id);
-              return (
-                <button key={id} className="railBtn" onClick={onClick||(()=>setTab(id))} style={{
-                  width:48,height:48,borderRadius:14,
-                  background:active?C.surf3:'transparent',
-                }}>
-                  <Ic p={icon} sz={21} col={active?C.pri:C.sub}/>
-                  <span className="railTip">{label}</span>
-                </button>
-              );
-            })}
+        <aside style={{position:'fixed',left:0,top:0,bottom:0,width:railW,zIndex:50,display:'flex',flexDirection:'column',background:C.surf,borderRight:'1px solid '+C.bdr,transition:'width .18s ease'}}>
+          <button onClick={()=>setTab('home')} title="Übersicht" style={{display:'flex',alignItems:'center',gap:10,background:'none',border:'none',cursor:'pointer',padding:sideOpen?'20px 22px 14px':'20px 0 14px',justifyContent:sideOpen?'flex-start':'center',fontFamily:'inherit',flexShrink:0}}>
+            <BuqoMark sz={30}/>{sideOpen && <span style={{fontSize:21,fontWeight:800,letterSpacing:'-0.03em',color:C.txt}}>Buqo</span>}
+          </button>
+          <nav style={{flex:1,overflowY:'auto',overflowX:'hidden',padding:sideOpen?'0 12px':'0 14px',display:'flex',flexDirection:'column',gap:2}}>
+            {SIDE_NAV.map(item=> item.section ? (
+              sideOpen ? (item.toggle
+                ? <button key={'sec-'+item.section} onClick={()=>setMoreOpen(o=>!o)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',textTransform:'uppercase',padding:'16px 12px 6px'}}><span>{item.section}</span><span style={{display:'inline-flex',transition:'transform .16s',transform:(moreOpen||MORE_TABS.includes(tab))?'rotate(180deg)':'none'}}><Ic p={P.down} sz={12} col={C.mut}/></span></button>
+                : <div key={'sec-'+item.section} style={{fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',textTransform:'uppercase',padding:'16px 12px 6px'}}>{item.section}</div>)
+              : (item.toggle
+                ? <button key={'sec-'+item.section} onClick={()=>setMoreOpen(o=>!o)} className="railBtn" style={{width:'100%',height:30,marginTop:6}}><Ic p={P.menu} sz={15} col={C.mut}/><span className="railTip">Mehr</span></button>
+                : <div key={'sec-'+item.section} style={{height:1,background:C.sep,margin:'10px 6px',flexShrink:0}}/>)
+            ) : navBtn(item))}
+          </nav>
+          <div style={{padding:sideOpen?'10px 12px 16px':'10px 14px 16px',borderTop:'1px solid '+C.sep,flexShrink:0}}>
+            {navBtn({id:'settings',label:'Einstellungen',icon:P.gear})}
+            {sideOpen && (
+              <button onClick={()=>{ setSettingsTab('abo'); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:12,width:'100%',marginTop:10,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 12px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                <span style={{width:40,height:40,borderRadius:12,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.spark} sz={18} col="#fff"/></span>
+                <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:700,color:C.txt}}>KI-Guthaben</span><span style={{display:'block',fontSize:12,color:C.sub,marginTop:2}}>{balanceCents==null?'—':((balanceCents/100).toFixed(2).replace('.',',')+' €')}</span><span style={{display:'block',fontSize:12,fontWeight:700,color:C.pri,marginTop:3}}>Aufladen</span></span>
+                <span style={{color:C.mut,fontSize:16}}>›</span>
+              </button>
+            )}
           </div>
-          <button className="railBtn" onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} style={{
-            width:44,height:44,borderRadius:14,marginBottom:10,
-            background:calOpen?C.accent:'transparent',
-          }}>
-            <Ic p={P.cal} sz={20} col={calOpen?C.accentTxt:C.sub}/>
-            <span className="railTip">{MONTHS[mo].slice(0,3)} {yr}</span>
-          </button>
-          <button className="railBtn" onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
-            width:40,height:40,borderRadius:'50%',flexShrink:0,
-            background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,
-          }}>
-            {((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase()}
-            <span className="railTip">{(session&&session.user&&session.user.email)||'Profil'}</span>
-          </button>
-        </div>
+        </aside>
       )}
 
-      {/* ═══ ZWEITE SIDEBAR: KONTEN (Desktop, nur wenn Konten aktiv) ═══ */}
-      {!isMobile && tab==='quellen' && (
-        <div className="glassPanel" style={{position:'fixed',left:railW,top:0,bottom:0,width:secW,zIndex:45,display:'flex',flexDirection:'column',background:hexA(C.surf,0.55),borderRight:'1px solid '+C.bdr,padding:'22px 14px'}}>
-          <div style={{fontSize:20,fontWeight:800,letterSpacing:'-0.02em',marginBottom:16,padding:'0 6px',flexShrink:0}}>Konten</div>
-          <button onClick={()=>setOpenAcct(null)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:!openAcct?C.surf3:'transparent',border:'none',borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:!openAcct?700:500,color:!openAcct?C.pri:C.txt,textAlign:'left',marginBottom:10,flexShrink:0}}>
-            <Ic p={P.grid} sz={16} col={!openAcct?C.pri:C.sub}/> Alle Konten
-          </button>
-          <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:2}}>
-            {sideKonten.map(k=>{
-              const c=acol(k.key); const active=openAcct===k.key;
-              return (
-                <button key={k.key} onClick={()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:active?C.surf3:'transparent',border:'none',borderRadius:10,padding:'9px 8px',cursor:'pointer',fontFamily:'inherit'}}>
-                  <span style={{width:10,height:10,borderRadius:'50%',background:c,flexShrink:0}}/>
-                  <span style={{flex:1,fontSize:14,fontWeight:active?700:500,color:active?C.txt:C.sub,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'left'}}>{k.name}</span>
-                  <span onClick={e=>{e.stopPropagation(); const top=e.currentTarget.getBoundingClientRect().top; setAcctMenuOpen(o=>(o&&o.key===k.key)?null:{key:k.key,top});}} style={{color:C.mut,fontSize:16,padding:'2px 6px',borderRadius:6,cursor:'pointer'}}>⋮</span>
-                </button>
-              );
-            })}
-          </div>
-          <button onClick={()=>setAddAcctOpen(true)} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'1.5px dashed '+C.bdrM,borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,fontWeight:600,color:C.sub,marginTop:10,flexShrink:0}}>
-            <Ic p={P.plus} sz={15} col="currentColor"/> Konto hinzufügen
-          </button>
-        </div>
-      )}
-
-      {/* Konto-Kontextmenü — als fixed außerhalb der scrollbaren Liste gerendert, damit es nicht abgeschnitten wird */}
+      {/* Konto-Kontextmenü (Legacy, wird über die Konten-Karten ausgelöst) */}
       {!isMobile && acctMenuOpen && (()=>{ const k=sideKonten.find(x=>x.key===acctMenuOpen.key); if(!k) return null; return (<>
         <div onClick={()=>setAcctMenuOpen(null)} style={{position:'fixed',inset:0,zIndex:90}}/>
-        <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:railW+secW+8,top:acctMenuOpen.top,zIndex:91,width:206,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+        <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:railW+secW+8,top:acctMenuOpen.top,zIndex:91,width:206,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.25)'}}>
           <button onClick={()=>{setAcctMenuOpen(null); setIconPick(k.key);}} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,color:C.txt,textAlign:'left'}}><Ic p={P.gear} sz={14} col={C.sub}/> Konto bearbeiten</button>
           <button onClick={()=>{ setAcctMenuOpen(null); setTeamInvite(t=>({...t,accounts:t.accounts.includes(k.key)?t.accounts:[...t.accounts,k.key]})); setSettingsTab('team'); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,color:C.txt,textAlign:'left'}}><Ic p={P.prson} sz={14} col={C.sub}/> Teammitglied einladen</button>
-          <button disabled title="Bald verfügbar" style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',fontFamily:'inherit',fontSize:13.5,color:C.mut,textAlign:'left'}}><Ic p={P.out} sz={14} col={C.mut}/> Konto schließen<span style={{marginLeft:'auto',fontSize:10,color:C.mut}}>bald</span></button>
         </div>
       </>); })()}
 
-      {/* ═══ TOP BAR — nur Mobile (Logo + Monatsnavigation + Profil); Desktop hat all das in der Rail ═══ */}
+      {/* ═══ TOP-LEISTE ═══ */}
       <header style={{
-        flexShrink:0,background:'transparent',
-        display:'flex',alignItems:'center',gap:12,padding:isMobile?'8px 14px':0,minHeight:isMobile?60:0,
-        position:'sticky',top:0,zIndex:40,marginLeft:railW,
+        flexShrink:0,display:'flex',alignItems:'center',gap:10,padding:isMobile?'8px 14px':'12px 32px',minHeight:isMobile?60:66,
+        position:'sticky',top:0,zIndex:40,marginLeft:railW,marginRight:rightGap,background:C.bg,
       }}>
+        {!isMobile && (<>
+          <button onClick={()=>setSideOpen(o=>!o)} title={sideOpen?'Menü einklappen':'Menü ausklappen'} style={{...topIconBtn,background:'none',border:'none'}}><Ic p={P.panel} sz={19} col={C.sub}/></button>
+          <div style={{display:'flex',alignItems:'center',gap:2,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:3}}>
+            <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>‹</button>
+            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
+            <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>›</button>
+          </div>
+          <div style={{flex:1}}/>
+          <button onClick={()=>setBelegOpen(true)} style={{display:'flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'10px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',boxShadow:'0 6px 16px '+hexA(C.act,0.28),whiteSpace:'nowrap'}}><Ic p={P.camera} sz={16} col={C.actTxt}/> Beleg hochladen</button>
+          <button onClick={()=>setTab('aufgaben')} title="To-do" style={topIconBtn}><Ic p={P.bell} sz={18} col={C.sub}/>{openTodoCount>0 && <span style={{position:'absolute',top:-5,right:-5,minWidth:18,height:18,borderRadius:99,background:C.red,color:'#fff',fontSize:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg}}>{openTodoCount}</span>}</button>
+          <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} title="Assistent" style={{...topIconBtn,background:botOpen?hexA(C.pri,0.12):C.surf}}><Ic p={P.spark} sz={18} col={botOpen?C.pri:C.sub}/>{!botOpen && botUnread>0 && <span style={{position:'absolute',top:-5,right:-5,minWidth:18,height:18,borderRadius:99,background:C.pri,color:'#fff',fontSize:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg}}>{botUnread}</span>}</button>
+          <button onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{width:38,height:38,borderRadius:'50%',background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,cursor:'pointer',flexShrink:0}}>{initial}</button>
+        </>)}
         {isMobile && (<>
-          <button onClick={()=>{setTab('quellen');setOpenAcct(null);}} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
+          <button onClick={()=>setTab('home')} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
 
           <div style={{flex:1}} />
 
@@ -3775,7 +3872,7 @@ function App({session}) {
       {/* Kalender-Popover — Desktop: verankert am Kalender-Icon in der Rail; Mobile: oben rechts */}
       {calOpen && (
         <div onClick={()=>setCalOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:70}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+80,top:62}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
               <button onClick={()=>setCalYr(y=>y-1)} style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>‹</button>
               <div style={{fontSize:15,fontWeight:700}}>{calYr}</div>
@@ -3796,7 +3893,7 @@ function App({session}) {
       {/* Profil-Menü — Desktop: verankert an der Rail unten links; Mobile: oben rechts */}
       {profOpen && (
         <div onClick={()=>setProfOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:16}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{right:rightGap+32,top:62}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
             <div style={{fontSize:12,color:C.sub,padding:'6px 10px 6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(session&&session.user&&session.user.email)||'Angemeldet'}</div>
             <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
               <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
@@ -3828,67 +3925,72 @@ function App({session}) {
 
       {/* ═══ CONTENT ═══ */}
       <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg,marginLeft:railW+secW,marginRight:isMobile?0:(botOpen?botWidth:(todoDetail?420:0))}}>
-        <div style={{padding:isMobile?'18px 14px 96px':'28px 28px',maxWidth:(tab==='rechnung'&&invEdit)?1320:1020,margin:'0 auto'}}>
+        <div style={{padding:isMobile?'18px 14px 96px':'14px 36px 56px',maxWidth:(tab==='rechnung'&&invEdit)?1320:1180,margin:'0 auto'}}>
 
-          {/* ══ STARTSEITE (Home): Gesamtsumme + horizontaler Slider + inline E/A ══ */}
+          {/* ══ ÜBERSICHT: Monatskennzahlen, Steuer-Rücklage, Beleg-Dropzone, To-dos, Konten ══ */}
           {tab==='home' && (()=>{
-            const ICONS={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
-            const iconFor=(key,def)=>ICONS[(names.propIcon&&names.propIcon[key])||def]||P.house;
+            const hour=new Date().getHours(); const greet=hour<11?'Guten Morgen':hour<18?'Hallo':'Guten Abend';
+            const who=String(profile.name||'').trim().split(/\s+/)[0]||'';
+            const openList=todos.filter(t=>!t.done); const open=openList.slice(0,5);
             const konten=[
-              {key:'unter',kind:'tab',name:names.unternehmen,icon:iconFor('unter','brief'),inc:tot.unterInc,exp:tot.unterExp},
-              ...PROPS.map((p,i)=>{ const r=calcProp(md.props?.[p],yr,mo); return {key:p,kind:'prop',pid:p,name:names[p],icon:iconFor(p,'house'),inc:r.netto,exp:r.exp}; }),
-              {key:'privat',kind:'tab',name:(names.privatLabel||'Privat'),icon:iconFor('privat','prson'),inc:sumItems(md.privat?.einnahmen,yr,mo),exp:tot.privatExp},
+              {key:'unter',name:names.unternehmen||'Firma',inc:tot.unterInc,exp:tot.unterExp,icon:acctIconOf('unter'),go:()=>{setOpenAcct('unter');setTab('quellen');}},
+              ...PROPS.filter(acctCreated).map(p=>{ const r=calcProp(md.props?.[p],yr,mo); return {key:p,name:names[p],inc:r.netto,exp:r.exp,icon:acctIconOf(p),go:()=>{setSp(p);setOpenAcct(p);setTab('quellen');}}; }),
+              {key:'privat',name:names.privatLabel||'Privat',inc:sumItems(md.privat?.einnahmen,yr,mo),exp:tot.privatExp,icon:acctIconOf('privat'),go:()=>{setOpenAcct('privat');setTab('quellen');}},
             ];
-            const scrollBy=(dir)=>{ const el=quellenScrollRef.current; if(el) el.scrollBy({left:dir*el.clientWidth*0.92,behavior:'smooth'}); };
-            const arrowBtn={width:34,height:34,borderRadius:'50%',background:C.surf,border:'1px solid '+C.bdrM,color:C.txt,cursor:'pointer',fontFamily:'inherit',fontSize:16,lineHeight:1,boxShadow:'0 4px 14px rgba(0,0,0,0.4)'};
-            return (
-              <>
-                {/* Gesamt aller Quellen — Pfeil öffnet E/A */}
-                <div style={{padding:'2px 0 20px'}}>
-                  <div style={{display:'inline-block',position:'relative'}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:7}}>
-                      <span style={{fontSize:13,fontWeight:600,color:C.sub,letterSpacing:'0.02em'}}>Gesamtvermögen</span>
-                      <button onClick={()=>setGesamtOpen(o=>!o)} style={{background:'none',border:'none',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:4,color:C.sub,fontSize:13,fontWeight:600,fontFamily:'inherit',padding:0}}>
-                        <span>alle Quellen</span>
-                        <span style={{display:'inline-flex',transition:'transform .16s',transform:gesamtOpen?'rotate(180deg)':'none'}}><Ic p={P.down} sz={12} col={C.sub}/></span>
-                      </button>
+            // Steuer-Schätzung fürs gewählte Jahr – dieselbe Engine wie die Steuerprognose, Annahmen aus dem Steuerprofil
+            let tax=null; try{ const f=taxFactsFor(yr); const pr=(data.taxProfile||{})[yr]||{}; const gewinnFirma=f.acct.unter.inc-f.acct.unter.exp; const vv=PROPS.reduce((sum,p)=>{ const a=f.acct[p]||{inc:0,exp:0,inserate:0}; const gw=num((pr.gebaeudewert||{})[p]); const afa=gw>0?Math.round(gw*(num((pr.afaSatz||{})[p])||2))/100:0; return sum+a.inc+(a.inserate||0)-a.exp-afa; },0);
+              tax=berechneSteuer({year:yr,zusammen:pr.veranlagung==='zusammen',kirche:num(pr.kirche),hebesatz:num(pr.hebesatz)||400,einkuenfte:{gewerbe:pr.firmaArt==='freiberuf'?0:gewinnFirma,freiberuf:pr.firmaArt==='freiberuf'?gewinnFirma:0,vv},vorsorge:{kvpv:num(pr.kvpv),altersvorsorge:num(pr.altersvorsorge),sonstige:num(pr.sonstigeVorsorge)},sonderausgaben:num(pr.sonderausgaben),kinder:num(pr.kinder),vorauszahlungen:{est:num(pr.vzEst),gewst:num(pr.vzGewst)}}); }catch(e){ tax=null; }
+            const tile=(label,val,col,sub,onClick)=>(<div key={label} onClick={onClick} style={{...SC,padding:'18px 20px',flex:1,minWidth:170,cursor:onClick?'pointer':'default'}}><div style={{fontSize:12.5,color:C.sub,fontWeight:600,marginBottom:8}}>{label}</div><div style={{fontSize:26,fontWeight:800,color:col||C.txt,letterSpacing:'-0.02em',...NUM}}>{val}</div>{sub&&<div style={{fontSize:12,color:onClick?C.pri:C.mut,fontWeight:onClick?700:500,marginTop:6}}>{sub}</div>}</div>);
+            const onDrop=(e)=>{ e.preventDefault(); const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]; if(f){ setBelegOpen(true); extractBeleg(f); } };
+            const ghost={display:'flex',alignItems:'center',gap:8,background:C.surf,color:C.txt,border:'1px solid '+C.bdr,borderRadius:12,padding:'11px 14px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'};
+            return (<>
+              <div style={{marginBottom:20}}>
+                <div style={{fontSize:14,color:C.sub,marginBottom:2}}>{greet}{who?', '+who:''}</div>
+                <div style={{fontSize:34,fontWeight:800,letterSpacing:'-0.03em'}}>Übersicht</div>
+                <div style={{fontSize:13.5,color:C.sub,marginTop:4}}>{MONTHS[mo]} {yr} · {openList.length?openList.length+' offene Aufgabe'+(openList.length===1?'':'n'):'nichts offen'} · {saved?'alles gespeichert':'speichert…'}</div>
+              </div>
+              <div style={{display:'flex',gap:14,flexWrap:'wrap',marginBottom:14}}>
+                {tile('Einnahmen · '+MONTHS[mo],fmt(tot.totalInc),C.grn)}
+                {tile('Ausgaben · '+MONTHS[mo],fmt(tot.totalExp),C.exp)}
+                {tile('Ergebnis · '+MONTHS[mo],(tot.net>=0?'+':'')+fmt(tot.net),tot.net>=0?C.txt:C.exp)}
+                {tile('Steuer-Rücklage '+yr, tax?fmt(tax.ruecklageMonat)+' / Monat':'—', C.txt, tax?('Bis heute geschätzt '+fmt(tax.gesamt)+' · Steuerprognose ›'):'Steuerprognose öffnen ›', ()=>{ setTxY(yr); setTab('steuer'); })}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'minmax(0,1.15fr) minmax(0,0.85fr)',gap:14,marginBottom:18,alignItems:'stretch'}}>
+                <div onDragOver={e=>e.preventDefault()} onDrop={onDrop} style={{...SC,padding:'22px 24px',border:'1.5px dashed '+hexA(C.pri,0.45),background:hexA(C.pri,0.04),display:'flex',flexDirection:'column',justifyContent:'center'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+                    <span style={{width:52,height:52,borderRadius:15,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.camera} sz={23} col="#fff"/></span>
+                    <div style={{flex:1,minWidth:200}}>
+                      <div style={{fontSize:16.5,fontWeight:800,letterSpacing:'-0.01em'}}>Beleg hochladen – Buqo verbucht ihn</div>
+                      <div style={{fontSize:13,color:C.sub,marginTop:3,lineHeight:1.5}}>Foto oder PDF hierher ziehen. Buqo liest Betrag, Datum, MwSt und Nummer, wählt Konto und Kategorie und legt den Beleg im richtigen Monat ab. Du bestätigst nur noch.</div>
                     </div>
-                    <div style={{fontSize:isMobile?40:50,fontWeight:800,color:tot.net>=0?C.txt:C.exp,...NUM,lineHeight:1}}>{tot.net>=0?'+':''}{fmt(tot.net)}</div>
-                    {gesamtOpen && (<>
-                      <div onClick={()=>setGesamtOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
-                      <div style={{position:'absolute',left:0,top:'100%',marginTop:10,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px 20px',boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:85,minWidth:240}}>
-                        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
-                          <span style={{width:10,height:10,borderRadius:'50%',background:C.grn,display:'inline-block'}}/>
-                          <span style={{fontSize:14,color:C.sub,flex:1}}>Einnahmen</span>
-                          <span style={{fontSize:15,fontWeight:700,color:C.txt,...NUM}}>{fmt(tot.totalInc)}</span>
-                        </div>
-                        <div style={{display:'flex',alignItems:'center',gap:10}}>
-                          <span style={{width:10,height:10,borderRadius:'50%',background:C.exp,display:'inline-block'}}/>
-                          <span style={{fontSize:14,color:C.sub,flex:1}}>Ausgaben</span>
-                          <span style={{fontSize:15,fontWeight:700,color:C.txt,...NUM}}>{fmtN(tot.totalExp)}</span>
-                        </div>
-                      </div>
-                    </>)}
+                  </div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:16}}>
+                    <button onClick={()=>setBelegOpen(true)} style={{...ghost,background:C.act,color:C.actTxt,border:'none'}}><Ic p={P.upload} sz={15} col={C.actTxt}/> Beleg wählen</button>
+                    <button onClick={()=>{setTab('import');setImportTab('bank');}} style={ghost}><Ic p={P.bank} sz={15} col={C.txt}/> Kontoauszug importieren</button>
+                    <button onClick={()=>setTab('rechnung')} style={ghost}><Ic p={P.receipt} sz={15} col={C.txt}/> Rechnung schreiben</button>
                   </div>
                 </div>
-                {/* Slider */}
-                <div style={{position:'relative',marginBottom:24}}>
-                  {!isMobile && <button onClick={()=>scrollBy(-1)} title="Zurück" style={{...arrowBtn,position:'absolute',left:-46,top:'50%',transform:'translateY(-50%)',zIndex:5}}>‹</button>}
-                  {!isMobile && <button onClick={()=>scrollBy(1)} title="Weiter" style={{...arrowBtn,position:'absolute',right:-46,top:'50%',transform:'translateY(-50%)',zIndex:5}}>›</button>}
-                  <div ref={quellenScrollRef} style={{display:'flex',gap:14,overflowX:'auto',scrollbarWidth:'none',scrollSnapType:'x mandatory',paddingBottom:4}}>
-                    {konten.map(k=>{ const erg=k.inc-k.exp; const c=acol(k.key), tint=hexA(c,0.13); const open=openAcct===k.key; const toggle=()=>{ if(k.kind==='prop')setSp(k.pid); setOpenAcct(k.key); }; return (
-                      <div key={k.key} onClick={toggle} style={{flexShrink:0,width:isMobile?'82%':'calc((100% - 28px)/3)',scrollSnapAlign:'start',background:open?tint:C.surf2,border:'1px solid '+(open?c:'transparent'),borderRadius:18,padding:'18px 20px',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:16,fontWeight:500,color:C.sub,marginBottom:7,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.name}</div>
-                          <div style={{fontSize:27,fontWeight:800,color:erg>=0?C.grn:C.exp,...NUM,lineHeight:1}}>{fmt(erg)}</div>
-                        </div>
-                        <button onClick={e=>{e.stopPropagation(); setIconPick(k.key);}} title="Konto bearbeiten" style={{width:46,height:46,borderRadius:13,background:c,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={k.icon} sz={22} col={'#0A0A0A'}/></button>
-                      </div>
-                    ); })}
-                  </div>
+                <div style={{...SC,padding:'18px 20px'}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}><div style={{fontSize:15,fontWeight:700}}>Jetzt erledigen</div><button onClick={()=>setTab('aufgaben')} style={{background:'none',border:'none',color:C.pri,fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle To-dos ›</button></div>
+                  {open.length===0 ? <div style={{fontSize:13.5,color:C.sub,padding:'10px 0',lineHeight:1.5}}>Alles erledigt. Buqo legt hier automatisch To-dos an, wenn ein Beleg fehlt, eine Rechnung überfällig ist oder etwas doppelt aussieht.</div> : open.map(t=>(
+                    <div key={t.id} style={{display:'flex',alignItems:'flex-start',gap:10,borderBottom:'1px solid '+C.sep,padding:'9px 0'}}>
+                      <button onClick={()=>toggleTodoDone(t.id)} title="Erledigt" style={{width:18,height:18,borderRadius:'50%',border:'1.5px solid '+C.bdrM,background:'none',cursor:'pointer',flexShrink:0,marginTop:1,padding:0}}/>
+                      <button onClick={()=>{ if(t.ref) openTodoRef(t); else setTab('aufgaben'); }} style={{flex:1,minWidth:0,background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><span style={{display:'block',fontSize:13.5,fontWeight:600,color:C.txt}}>{t.title}</span>{t.note&&<span style={{display:'block',fontSize:12,color:C.sub,marginTop:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.note}</span>}</button>
+                    </div>
+                  ))}
+                  {openList.length>5 && <div style={{fontSize:12,color:C.mut,marginTop:8}}>+ {openList.length-5} weitere</div>}
                 </div>
-              </>
-            );
+              </div>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}><div style={{fontSize:15,fontWeight:700}}>Deine Konten · {MONTHS[mo]}</div><button onClick={()=>{setOpenAcct(null);setTab('quellen');}} style={{background:'none',border:'none',color:C.pri,fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle Konten ›</button></div>
+              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(auto-fill, minmax(220px, 1fr))',gap:14,marginBottom:14}}>
+                {konten.map(k=>{ const erg=k.inc-k.exp; const c=acol(k.key); return (
+                  <button key={k.key} onClick={k.go} style={{...SC,padding:'18px 18px',cursor:'pointer',textAlign:'left',fontFamily:'inherit',display:'flex',flexDirection:'column',gap:14,color:C.txt}}>
+                    <span style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}><span style={{width:36,height:36,borderRadius:11,background:c,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={k.icon} sz={17} col="#0A0A0A"/></span><span style={{fontSize:15,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.name}</span></span>
+                    <span><span style={{display:'block',fontSize:22,fontWeight:800,color:erg>=0?C.txt:C.exp,letterSpacing:'-0.02em',...NUM}}>{erg>=0?'+':''}{fmt(erg)}</span><span style={{display:'block',fontSize:12,color:C.mut,marginTop:3,...NUM}}>{fmt(k.inc)} ein · {fmt(k.exp)} aus</span></span>
+                  </button>
+                ); })}
+              </div>
+            </>);
           })()}
 
           {/* ══ QUELLEN (Konten-Grid) ══ */}
@@ -4259,8 +4361,8 @@ function App({session}) {
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
                 {[
                   // Auf dem Desktop haben Rechnungen/Bank/Kunden/Aufgaben schon ein eigenes Icon in der Rail — hier nur auf Mobile zusätzlich zeigen (dort gibt's keine Rail).
-                  ...(isMobile?[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
-                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},
+                  ...(isMobile?[{id:'belege',label:'Belege',icon:P.clip},{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
+                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.percent},{id:'berater',label:'KI-Berater',icon:P.spark},{id:'kosten',label:'KI-Kosten',icon:P.layers},{id:'settings',label:'Einstellungen',icon:P.gear},
                 ].map(m=>(
                   <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
@@ -4271,7 +4373,7 @@ function App({session}) {
           )}
 
           {/* ══ IMMOBILIEN ══ */}
-          {(tab==='immo' || ((tab==='quellen'||tab==='home') && PROPS.includes(openAcct) && openAcct===sp)) && (()=>{
+          {(tab==='immo' || (tab==='quellen' && PROPS.includes(openAcct) && openAcct===sp)) && (()=>{
             const PALETTE=['#8FE3C6','#ABC4FF','#FFC7A6','#E8A39E','#C9B6FF','#9FD8FF'];
             const ICONS={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
             const pcol=(pid)=>PALETTE[PROPS.indexOf(pid)%PALETTE.length];
@@ -4388,7 +4490,7 @@ function App({session}) {
           })()}
 
           {/* ══ UNTERNEHMEN ══ */}
-          {(tab==='unter' || ((tab==='quellen'||tab==='home') && openAcct==='unter')) && <>
+          {(tab==='unter' || (tab==='quellen' && openAcct==='unter')) && <>
             {tab!=='home' && (<>
               <button onClick={()=>{setOpenAcct(null);if(tab!=='quellen')setTab('quellen');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:8,display:'flex',alignItems:'center',gap:4}}>‹ Konten</button>
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
@@ -4460,7 +4562,7 @@ function App({session}) {
           </>}
 
           {/* ══ PRIVAT ══ */}
-          {(tab==='privat' || ((tab==='quellen'||tab==='home') && openAcct==='privat')) && <>
+          {(tab==='privat' || (tab==='quellen' && openAcct==='privat')) && <>
             {tab!=='home' && (<>
               <button onClick={()=>{setOpenAcct(null);if(tab!=='quellen')setTab('quellen');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:8,display:'flex',alignItems:'center',gap:4}}>‹ Konten</button>
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
@@ -6092,13 +6194,18 @@ function App({session}) {
           })()}
 
           {/* ══ STEUER ══ */}
-          {tab==='steuer' && <>
-            <div style={{marginBottom:20}}>
-              <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Steuer-Übersicht</div>
-              <div style={{fontSize:13,color:C.sub}}>{yr} · Mönchengladbach, NRW · Schätzungen ohne Gewähr</div>
-            </div>
+          {/* ══ STEUERPROGNOSE & OPTIMIERUNG – deterministisch (src/tax/estg.js), KI erklärt nur ══ */}
+          {tab==='steuer' && (()=>{
+            const tp=data.taxProfile||{}; const prof=tp[txY]||{};
+            const setTaxProfile=(patch)=>setData(prev=>{ const all={...(prev.taxProfile||{})}; all[txY]={...(all[txY]||{}),...patch}; return {...prev, taxProfile:all}; });
+            const setMinijobs=(list)=>setData(prev=>({...prev, taxProfile:{...(prev.taxProfile||{}), minijobs:list}}));
+            const absender=[(data.profile||{}).name,(names.unternehmen||'')].filter(Boolean).join(' · ');
+            return (
+              <TaxCockpit ui={{C,SC,SS,NUM,fmt,Ic,P,hexA,AI_GRADIENT}} year={txY} setYear={setTxY} years={TAX_YEARS} names={names} propIds={PROPS}
+                profile={prof} setProfile={setTaxProfile} minijobs={tp.minijobs||[]} setMinijobs={setMinijobs} facts={taxFactsFor(txY)}
+                aiInvoke={aiInvoke} setToast={setToast} isMobile={isMobile} goTab={(t)=>{ if(t==='steuern') setStY(txY); setTab(t); }} absender={absender}>
             {/* Persönlicher Steuerberater-Assistent */}
-            {(()=>{ const tnote=(data.taxNotes||{})[yr]; const items=(tnote&&tnote.items)||[];
+            {(()=>{ const tnote=(data.taxNotes||{})[txY]; const items=(tnote&&tnote.items)||[];
               const TY={tipp:{c:'#7BC2AA',ic:P.spark,lbl:'Tipp'},sparen:{c:'#7BC2AA',ic:P.spark,lbl:'Sparpotenzial'},achtung:{c:C.exp,ic:P.doc,lbl:'Achtung'},frage:{c:'#ABC4FF',ic:P.note,lbl:'Rückfrage'}};
               return (
               <div style={{marginBottom:20}}>
@@ -6111,7 +6218,7 @@ function App({session}) {
                 </div>
                 {advOpen && (items.length ? (
                   <div style={{display:'flex',flexDirection:'column',gap:8}}>
-                    {items.map((h,i)=>{ const ty=TY[h.typ]||TY.tipp; const open=!!taxOpen[i]; const isQ=h.typ==='frage'; const ans=(tnote.answers||{})[h.titel]||''; const loc=h.belegId?findItemLocation(h.belegId,yr):null; return (
+                    {items.map((h,i)=>{ const ty=TY[h.typ]||TY.tipp; const open=!!taxOpen[i]; const isQ=h.typ==='frage'; const ans=(tnote.answers||{})[h.titel]||''; const loc=h.belegId?findItemLocation(h.belegId,txY):null; return (
                       <div key={i} style={{background:C.surf2,border:'1px solid '+(open?hexA(ty.c,0.4):C.bdr),borderRadius:12,overflow:'hidden'}}>
                         <button onClick={()=>setTaxOpen(o=>({...o,[i]:!o[i]}))} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',padding:'12px 14px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
                           <span style={{width:26,height:26,borderRadius:8,background:hexA(ty.c,0.16),display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={ty.ic} sz={14} col={ty.c}/></span>
@@ -6136,69 +6243,13 @@ function App({session}) {
                     <div style={{fontSize:11,color:C.mut,marginTop:4}}>Erstellt: {new Date(tnote.ts).toLocaleDateString('de-DE')} · keine verbindliche Steuerberatung</div>
                   </div>
                 ) : (
-                  <div style={{...SC,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint,fontSize:13,color:C.sub,lineHeight:1.5}}>Dein persönlicher Steuerberater geht deine Zahlen für {yr} durch und gibt dir kurze Hinweise (worauf achten, was absetzbar ist, wo du sparen kannst) sowie gezielte Rückfragen. Tippe auf einen Hinweis zum Aufklappen.</div>
+                  <div style={{...SC,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint,fontSize:13,color:C.sub,lineHeight:1.5}}>Dein persönlicher Steuerberater geht deine Zahlen für {txY} durch und gibt dir kurze Hinweise (worauf achten, was absetzbar ist, wo du sparen kannst) sowie gezielte Rückfragen. Tippe auf einen Hinweis zum Aufklappen.</div>
                 ))}
               </div>
             ); })()}
-            <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:20}}>
-              <KPI label="Jahreseinnahmen"  val={fmt(yrTot.totalInc)} color={C.txt} />
-              <KPI label="Jahresausgaben"   val={fmtN(yrTot.totalExp)} color={C.red} />
-              <KPI label="Jahresgewinn"      val={(yrTot.net>=0?'+':'-')+fmt(Math.abs(yrTot.net))} color={yrTot.net>=0?C.txt:C.red} />
-            </div>
-            <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:20}}>
-              <div style={{...SC,flex:1,minWidth:200}}>
-                <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:10}}>Einkommensteuer</div>
-                <div style={{fontSize:12,color:C.mut,marginBottom:10}}>Basis: Jahresgewinn {fmt(Math.max(0,yrTot.net))}</div>
-                <div style={{fontSize:26,fontWeight:700,color:C.txt,...NUM,marginBottom:8}}>{fmt(taxESt)}</div>
-                {taxESt>0 ? <div style={{fontSize:12,color:C.sub,marginBottom:10}}>Effektivsteuersatz {((taxESt/Math.max(1,yrTot.net))*100).toFixed(1)} %</div> : null}
-                <div style={{background:'rgba(255,180,0,0.10)',borderRadius:8,padding:'7px 10px',fontSize:11,color:C.amb}}>
-                  Vorauszahlungen: Mrz · Jun · Sep · Dez
-                </div>
-              </div>
-              <div style={{...SC,flex:1,minWidth:200}}>
-                <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:10}}>Gewerbesteuer</div>
-                <div style={{fontSize:12,color:C.mut,marginBottom:10}}>Hebesatz Mönchengladbach 435 %</div>
-                <div style={{fontSize:26,fontWeight:700,color:C.txt,...NUM,marginBottom:10}}>{fmt(taxGewSt)}</div>
-                <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.sub,marginBottom:6}}>
-                  <span>Freibetrag</span><span style={NUM}>24.500 €</span>
-                </div>
-                <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.sub}}>
-                  <span>{names.unternehmen}-Gewinn</span><span style={NUM}>{fmt(taxUGwn)}</span>
-                </div>
-              </div>
-            </div>
-            <div style={{background:C.ambL,border:'1px solid rgba(255,180,0,0.22)',borderRadius:16,padding:'20px 24px',marginBottom:20}}>
-              <div style={{fontSize:12,fontWeight:600,color:C.amb,marginBottom:14}}>Empfohlene Steuerrücklage</div>
-              <div style={{display:'flex',gap:32,flexWrap:'wrap',alignItems:'flex-end'}}>
-                <div>
-                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Geschätzte Jahressteuer</div>
-                  <div style={{fontSize:30,fontWeight:700,color:C.amb,...NUM}}>{fmt(taxTotal)}</div>
-                </div>
-                <div>
-                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Monatlich zurücklegen</div>
-                  <div style={{fontSize:22,fontWeight:700,color:C.txt,...NUM}}>{fmt(taxMonthly)}</div>
-                </div>
-                <div style={{fontSize:12,color:C.mut}}>ESt {fmt(taxESt)} + GewSt {fmt(taxGewSt)}</div>
-              </div>
-            </div>
-            <div style={SC}>
-              <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:14}}>NRW — Wichtige Termine & Infos</div>
-              {[
-                ['Finanzamt','Finanzamt Mönchengladbach · Finanzamt Krefeld'],
-                ['ESt-Erklärung','Bis 31. Juli des Folgejahres (mit Steuerberater: 28. Feb.)'],
-                ['ESt-Vorauszahlung','10. März · 10. Juni · 10. September · 10. Dezember'],
-                ['Gewerbesteuer','Freibetrag 24.500 € · Hebesatz MG 435 % · Anrechnung auf ESt möglich'],
-                ['Kirchensteuer','9 % der ESt in NRW (falls kirchensteuerpflichtig)'],
-                ['Airbnb / Kurzzeit','Airbnb führt USt seit 2024 direkt ab — in der EÜR dennoch angeben'],
-                ['Minijob','Pauschalabgaben ca. 31 % des Bruttolohns · über die Minijobzentrale abführen'],
-              ].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:14,padding:'10px 0',borderBottom:'1px solid '+C.sep,fontSize:13}}>
-                  <span style={{color:C.sub,minWidth:140,flexShrink:0,fontWeight:500}}>{k}</span>
-                  <span style={{color:C.txt,lineHeight:1.5}}>{v}</span>
-                </div>
-              ))}
-            </div>
-          </>}
+              </TaxCockpit>
+            );
+          })()}
 
           {/* ══ BELEGUNG ══ */}
           {tab==='kal' && <>
@@ -6319,15 +6370,15 @@ function App({session}) {
         ); };
         return (
           <div style={{position:'fixed',left:0,right:0,bottom:0,zIndex:60,background:C.surf,borderTop:'1px solid '+C.bdr,display:'flex',alignItems:'flex-end',justifyContent:'space-around',height:66,paddingBottom:'max(6px, env(safe-area-inset-bottom))'}}>
-            {cell('quellen','Home',P.grid,['quellen','immo','unter','privat'])}
-            {cell('belege','Belege',P.clip,['belege'])}
+            {cell('home','Übersicht',P.home,['home'])}
+            {cell('quellen','Konten',P.grid,['quellen','immo','unter','privat'])}
             <div style={{flex:1,display:'flex',justifyContent:'center'}}>
               <button onClick={()=>setBelegOpen(true)} title="Beleg erfassen" style={{width:56,height:56,borderRadius:'50%',background:C.act,border:'4px solid '+C.bg,color:C.actTxt,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',marginTop:-22,boxShadow:'0 6px 18px rgba(0,0,0,0.45)'}}>
                 <Ic p={P.camera} sz={24} col={C.actTxt}/>
               </button>
             </div>
             <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',color:botOpen?C.pri:C.sub,paddingTop:8,position:'relative'}}><Ic p={P.spark} sz={20} col={botOpen?C.pri:C.sub}/><span style={{fontSize:10,fontWeight:600}}>Assistent</span>{botUnread>0 && <span style={{position:'absolute',top:3,right:'calc(50% - 21px)',minWidth:17,height:17,borderRadius:99,background:C.red,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',boxSizing:'border-box'}}>{botUnread}</span>}</button>
-            {cell('mehr','Sonstiges',P.menu,['mehr','kal','yr','steuer','steuern','aufgaben','raten','kunden','download','kosten'])}
+            {cell('mehr','Mehr',P.menu,['mehr','belege','rechnung','import','berater','kal','yr','steuer','steuern','aufgaben','raten','kunden','download','kosten','settings'])}
           </div>
         );
       })()}
@@ -6358,6 +6409,14 @@ function App({session}) {
               {belegRes.waehrung && belegRes.waehrung!=='EUR' && !belegRes.fx && (
                 <div style={{background:C.ambL,border:'1px solid rgba(255,180,0,0.4)',borderRadius:10,padding:'10px 12px',marginBottom:12,fontSize:12,color:C.amb,lineHeight:1.5}}>⚠ Beleg scheint in {belegRes.waehrung} ausgestellt zu sein – Kurs konnte nicht geladen werden, Betrag unten ist noch in {belegRes.waehrung}, bitte manuell in EUR umrechnen.</div>
               )}
+              <div style={{background:hexA(C.pri,0.07),border:'1px solid '+hexA(C.pri,0.25),borderRadius:14,padding:'14px 16px',marginBottom:12}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}><span style={{width:26,height:26,borderRadius:8,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={14} col="#fff"/></span><span style={{fontSize:13,fontWeight:700}}>Buqo hat den Beleg gelesen</span></div>
+                <div style={{fontSize:18,fontWeight:800,letterSpacing:'-0.02em',color:C.txt}}>{belegRes.name||'Beleg'} · {fmt(num(belegRes.amount))}</div>
+                <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>{belegRes.kind==='ein'?'Einnahme':'Ausgabe'}{belegRes.datum?' · '+belegRes.datum:''}{num(belegRes.mwst)?' · '+num(belegRes.mwst)+' % MwSt':''}{belegRes.belegnr?' · Nr. '+belegRes.belegnr:''}</div>
+                <div style={{fontSize:13,color:C.txt,marginTop:10,lineHeight:1.5}}>Verbuchen als <b>{moveLabel(belegDest)}</b> · {belegRes.category||'ohne Kategorie'} · {MONTHS[belegM]} {belegY}{belegRes.suggReason && <span style={{color:C.mut}}> · {belegRes.suggReason}</span>}</div>
+              </div>
+              <button onClick={()=>setBelegDetails(o=>!o)} style={{display:'flex',alignItems:'center',gap:6,background:'none',border:'none',color:C.pri,fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit',padding:0,marginBottom:12}}><span style={{display:'inline-flex',transition:'transform .16s',transform:belegDetails?'rotate(180deg)':'none'}}><Ic p={P.down} sz={13} col={C.pri}/></span> {belegDetails?'Details ausblenden':'Details anpassen (Konto, Beträge, Kategorie, Monat)'}</button>
+              {belegDetails && (<>
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Name / Kunde</div>
               <input value={belegRes.name} onChange={e=>setBelegRes(r=>({...r,name:e.target.value}))} style={{...SS,marginBottom:10,textAlign:'left'}} />
               <div style={{display:'flex',gap:8,marginBottom:10}}>
@@ -6392,11 +6451,14 @@ function App({session}) {
               </div>
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Konto</div>
               <select value={belegDest} onChange={e=>setBelegDest(e.target.value)} style={{...SS,marginBottom:10}}>{moveTargets.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
+              <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kategorie</div>
+              <select value={belegRes.category||''} onChange={e=>setBelegRes(r=>({...r,category:e.target.value}))} style={{...SS,marginBottom:10}}><option value="">— keine —</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Monat</div>
               <div style={{display:'flex',gap:8,marginBottom:16}}>
                 <select value={belegM} onChange={e=>setBelegM(+e.target.value)} style={{...SS,flex:1}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
                 <select value={belegY} onChange={e=>setBelegY(+e.target.value)} style={{...SS,width:100}}>{[yr-1,yr,yr+1].map(y=><option key={y} value={y}>{y}</option>)}</select>
               </div>
+              </>)}
               {belegDom(belegDest) && (<>
                 {belegNeedsNutzung(belegRes,belegDest) ? (
                   <div style={{marginBottom:14}}>
@@ -6438,7 +6500,7 @@ function App({session}) {
                   </div>
                 )}
               </>)}
-              <button onClick={saveBeleg} disabled={belegBusy} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:belegBusy?'default':'pointer',opacity:belegBusy?0.6:1,fontFamily:'inherit'}}>{belegBusy?'Speichert…':'Speichern + Beleg ablegen'}</button>
+              <button onClick={saveBeleg} disabled={belegBusy} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:belegBusy?'default':'pointer',opacity:belegBusy?0.6:1,fontFamily:'inherit'}}>{belegBusy?'Verbucht…':'Verbuchen + Beleg ablegen'}</button>
               <button onClick={()=>{setBelegRes(null); belegBlobRef.current=null;}} disabled={belegBusy} style={{width:'100%',background:'none',border:'none',color:C.mut,fontSize:13,cursor:'pointer',fontFamily:'inherit',marginTop:10}}>Anderen Beleg auslesen</button>
             </>
           )}
@@ -6975,13 +7037,6 @@ function App({session}) {
           </div>
         </div>
       )}
-      {!isMobile && !botOpen && (
-        <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} title="Assistent" style={{position:'fixed',right:24,bottom:24,width:56,height:56,borderRadius:'50%',background:AI_GRADIENT,border:'none',cursor:'pointer',zIndex:115,boxShadow:'0 10px 30px rgba(0,0,0,0.45)',display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <Ic p={P.spark} sz={24} col={'#FFFFFF'}/>
-          {botUnread>0 && <span style={{position:'absolute',top:-4,right:-4,minWidth:21,height:21,borderRadius:99,background:C.red,color:'#fff',fontSize:11.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg,boxSizing:'border-box'}}>{botUnread}</span>}
-        </button>
-      )}
-
       {/* ── Rechnung per E-Mail senden (Compose) ── */}
       {mailCompose && (()=>{ const mc=mailCompose; const co=companyFor(mc.inv.domain||'unter')||{}; const noSender=!String(co.senderEmail||'').trim(); const fromName=String(co.senderName||co.name||'').trim(); return (
         <div onClick={()=>{ if(!mc.sending) setMailCompose(null); }} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:170,display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?12:24}}>
@@ -7066,13 +7121,14 @@ function AdvisorHome({session}) {
 function Root() {
   const [session,setSession]=useState(undefined);
   const [profile,setProfile]=useState(undefined);   // {role} | null
+  const [recovery,setRecovery]=useState(false);     // Nutzer kam über den Passwort-Reset-Link
   const inviteToken = (()=>{ try{ return new URLSearchParams(window.location.search).get('advisor_invite')||null; }catch(e){ return null; } })();
   const acceptedRef = useRef(false);
 
   useEffect(()=>{
     const t=setTimeout(()=>setSession(s=>s===undefined?null:s),7000);
     sb.auth.getSession().then(({data})=>{ clearTimeout(t); setSession(data.session||null); });
-    const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s));
+    const {data:sub}=sb.auth.onAuthStateChange((ev,s)=>{ setSession(s); if(ev==='PASSWORD_RECOVERY') setRecovery(true); });
     return ()=>{ clearTimeout(t); try{sub.subscription.unsubscribe();}catch(e){} };
   },[]);
 
@@ -7096,6 +7152,7 @@ function Root() {
 
   if(session===undefined) return <Splash text="Wird geladen…" />;
   if(!session) return <Login inviteToken={inviteToken} />;
+  if(recovery) return <NewPassword onDone={()=>{ setRecovery(false); try{ window.history.replaceState(null,'',window.location.pathname); }catch(e){} }} />;
   if(profile===undefined) return <Splash text="Wird geladen…" />;
   if(profile && profile.role==='advisor') return <AdvisorHome session={session} />;
   return <App session={session} />;
