@@ -1129,36 +1129,62 @@ function Splash({text}) {
   return <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',color:C.sub,fontFamily:FONT,fontSize:14}}>{text}</div>;
 }
 
+// Klartext-Grund für Auth-Fehler (Supabase liefert englische Codes; die App zeigte bisher nur „Login fehlgeschlagen")
+function authErrorText(error){
+  const code=String((error&&error.code)||'').toLowerCase(); const msg=String((error&&error.message)||'').toLowerCase();
+  if(code==='email_not_confirmed'||/not confirmed/.test(msg)) return {kind:'unconfirmed', text:'Deine E-Mail-Adresse ist noch nicht bestätigt. Klick den Link in der Bestätigungs-Mail (auch im Spam-Ordner nachsehen).'};
+  if(code==='invalid_credentials'||/invalid login credentials|invalid_grant/.test(msg)) return {kind:'credentials', text:'E-Mail oder Passwort stimmen nicht. Noch kein Konto? Dann unten registrieren.'};
+  if(code==='over_request_rate_limit'||code==='over_email_send_rate_limit'||/rate limit/.test(msg)) return {kind:'rate', text:'Zu viele Versuche. Bitte ein paar Minuten warten und erneut probieren.'};
+  if(code==='user_already_exists'||/already registered|already exists/.test(msg)) return {kind:'exists', text:'Für diese E-Mail gibt es schon ein Konto. Bitte einloggen oder Passwort zurücksetzen.'};
+  if(code==='weak_password'||/password should be|weak/.test(msg)) return {kind:'weak', text:'Das Passwort ist zu schwach. Mindestens 6 Zeichen.'};
+  if(/fetch|network|failed to|load failed|timeout/.test(msg)) return {kind:'network', text:'Supabase ist nicht erreichbar. Ist das Projekt pausiert (kostenloser Tarif pausiert nach 7 Tagen ohne Nutzung) oder bist du offline? Im Supabase-Dashboard „Restore project" klicken.'};
+  return {kind:'other', text:'Login fehlgeschlagen: '+((error&&error.message)||'unbekannter Fehler')};
+}
+// Rücksprung-Adresse für Bestätigungs-/Reset-Mails: die App liegt unter /buqo-io/, nicht unter /
+const appUrl=(q)=>{ try{ return window.location.origin+window.location.pathname+(q||''); }catch(e){ return '/'; } };
+
 function Login({inviteToken}) {
-  const [mode,setMode]=useState('login');            // 'login' | 'signup'
+  const [mode,setMode]=useState('login');            // 'login' | 'signup' | 'reset'
   const [role,setRole]=useState(inviteToken?'advisor':'user'); // Rolle bei Registrierung
   const [email,setEmail]=useState('');
   const [pw,setPw]=useState('');
   const [name,setName]=useState('');
   const [err,setErr]=useState('');
+  const [errKind,setErrKind]=useState('');
   const [info,setInfo]=useState('');
   const [busy,setBusy]=useState(false);
+  const fail=(error)=>{ const e=authErrorText(error); setErr(e.text); setErrKind(e.kind); setBusy(false); };
   const submit=async e=>{
     e.preventDefault();
-    setBusy(true); setErr(''); setInfo('');
+    setBusy(true); setErr(''); setErrKind(''); setInfo('');
+    if(mode==='reset'){
+      const {error}=await sb.auth.resetPasswordForEmail(email.trim(),{redirectTo:appUrl()});
+      if(error){ fail(error); return; }
+      setInfo('Falls ein Konto zu '+email.trim()+' existiert, ist jetzt eine Mail mit einem Link zum Zurücksetzen unterwegs. Der Link öffnet Buqo, dort setzt du das neue Passwort.'); setBusy(false);
+      return;
+    }
     if(mode==='login'){
       const {error}=await sb.auth.signInWithPassword({email:email.trim(),password:pw});
-      if(error){ setErr('Login fehlgeschlagen. Bitte E-Mail und Passwort prüfen.'); setBusy(false); }
+      if(error){ fail(error); }
       return;
     }
     // Registrierung
     const {data,error}=await sb.auth.signUp({
       email:email.trim(), password:pw,
-      options:{ data:{ role, full_name:name.trim()||null }, emailRedirectTo: window.location.origin+(inviteToken?('/?advisor_invite='+inviteToken):'/') }
+      options:{ data:{ role, full_name:name.trim()||null }, emailRedirectTo: appUrl(inviteToken?('?advisor_invite='+inviteToken):'') }
     });
-    if(error){ setErr(error.message||'Registrierung fehlgeschlagen.'); setBusy(false); return; }
+    if(error){ fail(error); return; }
     if(data && data.session){ /* auto eingeloggt → Root übernimmt */ }
+    else if(data && data.user && Array.isArray(data.user.identities) && data.user.identities.length===0){ setErr('Für diese E-Mail gibt es schon ein Konto. Bitte einloggen oder Passwort zurücksetzen.'); setErrKind('exists'); setBusy(false); }
     else { setInfo('Fast fertig! Bitte bestätige deine E-Mail-Adresse über den Link, den wir dir gerade geschickt haben.'); setBusy(false); }
   };
+  const resendConfirm=async()=>{ if(!email.trim()) return; setBusy(true); const {error}=await sb.auth.resend({type:'signup',email:email.trim(),options:{emailRedirectTo:appUrl()}}); setBusy(false); if(error){ fail(error); return; } setErr(''); setErrKind(''); setInfo('Bestätigungs-Mail wurde erneut an '+email.trim()+' geschickt.'); };
   const inp = {width:'100%',background:C.surf3,border:'none',borderRadius:10,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit'};
+  const link = {background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0};
   const roleBtn=(k,label)=>{ const on=role===k; return (
     <button type="button" onClick={()=>setRole(k)} style={{flex:1,background:on?C.act:C.surf3,color:on?C.actTxt:C.sub,border:'1px solid '+(on?C.act:C.bdr),borderRadius:10,padding:'9px 8px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{label}</button>
   ); };
+  const switchMode=(m)=>{ setMode(m); setErr(''); setErrKind(''); setInfo(''); };
   return (
     <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:FONT,padding:20,overflow:'auto'}}>
       <form onSubmit={submit} style={{width:'100%',maxWidth:360,background:C.surf,borderRadius:18,padding:28,border:'1px solid '+C.bdr,margin:'auto'}}>
@@ -1171,7 +1197,7 @@ function Login({inviteToken}) {
             Du wurdest als <b>Steuerberater</b> eingeladen. {mode==='login'?'Melde dich an,':'Registriere dich,'} um den Zugriff anzunehmen.
           </div>
         ) : (
-          <div style={{fontSize:13,color:C.sub,marginBottom:20}}>{mode==='login'?'Bitte einloggen':'Konto erstellen'}</div>
+          <div style={{fontSize:13,color:C.sub,marginBottom:20}}>{mode==='login'?'Bitte einloggen':mode==='reset'?'Passwort zurücksetzen':'Konto erstellen'}</div>
         )}
         {mode==='signup' && (
           <div style={{marginBottom:14}}>
@@ -1185,18 +1211,44 @@ function Login({inviteToken}) {
         </>)}
         <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>E-Mail</label>
         <input type="email" value={email} onChange={e=>setEmail(e.target.value)} autoFocus required style={{...inp,marginBottom:14}} />
-        <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Passwort</label>
-        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required minLength={6} style={{...inp,marginBottom:(err||info)?10:18}} />
-        {err && <div style={{fontSize:12,color:C.red,marginBottom:14}}>{err}</div>}
+        {mode!=='reset' && (<>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:6}}>
+            <label style={{fontSize:12,color:C.sub}}>Passwort</label>
+            {mode==='login' && <button type="button" onClick={()=>switchMode('reset')} style={{...link,fontSize:12}}>Passwort vergessen?</button>}
+          </div>
+          <input type="password" value={pw} onChange={e=>setPw(e.target.value)} required minLength={6} autoComplete={mode==='login'?'current-password':'new-password'} style={{...inp,marginBottom:(err||info)?10:18}} />
+        </>)}
+        {err && <div style={{fontSize:12.5,color:C.red,marginBottom:14,lineHeight:1.5}}>{err}{errKind==='unconfirmed' && <div style={{marginTop:6}}><button type="button" onClick={resendConfirm} disabled={busy} style={link}>Bestätigungs-Mail erneut senden</button></div>}{errKind==='credentials' && <div style={{marginTop:6}}><button type="button" onClick={()=>switchMode('reset')} style={link}>Passwort zurücksetzen</button></div>}</div>}
         {info && <div style={{fontSize:12.5,color:C.grn,marginBottom:14,lineHeight:1.5}}>{info}</div>}
         <button type="submit" disabled={busy} style={{width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.6:1}}>
-          {busy?'Bitte warten…':(mode==='login'?'Einloggen':'Konto erstellen')}
+          {busy?'Bitte warten…':(mode==='login'?'Einloggen':mode==='reset'?'Link zum Zurücksetzen senden':'Konto erstellen')}
         </button>
         <div style={{textAlign:'center',marginTop:16,fontSize:13,color:C.sub}}>
           {mode==='login'
-            ? <span>Noch kein Konto? <button type="button" onClick={()=>{setMode('signup');setErr('');setInfo('');}} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>Registrieren</button></span>
-            : <span>Schon ein Konto? <button type="button" onClick={()=>{setMode('login');setErr('');setInfo('');}} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>Einloggen</button></span>}
+            ? <span>Noch kein Konto? <button type="button" onClick={()=>switchMode('signup')} style={link}>Registrieren</button></span>
+            : <span>Schon ein Konto? <button type="button" onClick={()=>switchMode('login')} style={link}>Einloggen</button></span>}
         </div>
+      </form>
+    </div>
+  );
+}
+
+/* ══ Neues Passwort setzen (nach Klick auf den Reset-Link aus der Mail) ══ */
+function NewPassword({onDone}) {
+  const [pw,setPw]=useState(''); const [pw2,setPw2]=useState(''); const [err,setErr]=useState(''); const [busy,setBusy]=useState(false);
+  const inp = {width:'100%',background:C.surf3,border:'none',borderRadius:10,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit'};
+  const submit=async e=>{ e.preventDefault(); setErr(''); if(pw.length<6){ setErr('Mindestens 6 Zeichen.'); return; } if(pw!==pw2){ setErr('Die Passwörter stimmen nicht überein.'); return; } setBusy(true); const {error}=await sb.auth.updateUser({password:pw}); setBusy(false); if(error){ setErr(authErrorText(error).text); return; } onDone(); };
+  return (
+    <div style={{position:'fixed',inset:0,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:FONT,padding:20,overflow:'auto'}}>
+      <form onSubmit={submit} style={{width:'100%',maxWidth:360,background:C.surf,borderRadius:18,padding:28,border:'1px solid '+C.bdr,margin:'auto'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}><BuqoMark sz={30}/><div style={{fontSize:22,fontWeight:700,color:C.txt,letterSpacing:'-0.03em'}}>Buqo</div></div>
+        <div style={{fontSize:13,color:C.sub,marginBottom:20}}>Neues Passwort festlegen</div>
+        <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Neues Passwort</label>
+        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} autoFocus required minLength={6} autoComplete="new-password" style={{...inp,marginBottom:14}} />
+        <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Wiederholen</label>
+        <input type="password" value={pw2} onChange={e=>setPw2(e.target.value)} required minLength={6} autoComplete="new-password" style={{...inp,marginBottom:err?10:18}} />
+        {err && <div style={{fontSize:12.5,color:C.red,marginBottom:14,lineHeight:1.5}}>{err}</div>}
+        <button type="submit" disabled={busy} style={{width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:busy?'default':'pointer',fontFamily:'inherit',opacity:busy?0.6:1}}>{busy?'Speichert…':'Passwort speichern'}</button>
       </form>
     </div>
   );
@@ -7017,13 +7069,14 @@ function AdvisorHome({session}) {
 function Root() {
   const [session,setSession]=useState(undefined);
   const [profile,setProfile]=useState(undefined);   // {role} | null
+  const [recovery,setRecovery]=useState(false);     // Nutzer kam über den Passwort-Reset-Link
   const inviteToken = (()=>{ try{ return new URLSearchParams(window.location.search).get('advisor_invite')||null; }catch(e){ return null; } })();
   const acceptedRef = useRef(false);
 
   useEffect(()=>{
     const t=setTimeout(()=>setSession(s=>s===undefined?null:s),7000);
     sb.auth.getSession().then(({data})=>{ clearTimeout(t); setSession(data.session||null); });
-    const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s));
+    const {data:sub}=sb.auth.onAuthStateChange((ev,s)=>{ setSession(s); if(ev==='PASSWORD_RECOVERY') setRecovery(true); });
     return ()=>{ clearTimeout(t); try{sub.subscription.unsubscribe();}catch(e){} };
   },[]);
 
@@ -7047,6 +7100,7 @@ function Root() {
 
   if(session===undefined) return <Splash text="Wird geladen…" />;
   if(!session) return <Login inviteToken={inviteToken} />;
+  if(recovery) return <NewPassword onDone={()=>{ setRecovery(false); try{ window.history.replaceState(null,'',window.location.pathname); }catch(e){} }} />;
   if(profile===undefined) return <Splash text="Wird geladen…" />;
   if(profile && profile.role==='advisor') return <AdvisorHome session={session} />;
   return <App session={session} />;
