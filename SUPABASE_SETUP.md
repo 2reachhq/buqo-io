@@ -42,7 +42,8 @@ einem Rutsch und ist idempotent (kann auch auf dem bestehenden Projekt laufen).
 
    oder die vier Dateien aus `supabase/migrations/` in dieser Reihenfolge im SQL-Editor ausführen:
    `20260701120000_gmail_integration.sql`, `20260701130000_resend_inbound.sql`,
-   `20260702120000_billing_and_roles.sql`, `20260921120000_core_schema.sql`.
+   `20260702120000_billing_and_roles.sql`, `20260921120000_core_schema.sql`,
+   `20260921130000_signup_trigger_hardening.sql`.
 3. **App auf das Projekt zeigen** – in `app/src/main.jsx` die Konstanten `SB_URL` und `SB_KEY`
    (Project URL + anon public key aus *Settings → API*) eintragen, dann
    `cd app && npm ci && npm run build` und den Inhalt von `app/dist/` ins Repo-Root kopieren
@@ -66,6 +67,21 @@ einem Rutsch und ist idempotent (kann auch auf dem bestehenden Projekt laufen).
    ```sql
    select public.credit_topup('<AUTH-USER-UUID>', 5000, 'manuell', 'bonus');  -- 50,00 €
    ```
+
+## Wenn Login oder Registrierung scheitern
+
+| Meldung in der App / im Dashboard | Ursache | Abhilfe |
+|---|---|---|
+| „Supabase ist nicht erreichbar" / Netzwerkfehler | Projekt pausiert (Free-Tarif nach 7 Tagen Inaktivität) | Dashboard → „Restore project" |
+| „Database error saving new user" | Signup-Trigger schlägt fehl (Billing-Tabellen/Typ fehlen) | Migration `signup_trigger_hardening` ausführen |
+| „email rate limit exceeded" | Standard-SMTP erlaubt nur wenige Mails pro Stunde | Warten, oder Nutzer im Dashboard anlegen (*Authentication → Users → Add user*, „Auto Confirm") |
+| „Signups not allowed" | Registrierung deaktiviert | *Authentication → Providers → Email* einschalten, „Allow new users to sign up" |
+| „E-Mail noch nicht bestätigt" | Bestätigungslink nicht geklickt | Link klicken, „Bestätigungs-Mail erneut senden", oder „Confirm email" abschalten |
+| „E-Mail oder Passwort stimmen nicht" | falsches Passwort / kein Konto | „Passwort vergessen?" in der App |
+
+Schnellster Weg für die Eigen-Nutzung: den Nutzer direkt im Dashboard anlegen (*Authentication →
+Users → Add user → Create new user*, Häkchen „Auto Confirm User"). Das umgeht Bestätigungs-Mails
+und das Mail-Limit komplett.
 
 ## Datenmodell heute und der nächste Schritt
 
