@@ -3,6 +3,8 @@ import * as ReactDOM from 'react-dom/client';
 import { createClient } from '@supabase/supabase-js';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
+import TaxCockpit from './tax/TaxCockpit.jsx';
+import { YEARS as TAX_YEARS } from './tax/estg.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 window.pdfjsLib = pdfjsLib; // pdfToLines() below still reads it off window, unchanged
@@ -276,14 +278,6 @@ const calcTotals = (md, y, m) => {
   const totalInc=immoInc+unterInc, totalExp=immoExp+unterExp+privatExp;
   return {immoInc,immoExp,unterInc,unterExp,privatExp,totalInc,totalExp,net:totalInc-totalExp,acct};
 };
-const estESt = g => {
-  if(g<=11784)  return 0;
-  if(g<=17005)  return Math.round((g-11784)*0.22);
-  if(g<=66760)  return Math.round(1148+(g-17005)*0.30);
-  if(g<=277825) return Math.round(16074+(g-66760)*0.42);
-  return Math.round(104741+(g-277825)*0.45);
-};
-
 /* ══ Style atoms ══ */
 const SI  = {background:C.surf3,border:'none',borderRadius:8,color:C.txt,padding:'6px 10px',fontSize:13,textAlign:'right',outline:'none',fontFamily:'inherit'};
 const SS  = {background:C.surf2,border:'none',borderRadius:8,color:C.txt,padding:'7px 10px',fontSize:13,outline:'none',cursor:'pointer',fontFamily:'inherit',width:'100%'};
@@ -1344,6 +1338,7 @@ function App({session}) {
   const [steuernOpen,setSteuernOpen]= useState(false);    // Steuern-Dropdown im Header offen
   const [stY,setStY]= useState(now.getFullYear());        // Steuern: gewähltes Jahr
   const [stM,setStM]= useState(now.getMonth());           // Steuern: gewählter Monat (UStVA/BWA)
+  const [txY,setTxY]= useState(now.getFullYear());        // Steuerprognose: gewähltes Steuerjahr
   const [bwaBusy,setBwaBusy]= useState(false);            // BWA: KI-Bericht wird gerade erstellt
   const [datevBusy,setDatevBusy]= useState(false);        // DATEV-ZIP wird gerade gepackt
   const [settingsAcct,setSettingsAcct]= useState('unter'); // Konten-Unter-Tab in Einstellungen
@@ -1511,7 +1506,7 @@ function App({session}) {
   useEffect(()=>{
     let active=true;
     (async()=>{
-      const {data:row,error}=await sb.from('app_state').select('data,names').eq('id',1).single();
+      const {data:row,error}=await sb.from('app_state').select('data,names').eq('id',1).maybeSingle();
       if(!active) return;
       if(error){ setToast('Laden fehlgeschlagen: '+error.message); setReady(true); return; }
       let d = (row && row.data) || {};
@@ -1551,7 +1546,7 @@ function App({session}) {
     setSaved(false);
     const t=setTimeout(async()=>{
       const sig=JSON.stringify(data)+JSON.stringify(names);
-      const {error}=await sb.from('app_state').update({data,names,updated_at:new Date().toISOString()}).eq('id',1);
+      const {error}=await sb.from('app_state').upsert({id:1,data,names,updated_at:new Date().toISOString()},{onConflict:'id'});
       if(error){ setToast('Speichern fehlgeschlagen: '+error.message); }
       else { lastSigRef.current=sig; }
       setSaved(true);
@@ -3022,7 +3017,7 @@ function App({session}) {
     if(/kund/.test(q)) return go('kunden','Kunden');
     if(/import|bankauszug|beleg.?import/.test(q)) return go('import','Import');
     if(/beleg/.test(q)) return go('belege','die Belege');
-    if(/steuer/.test(q)) return go('steuer','die Steuer-Übersicht');
+    if(/steuer/.test(q)) return go('steuer','die Steuerprognose');
     if(/einstellung|profil|firmendaten|logo/.test(q)) return go('settings','Einstellungen');
     if(/konto|konten|home|start/.test(q)) return go('quellen','die Konten');
     return null; // nicht lokal beantwortbar → echte KI mit Datenkontext
@@ -3234,29 +3229,29 @@ function App({session}) {
     if(taxBusy) return;
     setTaxBusy(true);
     try{
-      const monatswerte = Array.from({length:12},(_,i)=>{const t=calcTotals(getMD(yr,i),yr,i);return {monat:MONTHS[i],einnahmen:t.totalInc,ausgaben:t.totalExp,ergebnis:t.net};});
-      const prevAnswers = (data.taxNotes||{})[yr]&&(data.taxNotes||{})[yr].answers || {};
+      const monatswerte = Array.from({length:12},(_,i)=>{const t=calcTotals(getMD(txY,i),txY,i);return {monat:MONTHS[i],einnahmen:t.totalInc,ausgaben:t.totalExp,ergebnis:t.net};});
+      const prevAnswers = (data.taxNotes||{})[txY]&&(data.taxNotes||{})[txY].answers || {};
       // Privat-Daten NICHT an den Steuerberater übergeben (private Buchungen bleiben privat)
-      const jd={}; Object.keys(data[yr]||{}).forEach(m=>{ const mm={...((data[yr]||{})[m]||{})}; delete mm.privat; jd[m]=mm; });
-      const snapshot = { namen:names, jahr:yr, jahressumme:yrTot, monatswerte, jahresdaten:jd, hinweis:'Private Ausgaben/Einnahmen sind bewusst ausgeschlossen und nicht relevant.', beantworteteRueckfragen:prevAnswers };
+      const jd={}; Object.keys(data[txY]||{}).forEach(m=>{ const mm={...((data[txY]||{})[m]||{})}; delete mm.privat; jd[m]=mm; });
+      const snapshot = { namen:names, jahr:txY, jahressumme:monatswerte.reduce((a,s)=>({totalInc:a.totalInc+s.einnahmen,totalExp:a.totalExp+s.ausgaben,net:a.net+s.ergebnis}),{totalInc:0,totalExp:0,net:0}), monatswerte, jahresdaten:jd, hinweis:'Private Ausgaben/Einnahmen sind bewusst ausgeschlossen und nicht relevant.', beantworteteRueckfragen:prevAnswers };
       const system = "Du bist der persönliche Steuerberater-Assistent für einen Nutzer in Deutschland (Immobilien-Vermietung, ein Unternehmen, Privatausgaben). "
         + "Gib KURZE, konkrete Stichpunkt-Hinweise – KEINE langen Fließtexte. Jeder Hinweis: knapper Titel + 1-2 Sätze Detail. "
         + "Stelle auch gezielte Rückfragen, wenn dir Infos fehlen (z. B. „Wofür wurde dieser Laptop genutzt?“, „Privat oder geschäftlich?“, „Unternehmen oder Immobilien?“). Berücksichtige bereits beantwortete Rückfragen. "
         + "Wenn sich ein Hinweis oder eine Rückfrage auf EINE konkrete Buchung aus den Daten bezieht, gib zusätzlich deren \"id\"-Feld (aus den Buchungsobjekten in DATEN) als \"belegId\" zurück, sonst \"belegId\":\"\". "
         + "Antworte AUSSCHLIESSLICH mit minifiziertem JSON: {\"hinweise\":[{\"typ\":\"tipp|achtung|sparen|frage\",\"titel\":\"...\",\"detail\":\"...\",\"belegId\":\"...\"}]} . "
         + "typ=frage nur für echte Rückfragen. 5-10 Hinweise. Erfinde keine Zahlen oder IDs. Kein Text außerhalb des JSON.\n\nDATEN:\n"+JSON.stringify(snapshot);
-      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-sonnet-4-6', max_tokens:2000, system, messages:[{role:'user',content:'Analysiere meine Daten für '+yr+' als persönlicher Steuerberater. Kurze Stichpunkte + Rückfragen.'}] } });
+      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-sonnet-4-6', max_tokens:2000, system, messages:[{role:'user',content:'Analysiere meine Daten für '+txY+' als persönlicher Steuerberater. Kurze Stichpunkte + Rückfragen.'}] } });
       if(error) throw error;
       if(resp && resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
       let txt=(resp && resp.content && resp.content[0] && resp.content[0].text) || ''; txt=txt.replace(/```json|```/g,'').trim(); const mm=txt.match(/\{[\s\S]*\}/); if(mm)txt=mm[0];
       const parsed=JSON.parse(txt); const items=(parsed.hinweise||[]).map(h=>({typ:String(h.typ||'tipp'),titel:String(h.titel||''),detail:String(h.detail||''),belegId:String(h.belegId||'')})).filter(h=>h.titel);
-      setData(prev=>({...prev, taxNotes:{...(prev.taxNotes||{}), [yr]:{ items, answers:prevAnswers, ts:new Date().toISOString() }}}));
+      setData(prev=>({...prev, taxNotes:{...(prev.taxNotes||{}), [txY]:{ items, answers:prevAnswers, ts:new Date().toISOString() }}}));
       setTaxOpen({});
       setToast(items.length+' Hinweise erstellt');
     }catch(e){ setToast('Analyse fehlgeschlagen: '+(e.message||e)); }
     setTaxBusy(false);
   };
-  const setTaxAnswer = (q, a) => setData(prev=>{ const tn={...(prev.taxNotes||{})}; const cur=tn[yr]||{}; tn[yr]={...cur, answers:{...(cur.answers||{}), [q]:a}}; return {...prev, taxNotes:tn}; });
+  const setTaxAnswer = (q, a) => setData(prev=>{ const tn={...(prev.taxNotes||{})}; const cur=tn[txY]||{}; tn[txY]={...cur, answers:{...(cur.answers||{}), [q]:a}}; return {...prev, taxNotes:tn}; });
 
   /* ══ Steuer-Engine: alle Auswertungen (UStVA, EÜR, GuV, BWA, SuSa, DATEV) werden DETERMINISTISCH
      aus den Buchungsdaten berechnet – die KI erklärt die Ergebnisse nur, rechnet aber nie selbst. ══ */
@@ -3322,6 +3317,17 @@ function App({session}) {
       if(r.kind==='aus') map[k].soll+=r.netto; else map[k].haben+=r.netto; });
     return Object.values(map).map(x=>({ ...x, soll:r2(x.soll), haben:r2(x.haben), saldo:r2(x.haben-x.soll) })).sort((a,b)=>String(a.konto).localeCompare(String(b.konto)));
   };
+  // Fakten fürs Steuer-Cockpit: Netto-Einnahmen/-Ausgaben je Konto, Inserate-Auszahlungen, offene Punkte
+  const taxFactsFor = (year)=>{ const rows=collectBizBookings(year,null); const acct={}; ['unter',...PROPS].forEach(k=>acct[k]={inc:0,exp:0,inserate:0});
+    rows.forEach(r=>{ const a=acct[r.account]||(acct[r.account]={inc:0,exp:0,inserate:0}); if(r.kind==='ein') a.inc+=r.netto; else a.exp+=r.netto; });
+    for(let m=0;m<12;m++){ if(isFuture(year,m)) continue; const M=getMD(year,m); PROPS.forEach(pid=>{ const pr=M.props&&M.props[pid]; if(pr&&pr.income) acct[pid].inserate+=calcProp(pr,year,m).netto; }); }
+    Object.keys(acct).forEach(k=>{ acct[k].inc=r2(acct[k].inc); acct[k].exp=r2(acct[k].exp); acct[k].inserate=r2(acct[k].inserate); });
+    const ohne=rows.filter(r=>r.kind==='aus'&&!r.hasBeleg);
+    return { acct, umsatz:r2(rows.filter(r=>r.kind==='ein').reduce((s,r)=>s+r.brutto,0)), vorsteuer:r2(rows.filter(r=>r.kind==='aus').reduce((s,r)=>s+r.vat,0)),
+      ohneBeleg:{count:ohne.length,sum:r2(ohne.reduce((s,r)=>s+r.netto,0))}, ohneMwst:rows.filter(r=>!r.hasVatInfo).length,
+      personalKosten:r2(rows.filter(r=>r.kind==='aus'&&r.category==='Personal').reduce((s,r)=>s+r.netto,0)) }; };
+  // Steuerjahr vorbelegen: Vorjahr, solange das laufende Jahr noch keine Geschäftsbuchungen hat
+  useEffect(()=>{ if(!ready) return; try{ const y=now.getFullYear(); if(!collectBizBookings(y,null).length && collectBizBookings(y-1,null).length) setTxY(y-1); }catch(e){} },[ready]);
   // Datei-Download-Helfer
   const dlBlob=(name,blob)=>{ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); };
   const dlText=(name,text,mime)=>dlBlob(name,new Blob([text],{type:mime||'text/csv;charset=utf-8'}));
@@ -3400,11 +3406,6 @@ function App({session}) {
   const fInc = s => ['unter',...PROPS,'privat'].reduce((t,k)=> t + (yrFilter[k]!==false && s.acct && s.acct[k] ? s.acct[k].inc : 0), 0);
   const fExp = s => ['unter',...PROPS,'privat'].reduce((t,k)=> t + (yrFilter[k]!==false && s.acct && s.acct[k] ? s.acct[k].exp : 0), 0);
   const yrTotF = yrSum.reduce((a,s)=> s.fut?a:{totalInc:a.totalInc+fInc(s),totalExp:a.totalExp+fExp(s),net:a.net+(fInc(s)-fExp(s))},{totalInc:0,totalExp:0,net:0});
-  const taxESt   = estESt(Math.max(0,yrTot.net));
-  const taxUGwn  = yrTot.unterInc-yrTot.unterExp;
-  const taxGewSt = Math.max(0,taxUGwn-24500)*0.035*4.35;
-  const taxTotal = taxESt+taxGewSt;
-  const taxMonthly = taxTotal/12;
 
   /* Belegungskalender — abgeleitet */
   const fmtD = s => new Date(s).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'});
@@ -3510,6 +3511,7 @@ function App({session}) {
     {id:'kontoauszug',label:'Bank', icon:P.bank, onClick:()=>{setTab('import');setImportTab('bank');}, active:(tab==='import'&&importTab==='bank')},
     {id:'kunden', label:'Kunden',       icon:P.prson},
     {id:'aufgaben', label:'To-do',   icon:P.check},
+    {id:'steuer', label:'Steuern',      icon:P.doc},
     {id:'mehr',   label:'Mehr',         icon:P.menu},
   ];
   // Einheitlicher Tab-/Toggle-Stil (wie Import „Beleg/Bankkontoauszug")
@@ -4260,7 +4262,7 @@ function App({session}) {
                 {[
                   // Auf dem Desktop haben Rechnungen/Bank/Kunden/Aufgaben schon ein eigenes Icon in der Rail — hier nur auf Mobile zusätzlich zeigen (dort gibt's keine Rail).
                   ...(isMobile?[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
-                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuer-Assistent',icon:P.doc},{id:'kosten',label:'Betriebskosten',icon:P.spark},
+                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.spark},{id:'kosten',label:'Betriebskosten',icon:P.spark},
                 ].map(m=>(
                   <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
@@ -6092,13 +6094,18 @@ function App({session}) {
           })()}
 
           {/* ══ STEUER ══ */}
-          {tab==='steuer' && <>
-            <div style={{marginBottom:20}}>
-              <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Steuer-Übersicht</div>
-              <div style={{fontSize:13,color:C.sub}}>{yr} · Mönchengladbach, NRW · Schätzungen ohne Gewähr</div>
-            </div>
+          {/* ══ STEUERPROGNOSE & OPTIMIERUNG – deterministisch (src/tax/estg.js), KI erklärt nur ══ */}
+          {tab==='steuer' && (()=>{
+            const tp=data.taxProfile||{}; const prof=tp[txY]||{};
+            const setTaxProfile=(patch)=>setData(prev=>{ const all={...(prev.taxProfile||{})}; all[txY]={...(all[txY]||{}),...patch}; return {...prev, taxProfile:all}; });
+            const setMinijobs=(list)=>setData(prev=>({...prev, taxProfile:{...(prev.taxProfile||{}), minijobs:list}}));
+            const absender=[(data.profile||{}).name,(names.unternehmen||'')].filter(Boolean).join(' · ');
+            return (
+              <TaxCockpit ui={{C,SC,SS,NUM,fmt,Ic,P,hexA,AI_GRADIENT}} year={txY} setYear={setTxY} years={TAX_YEARS} names={names} propIds={PROPS}
+                profile={prof} setProfile={setTaxProfile} minijobs={tp.minijobs||[]} setMinijobs={setMinijobs} facts={taxFactsFor(txY)}
+                aiInvoke={aiInvoke} setToast={setToast} isMobile={isMobile} goTab={(t)=>{ if(t==='steuern') setStY(txY); setTab(t); }} absender={absender}>
             {/* Persönlicher Steuerberater-Assistent */}
-            {(()=>{ const tnote=(data.taxNotes||{})[yr]; const items=(tnote&&tnote.items)||[];
+            {(()=>{ const tnote=(data.taxNotes||{})[txY]; const items=(tnote&&tnote.items)||[];
               const TY={tipp:{c:'#7BC2AA',ic:P.spark,lbl:'Tipp'},sparen:{c:'#7BC2AA',ic:P.spark,lbl:'Sparpotenzial'},achtung:{c:C.exp,ic:P.doc,lbl:'Achtung'},frage:{c:'#ABC4FF',ic:P.note,lbl:'Rückfrage'}};
               return (
               <div style={{marginBottom:20}}>
@@ -6111,7 +6118,7 @@ function App({session}) {
                 </div>
                 {advOpen && (items.length ? (
                   <div style={{display:'flex',flexDirection:'column',gap:8}}>
-                    {items.map((h,i)=>{ const ty=TY[h.typ]||TY.tipp; const open=!!taxOpen[i]; const isQ=h.typ==='frage'; const ans=(tnote.answers||{})[h.titel]||''; const loc=h.belegId?findItemLocation(h.belegId,yr):null; return (
+                    {items.map((h,i)=>{ const ty=TY[h.typ]||TY.tipp; const open=!!taxOpen[i]; const isQ=h.typ==='frage'; const ans=(tnote.answers||{})[h.titel]||''; const loc=h.belegId?findItemLocation(h.belegId,txY):null; return (
                       <div key={i} style={{background:C.surf2,border:'1px solid '+(open?hexA(ty.c,0.4):C.bdr),borderRadius:12,overflow:'hidden'}}>
                         <button onClick={()=>setTaxOpen(o=>({...o,[i]:!o[i]}))} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',padding:'12px 14px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
                           <span style={{width:26,height:26,borderRadius:8,background:hexA(ty.c,0.16),display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={ty.ic} sz={14} col={ty.c}/></span>
@@ -6136,69 +6143,13 @@ function App({session}) {
                     <div style={{fontSize:11,color:C.mut,marginTop:4}}>Erstellt: {new Date(tnote.ts).toLocaleDateString('de-DE')} · keine verbindliche Steuerberatung</div>
                   </div>
                 ) : (
-                  <div style={{...SC,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint,fontSize:13,color:C.sub,lineHeight:1.5}}>Dein persönlicher Steuerberater geht deine Zahlen für {yr} durch und gibt dir kurze Hinweise (worauf achten, was absetzbar ist, wo du sparen kannst) sowie gezielte Rückfragen. Tippe auf einen Hinweis zum Aufklappen.</div>
+                  <div style={{...SC,border:'1px solid '+KONTO_COLORS.unter.bd,background:KONTO_COLORS.unter.tint,fontSize:13,color:C.sub,lineHeight:1.5}}>Dein persönlicher Steuerberater geht deine Zahlen für {txY} durch und gibt dir kurze Hinweise (worauf achten, was absetzbar ist, wo du sparen kannst) sowie gezielte Rückfragen. Tippe auf einen Hinweis zum Aufklappen.</div>
                 ))}
               </div>
             ); })()}
-            <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:20}}>
-              <KPI label="Jahreseinnahmen"  val={fmt(yrTot.totalInc)} color={C.txt} />
-              <KPI label="Jahresausgaben"   val={fmtN(yrTot.totalExp)} color={C.red} />
-              <KPI label="Jahresgewinn"      val={(yrTot.net>=0?'+':'-')+fmt(Math.abs(yrTot.net))} color={yrTot.net>=0?C.txt:C.red} />
-            </div>
-            <div style={{display:'flex',gap:12,flexWrap:'wrap',marginBottom:20}}>
-              <div style={{...SC,flex:1,minWidth:200}}>
-                <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:10}}>Einkommensteuer</div>
-                <div style={{fontSize:12,color:C.mut,marginBottom:10}}>Basis: Jahresgewinn {fmt(Math.max(0,yrTot.net))}</div>
-                <div style={{fontSize:26,fontWeight:700,color:C.txt,...NUM,marginBottom:8}}>{fmt(taxESt)}</div>
-                {taxESt>0 ? <div style={{fontSize:12,color:C.sub,marginBottom:10}}>Effektivsteuersatz {((taxESt/Math.max(1,yrTot.net))*100).toFixed(1)} %</div> : null}
-                <div style={{background:'rgba(255,180,0,0.10)',borderRadius:8,padding:'7px 10px',fontSize:11,color:C.amb}}>
-                  Vorauszahlungen: Mrz · Jun · Sep · Dez
-                </div>
-              </div>
-              <div style={{...SC,flex:1,minWidth:200}}>
-                <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:10}}>Gewerbesteuer</div>
-                <div style={{fontSize:12,color:C.mut,marginBottom:10}}>Hebesatz Mönchengladbach 435 %</div>
-                <div style={{fontSize:26,fontWeight:700,color:C.txt,...NUM,marginBottom:10}}>{fmt(taxGewSt)}</div>
-                <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.sub,marginBottom:6}}>
-                  <span>Freibetrag</span><span style={NUM}>24.500 €</span>
-                </div>
-                <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.sub}}>
-                  <span>{names.unternehmen}-Gewinn</span><span style={NUM}>{fmt(taxUGwn)}</span>
-                </div>
-              </div>
-            </div>
-            <div style={{background:C.ambL,border:'1px solid rgba(255,180,0,0.22)',borderRadius:16,padding:'20px 24px',marginBottom:20}}>
-              <div style={{fontSize:12,fontWeight:600,color:C.amb,marginBottom:14}}>Empfohlene Steuerrücklage</div>
-              <div style={{display:'flex',gap:32,flexWrap:'wrap',alignItems:'flex-end'}}>
-                <div>
-                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Geschätzte Jahressteuer</div>
-                  <div style={{fontSize:30,fontWeight:700,color:C.amb,...NUM}}>{fmt(taxTotal)}</div>
-                </div>
-                <div>
-                  <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Monatlich zurücklegen</div>
-                  <div style={{fontSize:22,fontWeight:700,color:C.txt,...NUM}}>{fmt(taxMonthly)}</div>
-                </div>
-                <div style={{fontSize:12,color:C.mut}}>ESt {fmt(taxESt)} + GewSt {fmt(taxGewSt)}</div>
-              </div>
-            </div>
-            <div style={SC}>
-              <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:14}}>NRW — Wichtige Termine & Infos</div>
-              {[
-                ['Finanzamt','Finanzamt Mönchengladbach · Finanzamt Krefeld'],
-                ['ESt-Erklärung','Bis 31. Juli des Folgejahres (mit Steuerberater: 28. Feb.)'],
-                ['ESt-Vorauszahlung','10. März · 10. Juni · 10. September · 10. Dezember'],
-                ['Gewerbesteuer','Freibetrag 24.500 € · Hebesatz MG 435 % · Anrechnung auf ESt möglich'],
-                ['Kirchensteuer','9 % der ESt in NRW (falls kirchensteuerpflichtig)'],
-                ['Airbnb / Kurzzeit','Airbnb führt USt seit 2024 direkt ab — in der EÜR dennoch angeben'],
-                ['Minijob','Pauschalabgaben ca. 31 % des Bruttolohns · über die Minijobzentrale abführen'],
-              ].map(([k,v])=>(
-                <div key={k} style={{display:'flex',gap:14,padding:'10px 0',borderBottom:'1px solid '+C.sep,fontSize:13}}>
-                  <span style={{color:C.sub,minWidth:140,flexShrink:0,fontWeight:500}}>{k}</span>
-                  <span style={{color:C.txt,lineHeight:1.5}}>{v}</span>
-                </div>
-              ))}
-            </div>
-          </>}
+              </TaxCockpit>
+            );
+          })()}
 
           {/* ══ BELEGUNG ══ */}
           {tab==='kal' && <>
