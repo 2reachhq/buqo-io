@@ -22,6 +22,9 @@ const PRICE_CENTS_PER_MTOK: Record<string, { in: number; out: number }> = {
 };
 // Marge-Multiplikator auf die Rohkosten. Jederzeit hier anpassbar, keine Migration nötig.
 const MARGIN_MULT = 3;
+// Solo-Betrieb (nur der Inhaber nutzt Buqo): mit `supabase secrets set BUQO_SOLO=1` entfallen
+// Guthaben-Prüfung und Abbuchung komplett.
+const SOLO = (Deno.env.get("BUQO_SOLO") || "") === "1";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -53,7 +56,7 @@ Deno.serve(async (req) => {
     // 2) Guthaben-Guard: mindestens 1 Cent Guthaben nötig, um einen Call zu starten.
     //    Nutzer ohne Guthaben-Konto (z. B. Steuerberater) werden nicht abgerechnet.
     const { data: credit } = await supa.from("ai_credits").select("balance_cents").eq("user_id", user.id).maybeSingle();
-    const hasCreditAccount = !!credit;
+    const hasCreditAccount = !SOLO && !!credit;
     if (hasCreditAccount && (credit!.balance_cents ?? 0) <= 0) {
       return json({ error: "AI-Guthaben aufgebraucht", code: "no_credit", balance_cents: credit!.balance_cents ?? 0 }, 402);
     }
