@@ -1,0 +1,24 @@
+# Verhindert, dass Supabase das Projekt im Free-Tarif nach 7 Tagen ohne Nutzung pausiert:
+# alle 3 Tage ein kleiner API-Aufruf, der als Aktivität zählt. Manuell startbar über
+# Actions → „Supabase keep-alive" → Run workflow. Der anon-Key ist ohnehin öffentlich
+# (steht im ausgelieferten App-Bundle), deshalb braucht es kein Secret.
+name: Supabase keep-alive
+on:
+  schedule:
+    - cron: '17 6 */3 * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Supabase REST-API anpingen
+        run: |
+          KEY=$(grep -o "SB_KEY = '[^']*'" app/src/main.jsx | sed "s/SB_KEY = '//; s/'\$//")
+          URL=$(grep -o "SB_URL = '[^']*'" app/src/main.jsx | sed "s/SB_URL = '//; s/'\$//")
+          code=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' -H "apikey: $KEY" -H "Authorization: Bearer $KEY" "$URL/rest/v1/scan_meta?select=id&limit=1")
+          echo "Antwort: HTTP $code"
+          case "$code" in
+            2*|401|403) echo "Projekt ist aktiv." ;;
+            *) echo "::error::Supabase antwortet nicht (Projekt pausiert?). Im Dashboard 'Restore project' klicken."; exit 1 ;;
+          esac

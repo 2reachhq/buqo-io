@@ -83,6 +83,14 @@ Schnellster Weg für die Eigen-Nutzung: den Nutzer direkt im Dashboard anlegen (
 Users → Add user → Create new user*, Häkchen „Auto Confirm User"). Das umgeht Bestätigungs-Mails
 und das Mail-Limit komplett.
 
+## Auto-Pause im Free-Tarif
+
+Supabase pausiert kostenlose Projekte nach 7 Tagen ohne Nutzung. Dann schlagen Login, Registrierung
+und Laden gleichzeitig fehl, bis im Dashboard „Restore project" geklickt wird. Der Workflow
+`.github/workflows/supabase-keepalive.yml` ruft die API alle 3 Tage auf und hält das Projekt so
+wach (GitHub Actions muss für das Repo aktiviert sein). Alternativ: Pro-Tarif, dort gibt es keine
+Auto-Pause.
+
 ## Datenmodell heute und der nächste Schritt
 
 Der komplette Buchhaltungs-Zustand liegt als ein JSON-Dokument in `app_state` (Zeile 1). Das ist
