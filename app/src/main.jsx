@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import TaxCockpit from './tax/TaxCockpit.jsx';
-import { YEARS as TAX_YEARS } from './tax/estg.js';
+import { YEARS as TAX_YEARS, berechneSteuer } from './tax/estg.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 window.pdfjsLib = pdfjsLib; // pdfToLines() below still reads it off window, unchanged
@@ -44,8 +44,8 @@ const THEME_DARK = {
   sep:'rgba(255,255,255,0.07)',
 };
 const THEME_LIGHT = {
-  bg:'#F5F5F5', surf:'#FFFFFF', surf2:'#EEF0F3', surf3:'#E3E6EB',
-  bdr:'rgba(15,18,24,0.10)', bdrM:'rgba(15,18,24,0.18)',
+  bg:'#F6F6F7', surf:'#FFFFFF', surf2:'#F2F3F5', surf3:'#E8EAEE',
+  bdr:'rgba(15,18,24,0.08)', bdrM:'rgba(15,18,24,0.16)',
   pri:'#007AFF', priL:'rgba(0,122,255,0.14)', priTxt:'#FFFFFF',
   act:'#007AFF', actL:'rgba(0,122,255,0.14)', actTxt:'#FFFFFF',
   accent:'#BBF451', accentL:'rgba(187,244,81,0.18)', accentTxt:'#0A0A0A',
@@ -341,6 +341,12 @@ const P = {
   dload:'M12 3v13 M7 12l5 5 5-5 M5 21h14',
   mail:  'M4 4h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2z M22 6l-10 7L2 6',
   refresh:'M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0114.13-3.36L23 10 M1 14l5.36 4.36A9 9 0 0020.49 15',
+  bell:  'M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9 M13.7 21a2 2 0 01-3.4 0',
+  panel: 'M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1z M9 5v14',
+  chart: 'M3 3v18h18 M7 15l4-4 4 4 5-6',
+  percent:'M19 5L5 19 M6.5 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5z M17.5 20a2.5 2.5 0 100-5 2.5 2.5 0 000 5z',
+  home:  'M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5v-6h-6v6H4a1 1 0 01-1-1z',
+  wallet:'M3 7h18v12H3z M3 7l3-3h12l3 3 M16 13h2',
 };
 
 /* ══ Icon component ══ */
@@ -1328,7 +1334,7 @@ function App({session}) {
   const nowY = now.getFullYear(), nowM = now.getMonth();
   const isFuture = (y,m) => y>nowY || (y===nowY && m>nowM);
   // ══ Theme (Dark / Light / System) ══
-  const [theme,setTheme]= useState(()=>{ try{ return localStorage.getItem('sp_theme')||'dark'; }catch(_){ return 'dark'; } });
+  const [theme,setTheme]= useState(()=>{ try{ if(!localStorage.getItem('sp_theme_v2')){ localStorage.setItem('sp_theme_v2','1'); localStorage.setItem('sp_theme','light'); return 'light'; } return localStorage.getItem('sp_theme')||'light'; }catch(_){ return 'light'; } });
   const [sysDark,setSysDark]= useState(()=>{ try{ return !!(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches); }catch(_){ return true; } });
   useEffect(()=>{ try{ if(!window.matchMedia) return; const mq=window.matchMedia('(prefers-color-scheme: dark)'); const h=e=>setSysDark(e.matches); mq.addEventListener?mq.addEventListener('change',h):mq.addListener(h); return ()=>{ try{ mq.removeEventListener?mq.removeEventListener('change',h):mq.removeListener(h); }catch(_){} }; }catch(_){} },[]);
   const isDark = theme==='dark' || (theme==='system' && sysDark);
@@ -1336,7 +1342,11 @@ function App({session}) {
   useEffect(()=>{ try{ localStorage.setItem('sp_theme',theme); }catch(_){} try{ document.body.style.background=C.bg; document.body.style.color=C.txt; document.documentElement.style.background=C.bg; document.documentElement.style.colorScheme=isDark?'dark':'light'; }catch(_){} },[theme,sysDark,isDark]);
   const [yr,   setYr]   = useState(now.getFullYear());
   const [mo,   setMo]   = useState(now.getMonth());
-  const [tab,  setTab]  = useState('quellen');
+  const [tab,  setTab]  = useState('home');
+  const [sideOpen,setSideOpen]= useState(()=>{ try{ return localStorage.getItem('buqo_side')!=='0'; }catch(_){ return true; } }); // Sidebar aus-/eingeklappt
+  useEffect(()=>{ try{ localStorage.setItem('buqo_side',sideOpen?'1':'0'); }catch(_){} },[sideOpen]);
+  const [moreOpen,setMoreOpen]= useState(false);      // Sidebar-Gruppe „Mehr" aufgeklappt
+  const [belegDetails,setBelegDetails]= useState(false); // Beleg-Erfassung: Detailfelder sichtbar
   const [sonstOpen,setSonstOpen]= useState(false);
   const [gesamtHover,setGesamtHover]= useState(false);
   const [gesamtOpen,setGesamtOpen]= useState(false);
@@ -1520,7 +1530,7 @@ function App({session}) {
   const subSlug = (v)=> v==='wied' ? 'wiederkehrend' : v;
   const parseSub = (s)=> s==='wiederkehrend' ? 'wied' : s;
   useEffect(()=>{
-    const valid=new Set(['quellen','immo','unter','privat','import','berater','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
+    const valid=new Set(['home','quellen','immo','unter','privat','import','berater','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
     const apply=()=>{ const raw=(window.location.hash||'').replace(/^#\/?/,''); if(!raw) return; const parts=raw.split('/'); const head=parts[0];
       if(head!=='erfassen') setCapture(null);
       if(head!=='rechnung-erstellen') setInvEdit(null);
@@ -2387,6 +2397,17 @@ function App({session}) {
     if(!rate) throw new Error('Kein Kurs gefunden');
     return { rate, date: j.date||iso };
   };
+  // Konto + Nutzung für einen neuen Beleg aus der Historie ableiten (gleicher Händler → gleiches Konto), sonst Firma
+  const BIZ_CLEAR_CATS=['Software','Marketing','Bank & Gebühren','Steuern','Personal','Material','Nebenkosten','Versicherung','Miete'];
+  const suggestBelegDest=(name,kind,category)=>{
+    const nn=normName(name); let hit=null;
+    if(nn.length>=3){ const all=existingBookings(); for(let i=all.length-1;i>=0;i--){ const b=all[i]; const bn=normName(b.it.name); if(bn && bn.length>=3 && b.kind===kind && (bn===nn || bn.includes(nn) || nn.includes(bn))){ hit=b; break; } } }
+    const acctKey = hit ? (hit.acct===names.unternehmen?'unter':hit.acct===(names.privatLabel||'Privat')?'privat':(PROPS.find(pp=>names[pp]===hit.acct)||'unter')) : 'unter';
+    const dest = acctKey==='unter' ? (kind==='ein'?'unterInc':'unterExp') : acctKey;
+    const nutzung = acctKey==='privat' ? null : (hit ? (hit.it.nutzung||'geschaeftlich') : (BIZ_CLEAR_CATS.includes(category)?'geschaeftlich':null));
+    const reason = hit ? ('wie „'+(hit.it.name||'')+'" im '+MONTHS[hit.m]+' '+hit.y) : (kind==='ein'?'Einnahme → Firma':'Standard: Firma-Ausgabe');
+    return {dest, nutzung, reason, category:(hit&&hit.it.category)||category||guessCategory(name)};
+  };
   const extractBeleg = async file => {
     setBelegBusy(true); setBelegRes(null);
     try{
@@ -2420,8 +2441,10 @@ function App({session}) {
           netto = netto ? Math.round(netto*rate*100)/100 : 0;
         }catch(e){ setToast('Fremdwährung ('+waehrung+') erkannt, Kurs konnte aber nicht automatisch geladen werden – bitte Betrag in EUR prüfen.'); }
       }
-      setBelegRes({ name:String(p.b||'Beleg').slice(0,70), amount:brutto, netto, mwst, kind:(p.k==='e'?'ein':'aus'), belegnr:String(p.r||''), datum, category:String(p.c||''), waehrung, fx, unsicher:!!p.unsicher, nutzung:null, nutzungAnteil:50, bewirtungMitwem:null, taxTip:'', taxTipBusy:false });
-      setBelegDest(d=> (p.k==='e' ? 'unterInc' : d));
+      const kindS=(p.k==='e'?'ein':'aus'); const sugg=suggestBelegDest(String(p.b||''), kindS, String(p.c||''));
+      const isoD=toISO(datum); if(isoD){ const dd=new Date(isoD); if(!isNaN(dd.getTime())){ setBelegY(dd.getFullYear()); setBelegM(dd.getMonth()); } }
+      setBelegDest(sugg.dest); setBelegDetails(!!p.unsicher);
+      setBelegRes({ name:String(p.b||'Beleg').slice(0,70), amount:brutto, netto, mwst, kind:kindS, belegnr:String(p.r||''), datum, category:sugg.category||'', waehrung, fx, unsicher:!!p.unsicher, nutzung:sugg.nutzung, nutzungAnteil:50, bewirtungMitwem:null, taxTip:'', taxTipBusy:false, suggReason:sugg.reason });
     }catch(e){ setToast('Beleg konnte nicht gelesen werden: '+(e.message||e)); }
     setBelegBusy(false);
   };
@@ -3599,7 +3622,7 @@ function App({session}) {
   const normAcct = (k)=> k==='immo' ? (bizAccts.find(a=>a!=='unter')||'p1') : (k||'unter'); // Legacy „immo" → erstes Objekt-Konto
   const ACCT_COLOR_CHOICES=['#8FE3C6','#ABC4FF','#FFC7A6','#E8A39E','#C9B6FF','#9FD8FF'];
   // Akzentfarbe des aktuell geöffneten/aktiven Kontos (Zahlen bleiben grün)
-  const activeAcct = (tab==='quellen'||tab==='home') ? openAcct : (tab==='immo' ? sp : tab==='unter' ? 'unter' : tab==='privat' ? 'privat' : null);
+  const activeAcct = (tab==='quellen') ? openAcct : (tab==='immo' ? sp : tab==='unter' ? 'unter' : tab==='privat' ? 'privat' : null);
   const secAccent = activeAcct ? acol(activeAcct) : C.pri;
 
   const renderItems = (items, updFn, delFn, moveFn, folderPath, recurFn, editFn, rangeFn, srcKey, hideRecur, kind, sums, applyFn, addCtx, addLabel, addHeading) => {
@@ -3711,9 +3734,9 @@ function App({session}) {
     );
   };
 
-  /* Linke Icon-Rail (Desktop) + zweite Kontext-Sidebar (Konten) + Bottom-Tabbar (Mobile) */
-  const railW = isMobile?0:76;
-  const secW  = (!isMobile && tab==='quellen') ? 240 : 0;
+  /* Linke Sidebar (Desktop, ein-/ausklappbar) + Top-Leiste + Bottom-Tabbar (Mobile) */
+  const railW = isMobile?0:(sideOpen?256:76);
+  const secW  = 0;
   const sideKonten = (()=>{
     const ICONS2={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
     const iconFor2=(key,def)=>ICONS2[(names.propIcon&&names.propIcon[key])||def]||P.house;
@@ -3723,88 +3746,108 @@ function App({session}) {
       {key:'privat',kind:'tab',name:(names.privatLabel||'Privat'),icon:iconFor2('privat','prson')},
     ];
   })();
+  const openTodoCount = todos.filter(t=>!t.done).length;
+  const openBelegCount = (()=>{ try{ return openBelegeList().length; }catch(e){ return 0; } })();
+  const overdueCount = (()=>{ try{ return overdueInvoices().length; }catch(e){ return 0; } })();
+  const rightGap = isMobile?0:(botOpen?botWidth:(todoDetail?420:0));
+  const MORE_TABS=['raten','yr','kal','download','kosten'];
+  const SIDE_NAV=[
+    {id:'home',label:'Übersicht',icon:P.home},
+    {id:'belege',label:'Belege',icon:P.clip,badge:openBelegCount},
+    {key:'bank',id:'import',label:'Bank',icon:P.bank,badge:drafts.length,onClick:()=>{setTab('import');setImportTab('bank');}},
+    {id:'aufgaben',label:'To-do',icon:P.check,badge:openTodoCount},
+    {section:'Einnahmen'},
+    {id:'rechnung',label:'Rechnungen',icon:P.receipt,badge:overdueCount},
+    {id:'kunden',label:'Kunden',icon:P.prson},
+    {section:'Konten'},
+    ...sideKonten.filter(k=>k.key==='privat'||acctCreated(k.key)).map(k=>({key:'acct-'+k.key,id:'quellen',label:k.name,icon:k.icon,color:acol(k.key),active:(tab==='quellen'&&openAcct===k.key)||(tab==='immo'&&sp===k.key)||(tab==='unter'&&k.key==='unter')||(tab==='privat'&&k.key==='privat'),onClick:()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); setTab('quellen'); }})),
+    {key:'acct-all',id:'quellen',label:'Alle Konten',icon:P.grid,active:(tab==='quellen'&&!openAcct),onClick:()=>{ setOpenAcct(null); setTab('quellen'); }},
+    {section:'Steuern'},
+    {id:'steuer',label:'Steuerprognose',icon:P.percent},
+    {id:'steuern',label:'Auswertungen',icon:P.doc},
+    {id:'berater',label:'KI-Berater',icon:P.spark},
+    {section:'Mehr',toggle:true},
+    ...((moreOpen||MORE_TABS.includes(tab))?[
+      {id:'raten',label:'Raten & Kredite',icon:P.wallet},
+      {id:'yr',label:'Analyse',icon:P.chart},
+      {id:'kal',label:'Events',icon:P.cal},
+      {id:'download',label:'Download',icon:P.dload},
+      {id:'kosten',label:'KI-Kosten',icon:P.layers},
+    ]:[]),
+  ];
+  const navBtn=(item)=>{ const active=item.active!=null?item.active:(tab===item.id); const badge=item.badge||0; return (
+    <button key={item.key||item.id} className="railBtn" onClick={item.onClick||(()=>setTab(item.id))} style={{display:'flex',alignItems:'center',gap:11,width:'100%',height:42,borderRadius:12,padding:sideOpen?'0 12px':0,justifyContent:sideOpen?'flex-start':'center',background:active?C.surf2:'transparent',color:active?C.txt:C.sub,fontFamily:'inherit',fontSize:14.5,fontWeight:active?700:500,position:'relative',flexShrink:0}}>
+      {item.color ? <span style={{width:22,height:22,borderRadius:7,background:item.color,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={item.icon} sz={13} col="#0A0A0A"/></span> : <Ic p={item.icon} sz={19} col={active?C.pri:C.sub}/>}
+      {sideOpen && <span style={{flex:1,textAlign:'left',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>}
+      {sideOpen && badge>0 && <span style={{minWidth:22,height:22,borderRadius:99,background:C.txt,color:C.bg,fontSize:11.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 6px',...NUM}}>{badge}</span>}
+      {!sideOpen && badge>0 && <span style={{position:'absolute',top:7,right:9,width:8,height:8,borderRadius:'50%',background:C.pri,border:'2px solid '+C.surf}}/>}
+      {!sideOpen && <span className="railTip">{item.label}{badge>0?' · '+badge:''}</span>}
+    </button>
+  ); };
+  const topIconBtn={width:38,height:38,borderRadius:12,background:C.surf,border:'1px solid '+C.bdr,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit',flexShrink:0,position:'relative'};
+  const initial=((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase();
 
   return (
     <div style={{display:'flex',flexDirection:'column',height:'100vh',fontFamily:FONT,color:C.txt,fontSize:14,overflow:'hidden',background:C.bg}}>
 
-      {/* ═══ PRIMÄRE ICON-RAIL (Desktop) ═══ */}
+      {/* ═══ SIDEBAR (Desktop) ═══ */}
       {!isMobile && (
-        <div className="glassPanel" style={{position:'fixed',left:0,top:0,bottom:0,width:railW,zIndex:50,display:'flex',flexDirection:'column',alignItems:'center',padding:'16px 0',background:hexA(C.surf,0.72),borderRight:'1px solid '+C.bdr}}>
-          <button onClick={()=>{setTab('quellen');setOpenAcct(null);}} title="Buqo" style={{background:'none',border:'none',cursor:'pointer',padding:0,marginBottom:26,flexShrink:0}}><BuqoMark sz={30}/></button>
-          <div style={{display:'flex',flexDirection:'column',gap:6,flex:1}}>
-            {NAV.map(({id,label,icon,onClick,active:activeFn})=>{
-              const active = activeFn!=null?activeFn:(tab===id);
-              return (
-                <button key={id} className="railBtn" onClick={onClick||(()=>setTab(id))} style={{
-                  width:48,height:48,borderRadius:14,
-                  background:active?C.surf3:'transparent',
-                }}>
-                  <Ic p={icon} sz={21} col={active?C.pri:C.sub}/>
-                  <span className="railTip">{label}</span>
-                </button>
-              );
-            })}
+        <aside style={{position:'fixed',left:0,top:0,bottom:0,width:railW,zIndex:50,display:'flex',flexDirection:'column',background:C.surf,borderRight:'1px solid '+C.bdr,transition:'width .18s ease'}}>
+          <button onClick={()=>setTab('home')} title="Übersicht" style={{display:'flex',alignItems:'center',gap:10,background:'none',border:'none',cursor:'pointer',padding:sideOpen?'20px 22px 14px':'20px 0 14px',justifyContent:sideOpen?'flex-start':'center',fontFamily:'inherit',flexShrink:0}}>
+            <BuqoMark sz={30}/>{sideOpen && <span style={{fontSize:21,fontWeight:800,letterSpacing:'-0.03em',color:C.txt}}>Buqo</span>}
+          </button>
+          <nav style={{flex:1,overflowY:'auto',overflowX:'hidden',padding:sideOpen?'0 12px':'0 14px',display:'flex',flexDirection:'column',gap:2}}>
+            {SIDE_NAV.map(item=> item.section ? (
+              sideOpen ? (item.toggle
+                ? <button key={'sec-'+item.section} onClick={()=>setMoreOpen(o=>!o)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',textTransform:'uppercase',padding:'16px 12px 6px'}}><span>{item.section}</span><span style={{display:'inline-flex',transition:'transform .16s',transform:(moreOpen||MORE_TABS.includes(tab))?'rotate(180deg)':'none'}}><Ic p={P.down} sz={12} col={C.mut}/></span></button>
+                : <div key={'sec-'+item.section} style={{fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',textTransform:'uppercase',padding:'16px 12px 6px'}}>{item.section}</div>)
+              : (item.toggle
+                ? <button key={'sec-'+item.section} onClick={()=>setMoreOpen(o=>!o)} className="railBtn" style={{width:'100%',height:30,marginTop:6}}><Ic p={P.menu} sz={15} col={C.mut}/><span className="railTip">Mehr</span></button>
+                : <div key={'sec-'+item.section} style={{height:1,background:C.sep,margin:'10px 6px',flexShrink:0}}/>)
+            ) : navBtn(item))}
+          </nav>
+          <div style={{padding:sideOpen?'10px 12px 16px':'10px 14px 16px',borderTop:'1px solid '+C.sep,flexShrink:0}}>
+            {navBtn({id:'settings',label:'Einstellungen',icon:P.gear})}
+            {sideOpen && (
+              <button onClick={()=>{ setSettingsTab('abo'); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:12,width:'100%',marginTop:10,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 12px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                <span style={{width:40,height:40,borderRadius:12,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.spark} sz={18} col="#fff"/></span>
+                <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:700,color:C.txt}}>KI-Guthaben</span><span style={{display:'block',fontSize:12,color:C.sub,marginTop:2}}>{balanceCents==null?'—':((balanceCents/100).toFixed(2).replace('.',',')+' €')}</span><span style={{display:'block',fontSize:12,fontWeight:700,color:C.pri,marginTop:3}}>Aufladen</span></span>
+                <span style={{color:C.mut,fontSize:16}}>›</span>
+              </button>
+            )}
           </div>
-          <button className="railBtn" onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} style={{
-            width:44,height:44,borderRadius:14,marginBottom:10,
-            background:calOpen?C.accent:'transparent',
-          }}>
-            <Ic p={P.cal} sz={20} col={calOpen?C.accentTxt:C.sub}/>
-            <span className="railTip">{MONTHS[mo].slice(0,3)} {yr}</span>
-          </button>
-          <button className="railBtn" onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{
-            width:40,height:40,borderRadius:'50%',flexShrink:0,
-            background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,
-          }}>
-            {((session&&session.user&&session.user.email)||'?').slice(0,1).toUpperCase()}
-            <span className="railTip">{(session&&session.user&&session.user.email)||'Profil'}</span>
-          </button>
-        </div>
+        </aside>
       )}
 
-      {/* ═══ ZWEITE SIDEBAR: KONTEN (Desktop, nur wenn Konten aktiv) ═══ */}
-      {!isMobile && tab==='quellen' && (
-        <div className="glassPanel" style={{position:'fixed',left:railW,top:0,bottom:0,width:secW,zIndex:45,display:'flex',flexDirection:'column',background:hexA(C.surf,0.55),borderRight:'1px solid '+C.bdr,padding:'22px 14px'}}>
-          <div style={{fontSize:20,fontWeight:800,letterSpacing:'-0.02em',marginBottom:16,padding:'0 6px',flexShrink:0}}>Konten</div>
-          <button onClick={()=>setOpenAcct(null)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:!openAcct?C.surf3:'transparent',border:'none',borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:14,fontWeight:!openAcct?700:500,color:!openAcct?C.pri:C.txt,textAlign:'left',marginBottom:10,flexShrink:0}}>
-            <Ic p={P.grid} sz={16} col={!openAcct?C.pri:C.sub}/> Alle Konten
-          </button>
-          <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:2}}>
-            {sideKonten.map(k=>{
-              const c=acol(k.key); const active=openAcct===k.key;
-              return (
-                <button key={k.key} onClick={()=>{ if(k.kind==='prop') setSp(k.pid); setOpenAcct(k.key); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:active?C.surf3:'transparent',border:'none',borderRadius:10,padding:'9px 8px',cursor:'pointer',fontFamily:'inherit'}}>
-                  <span style={{width:10,height:10,borderRadius:'50%',background:c,flexShrink:0}}/>
-                  <span style={{flex:1,fontSize:14,fontWeight:active?700:500,color:active?C.txt:C.sub,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'left'}}>{k.name}</span>
-                  <span onClick={e=>{e.stopPropagation(); const top=e.currentTarget.getBoundingClientRect().top; setAcctMenuOpen(o=>(o&&o.key===k.key)?null:{key:k.key,top});}} style={{color:C.mut,fontSize:16,padding:'2px 6px',borderRadius:6,cursor:'pointer'}}>⋮</span>
-                </button>
-              );
-            })}
-          </div>
-          <button onClick={()=>setAddAcctOpen(true)} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'1.5px dashed '+C.bdrM,borderRadius:10,padding:'10px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,fontWeight:600,color:C.sub,marginTop:10,flexShrink:0}}>
-            <Ic p={P.plus} sz={15} col="currentColor"/> Konto hinzufügen
-          </button>
-        </div>
-      )}
-
-      {/* Konto-Kontextmenü — als fixed außerhalb der scrollbaren Liste gerendert, damit es nicht abgeschnitten wird */}
+      {/* Konto-Kontextmenü (Legacy, wird über die Konten-Karten ausgelöst) */}
       {!isMobile && acctMenuOpen && (()=>{ const k=sideKonten.find(x=>x.key===acctMenuOpen.key); if(!k) return null; return (<>
         <div onClick={()=>setAcctMenuOpen(null)} style={{position:'fixed',inset:0,zIndex:90}}/>
-        <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:railW+secW+8,top:acctMenuOpen.top,zIndex:91,width:206,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+        <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:railW+secW+8,top:acctMenuOpen.top,zIndex:91,width:206,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.25)'}}>
           <button onClick={()=>{setAcctMenuOpen(null); setIconPick(k.key);}} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,color:C.txt,textAlign:'left'}}><Ic p={P.gear} sz={14} col={C.sub}/> Konto bearbeiten</button>
           <button onClick={()=>{ setAcctMenuOpen(null); setTeamInvite(t=>({...t,accounts:t.accounts.includes(k.key)?t.accounts:[...t.accounts,k.key]})); setSettingsTab('team'); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,color:C.txt,textAlign:'left'}}><Ic p={P.prson} sz={14} col={C.sub}/> Teammitglied einladen</button>
-          <button disabled title="Bald verfügbar" style={{display:'flex',alignItems:'center',gap:9,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 10px',fontFamily:'inherit',fontSize:13.5,color:C.mut,textAlign:'left'}}><Ic p={P.out} sz={14} col={C.mut}/> Konto schließen<span style={{marginLeft:'auto',fontSize:10,color:C.mut}}>bald</span></button>
         </div>
       </>); })()}
 
-      {/* ═══ TOP BAR — nur Mobile (Logo + Monatsnavigation + Profil); Desktop hat all das in der Rail ═══ */}
+      {/* ═══ TOP-LEISTE ═══ */}
       <header style={{
-        flexShrink:0,background:'transparent',
-        display:'flex',alignItems:'center',gap:12,padding:isMobile?'8px 14px':0,minHeight:isMobile?60:0,
-        position:'sticky',top:0,zIndex:40,marginLeft:railW,
+        flexShrink:0,display:'flex',alignItems:'center',gap:10,padding:isMobile?'8px 14px':'12px 32px',minHeight:isMobile?60:66,
+        position:'sticky',top:0,zIndex:40,marginLeft:railW,marginRight:rightGap,background:C.bg,
       }}>
+        {!isMobile && (<>
+          <button onClick={()=>setSideOpen(o=>!o)} title={sideOpen?'Menü einklappen':'Menü ausklappen'} style={{...topIconBtn,background:'none',border:'none'}}><Ic p={P.panel} sz={19} col={C.sub}/></button>
+          <div style={{display:'flex',alignItems:'center',gap:2,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:3}}>
+            <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>‹</button>
+            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
+            <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>›</button>
+          </div>
+          <div style={{flex:1}}/>
+          <button onClick={()=>setBelegOpen(true)} style={{display:'flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'10px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',boxShadow:'0 6px 16px '+hexA(C.act,0.28),whiteSpace:'nowrap'}}><Ic p={P.camera} sz={16} col={C.actTxt}/> Beleg hochladen</button>
+          <button onClick={()=>setTab('aufgaben')} title="To-do" style={topIconBtn}><Ic p={P.bell} sz={18} col={C.sub}/>{openTodoCount>0 && <span style={{position:'absolute',top:-5,right:-5,minWidth:18,height:18,borderRadius:99,background:C.red,color:'#fff',fontSize:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg}}>{openTodoCount}</span>}</button>
+          <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} title="Assistent" style={{...topIconBtn,background:botOpen?hexA(C.pri,0.12):C.surf}}><Ic p={P.spark} sz={18} col={botOpen?C.pri:C.sub}/>{!botOpen && botUnread>0 && <span style={{position:'absolute',top:-5,right:-5,minWidth:18,height:18,borderRadius:99,background:C.pri,color:'#fff',fontSize:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg}}>{botUnread}</span>}</button>
+          <button onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{width:38,height:38,borderRadius:'50%',background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,cursor:'pointer',flexShrink:0}}>{initial}</button>
+        </>)}
         {isMobile && (<>
-          <button onClick={()=>{setTab('quellen');setOpenAcct(null);}} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
+          <button onClick={()=>setTab('home')} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
 
           <div style={{flex:1}} />
 
@@ -3829,7 +3872,7 @@ function App({session}) {
       {/* Kalender-Popover — Desktop: verankert am Kalender-Icon in der Rail; Mobile: oben rechts */}
       {calOpen && (
         <div onClick={()=>setCalOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:70}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+80,top:62}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
               <button onClick={()=>setCalYr(y=>y-1)} style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>‹</button>
               <div style={{fontSize:15,fontWeight:700}}>{calYr}</div>
@@ -3850,7 +3893,7 @@ function App({session}) {
       {/* Profil-Menü — Desktop: verankert an der Rail unten links; Mobile: oben rechts */}
       {profOpen && (
         <div onClick={()=>setProfOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+12,bottom:16}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{right:rightGap+32,top:62}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
             <div style={{fontSize:12,color:C.sub,padding:'6px 10px 6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(session&&session.user&&session.user.email)||'Angemeldet'}</div>
             <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
               <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
@@ -3882,67 +3925,72 @@ function App({session}) {
 
       {/* ═══ CONTENT ═══ */}
       <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg,marginLeft:railW+secW,marginRight:isMobile?0:(botOpen?botWidth:(todoDetail?420:0))}}>
-        <div style={{padding:isMobile?'18px 14px 96px':'28px 28px',maxWidth:(tab==='rechnung'&&invEdit)?1320:1020,margin:'0 auto'}}>
+        <div style={{padding:isMobile?'18px 14px 96px':'14px 36px 56px',maxWidth:(tab==='rechnung'&&invEdit)?1320:1180,margin:'0 auto'}}>
 
-          {/* ══ STARTSEITE (Home): Gesamtsumme + horizontaler Slider + inline E/A ══ */}
+          {/* ══ ÜBERSICHT: Monatskennzahlen, Steuer-Rücklage, Beleg-Dropzone, To-dos, Konten ══ */}
           {tab==='home' && (()=>{
-            const ICONS={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
-            const iconFor=(key,def)=>ICONS[(names.propIcon&&names.propIcon[key])||def]||P.house;
+            const hour=new Date().getHours(); const greet=hour<11?'Guten Morgen':hour<18?'Hallo':'Guten Abend';
+            const who=String(profile.name||'').trim().split(/\s+/)[0]||'';
+            const openList=todos.filter(t=>!t.done); const open=openList.slice(0,5);
             const konten=[
-              {key:'unter',kind:'tab',name:names.unternehmen,icon:iconFor('unter','brief'),inc:tot.unterInc,exp:tot.unterExp},
-              ...PROPS.map((p,i)=>{ const r=calcProp(md.props?.[p],yr,mo); return {key:p,kind:'prop',pid:p,name:names[p],icon:iconFor(p,'house'),inc:r.netto,exp:r.exp}; }),
-              {key:'privat',kind:'tab',name:(names.privatLabel||'Privat'),icon:iconFor('privat','prson'),inc:sumItems(md.privat?.einnahmen,yr,mo),exp:tot.privatExp},
+              {key:'unter',name:names.unternehmen||'Firma',inc:tot.unterInc,exp:tot.unterExp,icon:acctIconOf('unter'),go:()=>{setOpenAcct('unter');setTab('quellen');}},
+              ...PROPS.filter(acctCreated).map(p=>{ const r=calcProp(md.props?.[p],yr,mo); return {key:p,name:names[p],inc:r.netto,exp:r.exp,icon:acctIconOf(p),go:()=>{setSp(p);setOpenAcct(p);setTab('quellen');}}; }),
+              {key:'privat',name:names.privatLabel||'Privat',inc:sumItems(md.privat?.einnahmen,yr,mo),exp:tot.privatExp,icon:acctIconOf('privat'),go:()=>{setOpenAcct('privat');setTab('quellen');}},
             ];
-            const scrollBy=(dir)=>{ const el=quellenScrollRef.current; if(el) el.scrollBy({left:dir*el.clientWidth*0.92,behavior:'smooth'}); };
-            const arrowBtn={width:34,height:34,borderRadius:'50%',background:C.surf,border:'1px solid '+C.bdrM,color:C.txt,cursor:'pointer',fontFamily:'inherit',fontSize:16,lineHeight:1,boxShadow:'0 4px 14px rgba(0,0,0,0.4)'};
-            return (
-              <>
-                {/* Gesamt aller Quellen — Pfeil öffnet E/A */}
-                <div style={{padding:'2px 0 20px'}}>
-                  <div style={{display:'inline-block',position:'relative'}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:7}}>
-                      <span style={{fontSize:13,fontWeight:600,color:C.sub,letterSpacing:'0.02em'}}>Gesamtvermögen</span>
-                      <button onClick={()=>setGesamtOpen(o=>!o)} style={{background:'none',border:'none',cursor:'pointer',display:'inline-flex',alignItems:'center',gap:4,color:C.sub,fontSize:13,fontWeight:600,fontFamily:'inherit',padding:0}}>
-                        <span>alle Quellen</span>
-                        <span style={{display:'inline-flex',transition:'transform .16s',transform:gesamtOpen?'rotate(180deg)':'none'}}><Ic p={P.down} sz={12} col={C.sub}/></span>
-                      </button>
+            // Steuer-Schätzung fürs gewählte Jahr – dieselbe Engine wie die Steuerprognose, Annahmen aus dem Steuerprofil
+            let tax=null; try{ const f=taxFactsFor(yr); const pr=(data.taxProfile||{})[yr]||{}; const gewinnFirma=f.acct.unter.inc-f.acct.unter.exp; const vv=PROPS.reduce((sum,p)=>{ const a=f.acct[p]||{inc:0,exp:0,inserate:0}; const gw=num((pr.gebaeudewert||{})[p]); const afa=gw>0?Math.round(gw*(num((pr.afaSatz||{})[p])||2))/100:0; return sum+a.inc+(a.inserate||0)-a.exp-afa; },0);
+              tax=berechneSteuer({year:yr,zusammen:pr.veranlagung==='zusammen',kirche:num(pr.kirche),hebesatz:num(pr.hebesatz)||400,einkuenfte:{gewerbe:pr.firmaArt==='freiberuf'?0:gewinnFirma,freiberuf:pr.firmaArt==='freiberuf'?gewinnFirma:0,vv},vorsorge:{kvpv:num(pr.kvpv),altersvorsorge:num(pr.altersvorsorge),sonstige:num(pr.sonstigeVorsorge)},sonderausgaben:num(pr.sonderausgaben),kinder:num(pr.kinder),vorauszahlungen:{est:num(pr.vzEst),gewst:num(pr.vzGewst)}}); }catch(e){ tax=null; }
+            const tile=(label,val,col,sub,onClick)=>(<div key={label} onClick={onClick} style={{...SC,padding:'18px 20px',flex:1,minWidth:170,cursor:onClick?'pointer':'default'}}><div style={{fontSize:12.5,color:C.sub,fontWeight:600,marginBottom:8}}>{label}</div><div style={{fontSize:26,fontWeight:800,color:col||C.txt,letterSpacing:'-0.02em',...NUM}}>{val}</div>{sub&&<div style={{fontSize:12,color:onClick?C.pri:C.mut,fontWeight:onClick?700:500,marginTop:6}}>{sub}</div>}</div>);
+            const onDrop=(e)=>{ e.preventDefault(); const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]; if(f){ setBelegOpen(true); extractBeleg(f); } };
+            const ghost={display:'flex',alignItems:'center',gap:8,background:C.surf,color:C.txt,border:'1px solid '+C.bdr,borderRadius:12,padding:'11px 14px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'};
+            return (<>
+              <div style={{marginBottom:20}}>
+                <div style={{fontSize:14,color:C.sub,marginBottom:2}}>{greet}{who?', '+who:''}</div>
+                <div style={{fontSize:34,fontWeight:800,letterSpacing:'-0.03em'}}>Übersicht</div>
+                <div style={{fontSize:13.5,color:C.sub,marginTop:4}}>{MONTHS[mo]} {yr} · {openList.length?openList.length+' offene Aufgabe'+(openList.length===1?'':'n'):'nichts offen'} · {saved?'alles gespeichert':'speichert…'}</div>
+              </div>
+              <div style={{display:'flex',gap:14,flexWrap:'wrap',marginBottom:14}}>
+                {tile('Einnahmen · '+MONTHS[mo],fmt(tot.totalInc),C.grn)}
+                {tile('Ausgaben · '+MONTHS[mo],fmt(tot.totalExp),C.exp)}
+                {tile('Ergebnis · '+MONTHS[mo],(tot.net>=0?'+':'')+fmt(tot.net),tot.net>=0?C.txt:C.exp)}
+                {tile('Steuer-Rücklage '+yr, tax?fmt(tax.ruecklageMonat)+' / Monat':'—', C.txt, tax?('Bis heute geschätzt '+fmt(tax.gesamt)+' · Steuerprognose ›'):'Steuerprognose öffnen ›', ()=>{ setTxY(yr); setTab('steuer'); })}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'minmax(0,1.15fr) minmax(0,0.85fr)',gap:14,marginBottom:18,alignItems:'stretch'}}>
+                <div onDragOver={e=>e.preventDefault()} onDrop={onDrop} style={{...SC,padding:'22px 24px',border:'1.5px dashed '+hexA(C.pri,0.45),background:hexA(C.pri,0.04),display:'flex',flexDirection:'column',justifyContent:'center'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+                    <span style={{width:52,height:52,borderRadius:15,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.camera} sz={23} col="#fff"/></span>
+                    <div style={{flex:1,minWidth:200}}>
+                      <div style={{fontSize:16.5,fontWeight:800,letterSpacing:'-0.01em'}}>Beleg hochladen – Buqo verbucht ihn</div>
+                      <div style={{fontSize:13,color:C.sub,marginTop:3,lineHeight:1.5}}>Foto oder PDF hierher ziehen. Buqo liest Betrag, Datum, MwSt und Nummer, wählt Konto und Kategorie und legt den Beleg im richtigen Monat ab. Du bestätigst nur noch.</div>
                     </div>
-                    <div style={{fontSize:isMobile?40:50,fontWeight:800,color:tot.net>=0?C.txt:C.exp,...NUM,lineHeight:1}}>{tot.net>=0?'+':''}{fmt(tot.net)}</div>
-                    {gesamtOpen && (<>
-                      <div onClick={()=>setGesamtOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
-                      <div style={{position:'absolute',left:0,top:'100%',marginTop:10,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px 20px',boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:85,minWidth:240}}>
-                        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
-                          <span style={{width:10,height:10,borderRadius:'50%',background:C.grn,display:'inline-block'}}/>
-                          <span style={{fontSize:14,color:C.sub,flex:1}}>Einnahmen</span>
-                          <span style={{fontSize:15,fontWeight:700,color:C.txt,...NUM}}>{fmt(tot.totalInc)}</span>
-                        </div>
-                        <div style={{display:'flex',alignItems:'center',gap:10}}>
-                          <span style={{width:10,height:10,borderRadius:'50%',background:C.exp,display:'inline-block'}}/>
-                          <span style={{fontSize:14,color:C.sub,flex:1}}>Ausgaben</span>
-                          <span style={{fontSize:15,fontWeight:700,color:C.txt,...NUM}}>{fmtN(tot.totalExp)}</span>
-                        </div>
-                      </div>
-                    </>)}
+                  </div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:16}}>
+                    <button onClick={()=>setBelegOpen(true)} style={{...ghost,background:C.act,color:C.actTxt,border:'none'}}><Ic p={P.upload} sz={15} col={C.actTxt}/> Beleg wählen</button>
+                    <button onClick={()=>{setTab('import');setImportTab('bank');}} style={ghost}><Ic p={P.bank} sz={15} col={C.txt}/> Kontoauszug importieren</button>
+                    <button onClick={()=>setTab('rechnung')} style={ghost}><Ic p={P.receipt} sz={15} col={C.txt}/> Rechnung schreiben</button>
                   </div>
                 </div>
-                {/* Slider */}
-                <div style={{position:'relative',marginBottom:24}}>
-                  {!isMobile && <button onClick={()=>scrollBy(-1)} title="Zurück" style={{...arrowBtn,position:'absolute',left:-46,top:'50%',transform:'translateY(-50%)',zIndex:5}}>‹</button>}
-                  {!isMobile && <button onClick={()=>scrollBy(1)} title="Weiter" style={{...arrowBtn,position:'absolute',right:-46,top:'50%',transform:'translateY(-50%)',zIndex:5}}>›</button>}
-                  <div ref={quellenScrollRef} style={{display:'flex',gap:14,overflowX:'auto',scrollbarWidth:'none',scrollSnapType:'x mandatory',paddingBottom:4}}>
-                    {konten.map(k=>{ const erg=k.inc-k.exp; const c=acol(k.key), tint=hexA(c,0.13); const open=openAcct===k.key; const toggle=()=>{ if(k.kind==='prop')setSp(k.pid); setOpenAcct(k.key); }; return (
-                      <div key={k.key} onClick={toggle} style={{flexShrink:0,width:isMobile?'82%':'calc((100% - 28px)/3)',scrollSnapAlign:'start',background:open?tint:C.surf2,border:'1px solid '+(open?c:'transparent'),borderRadius:18,padding:'18px 20px',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:16,fontWeight:500,color:C.sub,marginBottom:7,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.name}</div>
-                          <div style={{fontSize:27,fontWeight:800,color:erg>=0?C.grn:C.exp,...NUM,lineHeight:1}}>{fmt(erg)}</div>
-                        </div>
-                        <button onClick={e=>{e.stopPropagation(); setIconPick(k.key);}} title="Konto bearbeiten" style={{width:46,height:46,borderRadius:13,background:c,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={k.icon} sz={22} col={'#0A0A0A'}/></button>
-                      </div>
-                    ); })}
-                  </div>
+                <div style={{...SC,padding:'18px 20px'}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}><div style={{fontSize:15,fontWeight:700}}>Jetzt erledigen</div><button onClick={()=>setTab('aufgaben')} style={{background:'none',border:'none',color:C.pri,fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle To-dos ›</button></div>
+                  {open.length===0 ? <div style={{fontSize:13.5,color:C.sub,padding:'10px 0',lineHeight:1.5}}>Alles erledigt. Buqo legt hier automatisch To-dos an, wenn ein Beleg fehlt, eine Rechnung überfällig ist oder etwas doppelt aussieht.</div> : open.map(t=>(
+                    <div key={t.id} style={{display:'flex',alignItems:'flex-start',gap:10,borderBottom:'1px solid '+C.sep,padding:'9px 0'}}>
+                      <button onClick={()=>toggleTodoDone(t.id)} title="Erledigt" style={{width:18,height:18,borderRadius:'50%',border:'1.5px solid '+C.bdrM,background:'none',cursor:'pointer',flexShrink:0,marginTop:1,padding:0}}/>
+                      <button onClick={()=>{ if(t.ref) openTodoRef(t); else setTab('aufgaben'); }} style={{flex:1,minWidth:0,background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><span style={{display:'block',fontSize:13.5,fontWeight:600,color:C.txt}}>{t.title}</span>{t.note&&<span style={{display:'block',fontSize:12,color:C.sub,marginTop:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.note}</span>}</button>
+                    </div>
+                  ))}
+                  {openList.length>5 && <div style={{fontSize:12,color:C.mut,marginTop:8}}>+ {openList.length-5} weitere</div>}
                 </div>
-              </>
-            );
+              </div>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}><div style={{fontSize:15,fontWeight:700}}>Deine Konten · {MONTHS[mo]}</div><button onClick={()=>{setOpenAcct(null);setTab('quellen');}} style={{background:'none',border:'none',color:C.pri,fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle Konten ›</button></div>
+              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(auto-fill, minmax(220px, 1fr))',gap:14,marginBottom:14}}>
+                {konten.map(k=>{ const erg=k.inc-k.exp; const c=acol(k.key); return (
+                  <button key={k.key} onClick={k.go} style={{...SC,padding:'18px 18px',cursor:'pointer',textAlign:'left',fontFamily:'inherit',display:'flex',flexDirection:'column',gap:14,color:C.txt}}>
+                    <span style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}><span style={{width:36,height:36,borderRadius:11,background:c,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={k.icon} sz={17} col="#0A0A0A"/></span><span style={{fontSize:15,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.name}</span></span>
+                    <span><span style={{display:'block',fontSize:22,fontWeight:800,color:erg>=0?C.txt:C.exp,letterSpacing:'-0.02em',...NUM}}>{erg>=0?'+':''}{fmt(erg)}</span><span style={{display:'block',fontSize:12,color:C.mut,marginTop:3,...NUM}}>{fmt(k.inc)} ein · {fmt(k.exp)} aus</span></span>
+                  </button>
+                ); })}
+              </div>
+            </>);
           })()}
 
           {/* ══ QUELLEN (Konten-Grid) ══ */}
@@ -4313,8 +4361,8 @@ function App({session}) {
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
                 {[
                   // Auf dem Desktop haben Rechnungen/Bank/Kunden/Aufgaben schon ein eigenes Icon in der Rail — hier nur auf Mobile zusätzlich zeigen (dort gibt's keine Rail).
-                  ...(isMobile?[{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
-                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.spark},{id:'kosten',label:'Betriebskosten',icon:P.spark},
+                  ...(isMobile?[{id:'belege',label:'Belege',icon:P.clip},{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
+                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.percent},{id:'berater',label:'KI-Berater',icon:P.spark},{id:'kosten',label:'KI-Kosten',icon:P.layers},{id:'settings',label:'Einstellungen',icon:P.gear},
                 ].map(m=>(
                   <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
@@ -4325,7 +4373,7 @@ function App({session}) {
           )}
 
           {/* ══ IMMOBILIEN ══ */}
-          {(tab==='immo' || ((tab==='quellen'||tab==='home') && PROPS.includes(openAcct) && openAcct===sp)) && (()=>{
+          {(tab==='immo' || (tab==='quellen' && PROPS.includes(openAcct) && openAcct===sp)) && (()=>{
             const PALETTE=['#8FE3C6','#ABC4FF','#FFC7A6','#E8A39E','#C9B6FF','#9FD8FF'];
             const ICONS={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
             const pcol=(pid)=>PALETTE[PROPS.indexOf(pid)%PALETTE.length];
@@ -4442,7 +4490,7 @@ function App({session}) {
           })()}
 
           {/* ══ UNTERNEHMEN ══ */}
-          {(tab==='unter' || ((tab==='quellen'||tab==='home') && openAcct==='unter')) && <>
+          {(tab==='unter' || (tab==='quellen' && openAcct==='unter')) && <>
             {tab!=='home' && (<>
               <button onClick={()=>{setOpenAcct(null);if(tab!=='quellen')setTab('quellen');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:8,display:'flex',alignItems:'center',gap:4}}>‹ Konten</button>
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
@@ -4514,7 +4562,7 @@ function App({session}) {
           </>}
 
           {/* ══ PRIVAT ══ */}
-          {(tab==='privat' || ((tab==='quellen'||tab==='home') && openAcct==='privat')) && <>
+          {(tab==='privat' || (tab==='quellen' && openAcct==='privat')) && <>
             {tab!=='home' && (<>
               <button onClick={()=>{setOpenAcct(null);if(tab!=='quellen')setTab('quellen');}} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontFamily:'inherit',fontSize:13,padding:0,marginBottom:8,display:'flex',alignItems:'center',gap:4}}>‹ Konten</button>
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
@@ -6322,15 +6370,15 @@ function App({session}) {
         ); };
         return (
           <div style={{position:'fixed',left:0,right:0,bottom:0,zIndex:60,background:C.surf,borderTop:'1px solid '+C.bdr,display:'flex',alignItems:'flex-end',justifyContent:'space-around',height:66,paddingBottom:'max(6px, env(safe-area-inset-bottom))'}}>
-            {cell('quellen','Home',P.grid,['quellen','immo','unter','privat'])}
-            {cell('belege','Belege',P.clip,['belege'])}
+            {cell('home','Übersicht',P.home,['home'])}
+            {cell('quellen','Konten',P.grid,['quellen','immo','unter','privat'])}
             <div style={{flex:1,display:'flex',justifyContent:'center'}}>
               <button onClick={()=>setBelegOpen(true)} title="Beleg erfassen" style={{width:56,height:56,borderRadius:'50%',background:C.act,border:'4px solid '+C.bg,color:C.actTxt,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',marginTop:-22,boxShadow:'0 6px 18px rgba(0,0,0,0.45)'}}>
                 <Ic p={P.camera} sz={24} col={C.actTxt}/>
               </button>
             </div>
             <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',color:botOpen?C.pri:C.sub,paddingTop:8,position:'relative'}}><Ic p={P.spark} sz={20} col={botOpen?C.pri:C.sub}/><span style={{fontSize:10,fontWeight:600}}>Assistent</span>{botUnread>0 && <span style={{position:'absolute',top:3,right:'calc(50% - 21px)',minWidth:17,height:17,borderRadius:99,background:C.red,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',boxSizing:'border-box'}}>{botUnread}</span>}</button>
-            {cell('mehr','Sonstiges',P.menu,['mehr','kal','yr','steuer','steuern','aufgaben','raten','kunden','download','kosten'])}
+            {cell('mehr','Mehr',P.menu,['mehr','belege','rechnung','import','berater','kal','yr','steuer','steuern','aufgaben','raten','kunden','download','kosten','settings'])}
           </div>
         );
       })()}
@@ -6361,6 +6409,14 @@ function App({session}) {
               {belegRes.waehrung && belegRes.waehrung!=='EUR' && !belegRes.fx && (
                 <div style={{background:C.ambL,border:'1px solid rgba(255,180,0,0.4)',borderRadius:10,padding:'10px 12px',marginBottom:12,fontSize:12,color:C.amb,lineHeight:1.5}}>⚠ Beleg scheint in {belegRes.waehrung} ausgestellt zu sein – Kurs konnte nicht geladen werden, Betrag unten ist noch in {belegRes.waehrung}, bitte manuell in EUR umrechnen.</div>
               )}
+              <div style={{background:hexA(C.pri,0.07),border:'1px solid '+hexA(C.pri,0.25),borderRadius:14,padding:'14px 16px',marginBottom:12}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}><span style={{width:26,height:26,borderRadius:8,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={14} col="#fff"/></span><span style={{fontSize:13,fontWeight:700}}>Buqo hat den Beleg gelesen</span></div>
+                <div style={{fontSize:18,fontWeight:800,letterSpacing:'-0.02em',color:C.txt}}>{belegRes.name||'Beleg'} · {fmt(num(belegRes.amount))}</div>
+                <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>{belegRes.kind==='ein'?'Einnahme':'Ausgabe'}{belegRes.datum?' · '+belegRes.datum:''}{num(belegRes.mwst)?' · '+num(belegRes.mwst)+' % MwSt':''}{belegRes.belegnr?' · Nr. '+belegRes.belegnr:''}</div>
+                <div style={{fontSize:13,color:C.txt,marginTop:10,lineHeight:1.5}}>Verbuchen als <b>{moveLabel(belegDest)}</b> · {belegRes.category||'ohne Kategorie'} · {MONTHS[belegM]} {belegY}{belegRes.suggReason && <span style={{color:C.mut}}> · {belegRes.suggReason}</span>}</div>
+              </div>
+              <button onClick={()=>setBelegDetails(o=>!o)} style={{display:'flex',alignItems:'center',gap:6,background:'none',border:'none',color:C.pri,fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit',padding:0,marginBottom:12}}><span style={{display:'inline-flex',transition:'transform .16s',transform:belegDetails?'rotate(180deg)':'none'}}><Ic p={P.down} sz={13} col={C.pri}/></span> {belegDetails?'Details ausblenden':'Details anpassen (Konto, Beträge, Kategorie, Monat)'}</button>
+              {belegDetails && (<>
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Name / Kunde</div>
               <input value={belegRes.name} onChange={e=>setBelegRes(r=>({...r,name:e.target.value}))} style={{...SS,marginBottom:10,textAlign:'left'}} />
               <div style={{display:'flex',gap:8,marginBottom:10}}>
@@ -6395,11 +6451,14 @@ function App({session}) {
               </div>
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Konto</div>
               <select value={belegDest} onChange={e=>setBelegDest(e.target.value)} style={{...SS,marginBottom:10}}>{moveTargets.map(t=><option key={t.key} value={t.key}>{t.label}</option>)}</select>
+              <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kategorie</div>
+              <select value={belegRes.category||''} onChange={e=>setBelegRes(r=>({...r,category:e.target.value}))} style={{...SS,marginBottom:10}}><option value="">— keine —</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
               <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Monat</div>
               <div style={{display:'flex',gap:8,marginBottom:16}}>
                 <select value={belegM} onChange={e=>setBelegM(+e.target.value)} style={{...SS,flex:1}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
                 <select value={belegY} onChange={e=>setBelegY(+e.target.value)} style={{...SS,width:100}}>{[yr-1,yr,yr+1].map(y=><option key={y} value={y}>{y}</option>)}</select>
               </div>
+              </>)}
               {belegDom(belegDest) && (<>
                 {belegNeedsNutzung(belegRes,belegDest) ? (
                   <div style={{marginBottom:14}}>
@@ -6441,7 +6500,7 @@ function App({session}) {
                   </div>
                 )}
               </>)}
-              <button onClick={saveBeleg} disabled={belegBusy} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:belegBusy?'default':'pointer',opacity:belegBusy?0.6:1,fontFamily:'inherit'}}>{belegBusy?'Speichert…':'Speichern + Beleg ablegen'}</button>
+              <button onClick={saveBeleg} disabled={belegBusy} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,width:'100%',background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'13px',fontSize:15,fontWeight:700,cursor:belegBusy?'default':'pointer',opacity:belegBusy?0.6:1,fontFamily:'inherit'}}>{belegBusy?'Verbucht…':'Verbuchen + Beleg ablegen'}</button>
               <button onClick={()=>{setBelegRes(null); belegBlobRef.current=null;}} disabled={belegBusy} style={{width:'100%',background:'none',border:'none',color:C.mut,fontSize:13,cursor:'pointer',fontFamily:'inherit',marginTop:10}}>Anderen Beleg auslesen</button>
             </>
           )}
@@ -6978,13 +7037,6 @@ function App({session}) {
           </div>
         </div>
       )}
-      {!isMobile && !botOpen && (
-        <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} title="Assistent" style={{position:'fixed',right:24,bottom:24,width:56,height:56,borderRadius:'50%',background:AI_GRADIENT,border:'none',cursor:'pointer',zIndex:115,boxShadow:'0 10px 30px rgba(0,0,0,0.45)',display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <Ic p={P.spark} sz={24} col={'#FFFFFF'}/>
-          {botUnread>0 && <span style={{position:'absolute',top:-4,right:-4,minWidth:21,height:21,borderRadius:99,background:C.red,color:'#fff',fontSize:11.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg,boxSizing:'border-box'}}>{botUnread}</span>}
-        </button>
-      )}
-
       {/* ── Rechnung per E-Mail senden (Compose) ── */}
       {mailCompose && (()=>{ const mc=mailCompose; const co=companyFor(mc.inv.domain||'unter')||{}; const noSender=!String(co.senderEmail||'').trim(); const fromName=String(co.senderName||co.name||'').trim(); return (
         <div onClick={()=>{ if(!mc.sending) setMailCompose(null); }} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:170,display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?12:24}}>
