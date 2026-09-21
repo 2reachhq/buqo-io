@@ -91,6 +91,26 @@ und Laden gleichzeitig fehl, bis im Dashboard „Restore project" geklickt wird.
 wach (GitHub Actions muss für das Repo aktiviert sein). Alternativ: Pro-Tarif, dort gibt es keine
 Auto-Pause.
 
+## Solo-Modus (Buqo nur für dich)
+
+Die App läuft mit `SOLO_MODE = true` (in `app/src/main.jsx`): Abo & Guthaben, Team-Einladungen und
+Steuerberater-Rollen sind ausgeblendet. Damit die KI-Funktionen ohne Guthaben laufen, einmal
+
+```bash
+supabase secrets set BUQO_SOLO=1
+supabase functions deploy ai
+```
+
+Alternative ohne Redeploy: Guthaben per SQL gutschreiben (`credit_topup`, siehe oben).
+
+## Umzug aus sevDesk
+
+In der App unter *Übersicht → „Aus sevDesk umziehen"* (oder Sidebar → Mehr): CSV-Export der Belege
+und Rechnungen plus die ZIP-Dateien mit den PDFs hochladen, Vorschau prüfen, importieren. Erkannt
+werden sevDesk-CSV (deutsche und englische Zahlen, UTF-8 oder Windows-1252), DATEV-Buchungsstapel
+(EXTF) und beliebige CSVs über die Spalten-Zuordnung. Doppelte Einträge werden übersprungen, PDFs
+landen im Bucket `belege` in der gewohnten Ordnerstruktur.
+
 ## Datenmodell heute und der nächste Schritt
 
 Der komplette Buchhaltungs-Zustand liegt als ein JSON-Dokument in `app_state` (Zeile 1). Das ist

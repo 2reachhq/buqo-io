@@ -5,6 +5,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import TaxCockpit from './tax/TaxCockpit.jsx';
 import { YEARS as TAX_YEARS, berechneSteuer } from './tax/estg.js';
+import SevdeskImport from './import/SevdeskImport.jsx';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 window.pdfjsLib = pdfjsLib; // pdfToLines() below still reads it off window, unchanged
@@ -19,6 +20,8 @@ const sb = createClient(SB_URL, SB_KEY);
 /* ══ Constants ══ */
 const MONTHS = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
 const PROPS  = ['p1','p2','p3'];
+// Buqo läuft nur für den Inhaber: Abo, Team-Einladungen und Steuerberater-Rollen werden ausgeblendet.
+const SOLO_MODE = true;
 const PROP_EXP_DEF  = ['Hypothek / Kredit','Nebenkosten','Strom & Wasser','Versicherung','Reinigung & Pflege','Reparaturen & Wartung','Löhne / Personal','Steuer & Abgaben','Sonstiges'];
 const UNTER_EXP_DEF = ['Autoleasing','Autoversicherung','Rechtsschutz','Steuerberater / Buchhaltung','Software / Lizenzen','Telefon & Internet','Marketing / Werbung'];
 const UNTER_PRESETS = ['Freelancer','Bürokosten','Reisekosten','Fortbildung','Bankgebühren','Sonstiges'];
@@ -1205,7 +1208,7 @@ function Login({inviteToken}) {
         ) : (
           <div style={{fontSize:13,color:C.sub,marginBottom:20}}>{mode==='login'?'Bitte einloggen':mode==='reset'?'Passwort zurücksetzen':'Konto erstellen'}</div>
         )}
-        {mode==='signup' && (
+        {mode==='signup' && !SOLO_MODE && (
           <div style={{marginBottom:14}}>
             <label style={{fontSize:12,color:C.sub,display:'block',marginBottom:6}}>Ich bin…</label>
             <div style={{display:'flex',gap:8}}>{roleBtn('user','Unternehmer / Selbstständig')}{roleBtn('advisor','Steuerberater')}</div>
@@ -2472,6 +2475,41 @@ function App({session}) {
       setBelegOpen(false); setBelegRes(null); belegBlobRef.current=null; loadStorage();
     }catch(e){ setToast('Speichern fehlgeschlagen: '+(e.message||e)); }
     setBelegBusy(false);
+  };
+  /* ── Umzug aus sevDesk: Buchungen, Rechnungen, Kunden anlegen und PDFs ablegen (Payload aus SevdeskImport) ── */
+  const sevdeskExisting = ()=>({
+    belege: existingBookings().map(b=>({nummer:b.it.belegnr||'', brutto:num(b.it.amount), name:b.it.name||'', datum:toISO(b.it.datum)||''})),
+    rechnungen: (data.invoices||[]).map(iv=>({nummer:iv.number||'', brutto:num(iv.total), name:iv.custName||'', datum:toISO(iv.date)||''})),
+  });
+  const runSevdeskImport = async (payload, onProgress)=>{
+    const prog=(t)=>{ try{ onProgress&&onProgress(t); }catch(e){} };
+    const monthFolder=(m)=>String(m+1).padStart(2,'0')+' '+MONTHS[m];
+    const destAcct=(d)=> (d==='unterInc'||d==='unterExp') ? 'unter' : d;
+    const destKeyFor=(acct,kind)=> acct==='unter' ? (kind==='ein'?'unterInc':'unterExp') : acct;
+    const mime=(n)=> /\.pdf$/i.test(n)?'application/pdf':/\.png$/i.test(n)?'image/png':/\.webp$/i.test(n)?'image/webp':'image/jpeg';
+    let files=0, fehler=0;
+    const up=async(path,file)=>{ try{ const bytes=await file.data(); const {error}=await sb.storage.from('belege').upload(path, new Blob([bytes],{type:mime(file.name)}), {upsert:true, contentType:mime(file.name)}); if(error) throw error; files++; return path; }catch(e){ fehler++; return null; } };
+    const bel=[]; let i=0;
+    for(const r of payload.belege){ i++; prog('Belege: '+i+' / '+payload.belege.length+(r.file?' · '+r.file.name:'')); const acct=destAcct(r.dest); const dk=destKeyFor(acct,r.kind); let filePath=null; if(r.file){ filePath=await up([...folderFor(dk), String(r.y), monthFolder(r.m), belegFileName(r.name, r.nummer, r.file.name)].map(safeName).join('/'), r.file); } bel.push({...r, acct, filePath, fileName:r.file?r.file.name:''}); }
+    const rec=[]; i=0;
+    for(const r of payload.rechnungen){ i++; prog('Rechnungen: '+i+' / '+payload.rechnungen.length); let pdfPath=null; if(r.file){ pdfPath=await up(['Rechnungen',String(r.y),'Rechnung_'+safeName(r.nummer||r.name||'Import')+'.pdf'].map(safeName).join('/'), r.file); } rec.push({...r, pdfPath}); }
+    const knownNames=new Set(customers.map(c=>normName(c.name))); const newNames=new Set(); rec.forEach(r=>{ const n=normName(r.name||'Kunde'); if(!knownNames.has(n)) newNames.add(n); });
+    setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const now2=new Date().toISOString();
+      bel.forEach(r=>{ if(!nd[r.y]) nd[r.y]={}; if(!nd[r.y][r.m]) nd[r.y][r.m]=emptyMonth(); const done=payload.confirmed||r.status==='bezahlt';
+        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), amount:r.brutto, netto:r.netto, mwst:r.mwst, category:r.kategorie||'', note:[(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
+        _bookKind(nd[r.y][r.m], r.acct, r.kind, item); });
+      const custs=[...(nd.customers||[])]; const invs=[...(nd.invoices||[])];
+      rec.forEach(r=>{ const nm=(r.name||'Kunde').trim(); let c=custs.find(x=>normName(x.name)===normName(nm)); if(!c){ c={id:uid(), name:nm, company:nm, firstName:'', lastName:'', anrede:'', address:'', email:'', phone:'', website:'', custNo:String(1000+custs.length+1), domain:'unter', imported:'sevdesk'}; custs.push(c); }
+        const invId=uid(); const paid=r.status==='bezahlt';
+        invs.push({ id:invId, number:r.nummer||('IMP-'+r.datum), domain:'unter', account:'unter', customerId:c.id, custName:nm, custAddress:'', custEmail:'', date:r.datum, due:r.faellig||'', items:[{desc:r.beschreibung||'Leistung laut Rechnung', qty:1, price:r.netto, mwst:r.mwst}], note:'Import aus sevDesk', total:r.brutto, paid, paidDate:paid?(r.zahldatum||r.datum):'', pdfPath:r.pdfPath, sentDate:r.datum, booked:true, imported:'sevdesk', importedAt:now2 });
+        if(!nd[r.y]) nd[r.y]={}; if(!nd[r.y][r.m]) nd[r.y][r.m]=emptyMonth();
+        const item={...newItem(('Rechnung '+(r.nummer||'')+' · '+nm).slice(0,90)), amount:r.brutto, netto:r.netto, mwst:r.mwst, belegnr:r.nummer||'', datum:r.datum, category:'Allgemein', note:'Rechnung · Import aus sevDesk', invId, customerId:c.id, custName:nm, paid, status:paid?'bezahlt':'offen', bankConfirmed:paid, filePath:r.pdfPath, fileName:r.pdfPath?('Rechnung_'+(r.nummer||'')+'.pdf'):'', imported:'sevdesk', importedAt:now2 };
+        _bookKind(nd[r.y][r.m], 'unter', 'ein', item); });
+      nd.customers=custs; nd.invoices=invs;
+      nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
+      return nd; });
+    setToast('Import abgeschlossen: '+bel.length+' Belege, '+rec.length+' Rechnungen');
+    return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler };
   };
   // ── P0: Nutzungsart (privat/geschäftlich/gemischt) + Bewirtungs-Rückfrage + automatischer Steuer-Tipp ──
   const belegDom = (dest)=> (dest==='p1'||dest==='p2'||dest==='p3') ? 'immo' : (dest==='unterInc'||dest==='unterExp') ? 'unter' : null;
@@ -3751,10 +3789,11 @@ function App({session}) {
   const overdueCount = (()=>{ try{ return overdueInvoices().length; }catch(e){ return 0; } })();
   const rightGap = isMobile?0:(botOpen?botWidth:(todoDetail?420:0));
   const MORE_TABS=['raten','yr','kal','download','kosten'];
+  const moreActive = moreOpen || MORE_TABS.includes(tab) || (tab==='import'&&importTab==='sevdesk');
   const SIDE_NAV=[
     {id:'home',label:'Übersicht',icon:P.home},
     {id:'belege',label:'Belege',icon:P.clip,badge:openBelegCount},
-    {key:'bank',id:'import',label:'Bank',icon:P.bank,badge:drafts.length,onClick:()=>{setTab('import');setImportTab('bank');}},
+    {key:'bank',id:'import',label:'Bank',icon:P.bank,badge:drafts.length,active:(tab==='import'&&importTab!=='sevdesk'),onClick:()=>{setTab('import');setImportTab('bank');}},
     {id:'aufgaben',label:'To-do',icon:P.check,badge:openTodoCount},
     {section:'Einnahmen'},
     {id:'rechnung',label:'Rechnungen',icon:P.receipt,badge:overdueCount},
@@ -3767,7 +3806,8 @@ function App({session}) {
     {id:'steuern',label:'Auswertungen',icon:P.doc},
     {id:'berater',label:'KI-Berater',icon:P.spark},
     {section:'Mehr',toggle:true},
-    ...((moreOpen||MORE_TABS.includes(tab))?[
+    ...(moreActive?[
+      {key:'sevdesk',id:'import',label:'Umzug aus sevDesk',icon:P.swap,active:(tab==='import'&&importTab==='sevdesk'),onClick:()=>{setTab('import');setImportTab('sevdesk');}},
       {id:'raten',label:'Raten & Kredite',icon:P.wallet},
       {id:'yr',label:'Analyse',icon:P.chart},
       {id:'kal',label:'Events',icon:P.cal},
@@ -3799,7 +3839,7 @@ function App({session}) {
           <nav style={{flex:1,overflowY:'auto',overflowX:'hidden',padding:sideOpen?'0 12px':'0 14px',display:'flex',flexDirection:'column',gap:2}}>
             {SIDE_NAV.map(item=> item.section ? (
               sideOpen ? (item.toggle
-                ? <button key={'sec-'+item.section} onClick={()=>setMoreOpen(o=>!o)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',textTransform:'uppercase',padding:'16px 12px 6px'}}><span>{item.section}</span><span style={{display:'inline-flex',transition:'transform .16s',transform:(moreOpen||MORE_TABS.includes(tab))?'rotate(180deg)':'none'}}><Ic p={P.down} sz={12} col={C.mut}/></span></button>
+                ? <button key={'sec-'+item.section} onClick={()=>setMoreOpen(o=>!o)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',textTransform:'uppercase',padding:'16px 12px 6px'}}><span>{item.section}</span><span style={{display:'inline-flex',transition:'transform .16s',transform:moreActive?'rotate(180deg)':'none'}}><Ic p={P.down} sz={12} col={C.mut}/></span></button>
                 : <div key={'sec-'+item.section} style={{fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',textTransform:'uppercase',padding:'16px 12px 6px'}}>{item.section}</div>)
               : (item.toggle
                 ? <button key={'sec-'+item.section} onClick={()=>setMoreOpen(o=>!o)} className="railBtn" style={{width:'100%',height:30,marginTop:6}}><Ic p={P.menu} sz={15} col={C.mut}/><span className="railTip">Mehr</span></button>
@@ -3808,13 +3848,19 @@ function App({session}) {
           </nav>
           <div style={{padding:sideOpen?'10px 12px 16px':'10px 14px 16px',borderTop:'1px solid '+C.sep,flexShrink:0}}>
             {navBtn({id:'settings',label:'Einstellungen',icon:P.gear})}
-            {sideOpen && (
+            {sideOpen && (SOLO_MODE ? (
+              <button onClick={()=>{ setTab('import'); setImportTab('sevdesk'); }} style={{display:'flex',alignItems:'center',gap:12,width:'100%',marginTop:10,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 12px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+                <span style={{width:40,height:40,borderRadius:12,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.swap} sz={18} col="#fff"/></span>
+                <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:700,color:C.txt}}>Umzug aus sevDesk</span><span style={{display:'block',fontSize:12,color:C.sub,marginTop:2}}>Belege & Rechnungen</span><span style={{display:'block',fontSize:12,fontWeight:700,color:C.pri,marginTop:3}}>Importieren</span></span>
+                <span style={{color:C.mut,fontSize:16}}>›</span>
+              </button>
+            ) : (
               <button onClick={()=>{ setSettingsTab('abo'); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:12,width:'100%',marginTop:10,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 12px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
                 <span style={{width:40,height:40,borderRadius:12,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.spark} sz={18} col="#fff"/></span>
                 <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:700,color:C.txt}}>KI-Guthaben</span><span style={{display:'block',fontSize:12,color:C.sub,marginTop:2}}>{balanceCents==null?'—':((balanceCents/100).toFixed(2).replace('.',',')+' €')}</span><span style={{display:'block',fontSize:12,fontWeight:700,color:C.pri,marginTop:3}}>Aufladen</span></span>
                 <span style={{color:C.mut,fontSize:16}}>›</span>
               </button>
-            )}
+            ))}
           </div>
         </aside>
       )}
@@ -3898,10 +3944,12 @@ function App({session}) {
             <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
               <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
             </div>
+            {!SOLO_MODE && (
             <button onClick={()=>{ setProfOpen(false); setSettingsTab('abo'); setTab('settings'); }} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
               <span style={{display:'flex',alignItems:'center',gap:10}}><Ic p={P.spark} sz={16} col={C.sub}/> <span>AI-Guthaben</span></span>
               <span style={{fontSize:13,fontWeight:700,color:balanceCents!=null&&balanceCents<=0?C.red:C.grn}}>{balanceCents==null?'—':((balanceCents/100).toFixed(2).replace('.',',')+' €')}</span>
             </button>
+            )}
             <button onClick={()=>{ setProfOpen(false); setTab('settings'); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:10,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
               <Ic p={P.gear} sz={16} col={C.sub}/> <span>Einstellungen</span>
             </button>
@@ -3968,6 +4016,7 @@ function App({session}) {
                     <button onClick={()=>setBelegOpen(true)} style={{...ghost,background:C.act,color:C.actTxt,border:'none'}}><Ic p={P.upload} sz={15} col={C.actTxt}/> Beleg wählen</button>
                     <button onClick={()=>{setTab('import');setImportTab('bank');}} style={ghost}><Ic p={P.bank} sz={15} col={C.txt}/> Kontoauszug importieren</button>
                     <button onClick={()=>setTab('rechnung')} style={ghost}><Ic p={P.receipt} sz={15} col={C.txt}/> Rechnung schreiben</button>
+                    <button onClick={()=>{setTab('import');setImportTab('sevdesk');}} style={ghost}><Ic p={P.swap} sz={15} col={C.txt}/> Aus sevDesk umziehen</button>
                   </div>
                 </div>
                 <div style={{...SC,padding:'18px 20px'}}>
@@ -4058,7 +4107,7 @@ function App({session}) {
 
           {/* ══ EINSTELLUNGEN (Profil) ══ */}
           {tab==='settings' && (()=>{
-            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'abo',l:'Abo & Guthaben',ic:P.brief},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send},{k:'admin',l:'Admin',ic:P.gear}];
+            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'abo',l:'Abo & Guthaben',ic:P.brief},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send},{k:'admin',l:'Admin',ic:P.gear}].filter(t=>!SOLO_MODE || !['abo','team','berater'].includes(t.k));
             const eur = (c)=> (c==null?'—':((c/100).toFixed(2).replace('.',',')+' €'));
             const sAcct = bizAccts.includes(settingsAcct)?settingsAcct:(bizAccts[0]||'unter');
             const fldL={...SS,textAlign:'left'};
@@ -4362,7 +4411,7 @@ function App({session}) {
                 {[
                   // Auf dem Desktop haben Rechnungen/Bank/Kunden/Aufgaben schon ein eigenes Icon in der Rail — hier nur auf Mobile zusätzlich zeigen (dort gibt's keine Rail).
                   ...(isMobile?[{id:'belege',label:'Belege',icon:P.clip},{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
-                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.percent},{id:'berater',label:'KI-Berater',icon:P.spark},{id:'kosten',label:'KI-Kosten',icon:P.layers},{id:'settings',label:'Einstellungen',icon:P.gear},
+                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.percent},{id:'berater',label:'KI-Berater',icon:P.spark},{id:'sevdesk',label:'Umzug aus sevDesk',icon:P.swap,onClick:()=>{setTab('import');setImportTab('sevdesk');}},{id:'kosten',label:'KI-Kosten',icon:P.layers},{id:'settings',label:'Einstellungen',icon:P.gear},
                 ].map(m=>(
                   <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
@@ -4681,8 +4730,15 @@ function App({session}) {
             return (
               <>
                 <div style={{marginBottom:18}}>
-                  <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>{importTab==='bank'?'Kontoauszug':'Beleg'}</div>
+                  <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>{importTab==='bank'?'Kontoauszug':importTab==='sevdesk'?'Umzug aus sevDesk':'Beleg'}</div>
+                  {importTab==='sevdesk' && <div style={{fontSize:13,color:C.sub,marginTop:3}}>Belege, Rechnungen, Kunden und PDFs in einem Rutsch übernehmen – Jahr für Jahr, beginnend mit 2025.</div>}
                 </div>
+
+                {importTab==='sevdesk' && (
+                  <SevdeskImport ui={{C,SC,SS,NUM,fmt,Ic,P,hexA,AI_GRADIENT,MONTHS}} isMobile={isMobile} defaultYear={now.getFullYear()-1}
+                    accounts={[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>({key:pp,label:names[pp]})),{key:'privat',label:names.privatLabel||'Privat'}]}
+                    existing={sevdeskExisting()} onImport={runSevdeskImport} />
+                )}
 
                 {importTab==='beleg' && (()=>{ const openBelege=[]; Object.keys(data||{}).forEach(yk=>{ if(isNaN(+yk))return; const Y=data[yk]; if(!Y||typeof Y!=='object')return; Object.keys(Y).forEach(mk=>{ if(isNaN(+mk))return; const M=Y[mk]; if(!M)return; const grab=(arr,acc,kd)=>{ (arr||[]).forEach(it=>{ if(it.status==='offen') openBelege.push({it,acc,kd,y:+yk,m:+mk}); }); }; if(M.props)Object.keys(M.props).forEach(pid=>{ const p=M.props[pid]||{}; grab(p.einnahmen,pid,'ein'); grab(p.expenses,pid,'aus'); }); if(M.unternehmen){ grab(M.unternehmen.clients,'unter','ein'); grab(M.unternehmen.items,'unter','aus'); } if(M.privat){ grab(M.privat.einnahmen,'privat','ein'); grab(M.privat.items,'privat','aus'); } }); }); openBelege.sort((a,b)=> (b.y-a.y)|| (b.m-a.m));
                   return (<>
