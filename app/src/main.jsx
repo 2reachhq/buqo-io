@@ -6,6 +6,9 @@ import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import TaxCockpit from './tax/TaxCockpit.jsx';
 import { YEARS as TAX_YEARS, berechneSteuer } from './tax/estg.js';
 import SevdeskImport from './import/SevdeskImport.jsx';
+import * as ACT from './assistant/actions.js';
+import { ASSISTANT_TOOLS, ASSISTANT_MODELS, DEFAULT_ASSISTANT_MODEL, buildSystemPrompt, stepLabel } from './assistant/tools.js';
+import { runAssistantTurn, buildApiMessages, attachmentFromFile } from './assistant/agent.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 window.pdfjsLib = pdfjsLib; // pdfToLines() below still reads it off window, unchanged
@@ -148,13 +151,6 @@ const evalAmount = s => {
 const uid  = () => Math.random().toString(36).slice(2,9);
 const newItem = (name='') => ({id:uid(), name, amount:0, recurring:false, note:'', filePath:null, fileName:'', fileData:null});
 const CATS = ['Allgemein','Miete','Nebenkosten','Versicherung','Material','Personal','Steuern','Software','Marketing','Reise','Bewirtung','Bank & Gebühren','Sonstiges'];
-// P2.2: echte Claude-Tools für den Bot-Assistenten (statt reinem Text-Parsing) – bewusst klein gehalten,
-// ergänzt die bestehenden regelbasierten Flows (Rechnungs-Wizard etc.), ersetzt sie nicht.
-const BOT_TOOLS = [
-  { name:'get_overdue_invoices', description:'Liefert die Liste der aktuell überfälligen, unbezahlten Rechnungen mit Kunde, Rechnungsnummer, Betrag und Tagen überfällig.', input_schema:{ type:'object', properties:{}, required:[] } },
-  { name:'prepare_payment_reminder', description:'Bereitet eine Zahlungserinnerung/Mahnung für eine bestimmte Rechnung vor. Öffnet einen E-Mail-Entwurf zur Bestätigung durch den Nutzer – sendet NICHT automatisch.', input_schema:{ type:'object', properties:{ invoiceNumber:{type:'string', description:'Rechnungsnummer, z. B. RE-2026-014'} }, required:['invoiceNumber'] } },
-  { name:'open_app_tab', description:'Öffnet einen Bereich der App für den Nutzer.', input_schema:{ type:'object', properties:{ tab:{type:'string', enum:['rechnung','belege','import','kal','yr','steuer','kosten','settings']} }, required:['tab'] } },
-];
 // Kategorie aus Name/Verwendungszweck automatisch erraten (lokal, keyword-basiert)
 const CAT_RULES = [
   ['Miete', /miete|kaltmiete|warmmiete|pacht|nettomiete/i],
@@ -171,8 +167,10 @@ const CAT_RULES = [
 ];
 const guessCategory = (text)=>{ const t=String(text||''); if(!t.trim()) return ''; for(const [cat,re] of CAT_RULES){ if(re.test(t)) return cat; } return ''; };
 // Standard-Modellpreise (€ je 1 Mio. Tokens) – im Kosten-Dashboard anpassbar
-const AI_PRICE_DEFAULTS = { 'claude-haiku-4-5':{in:1, out:5}, 'claude-sonnet-4-6':{in:3, out:15}, 'claude-opus-4-8':{in:15, out:75} };
-const AI_MODEL_LABEL = { 'claude-haiku-4-5':'Claude Haiku 4.5', 'claude-sonnet-4-6':'Claude Sonnet 4.6', 'claude-opus-4-8':'Claude Opus 4.8' };
+const AI_PRICE_DEFAULTS = { 'claude-haiku-4-5':{in:1, out:5}, 'claude-sonnet-4-6':{in:3, out:15}, 'claude-opus-4-8':{in:5, out:25}, 'claude-sonnet-5':{in:2, out:10}, 'claude-opus-5':{in:5, out:25} };
+const AI_MODEL_LABEL = { 'claude-haiku-4-5':'Claude Haiku 4.5', 'claude-sonnet-4-6':'Claude Sonnet 4.6', 'claude-opus-4-8':'Claude Opus 4.8', 'claude-sonnet-5':'Claude Sonnet 5', 'claude-opus-5':'Claude Opus 5' };
+// Begrüßung des Assistenten (neues Gespräch)
+const BOT_WELCOME = ()=>({role:'assistant',content:'Hey! Ich bin dein Buqo-Assistent und kann hier alles für dich erledigen: Rechnungen schreiben, Kunden anlegen, Belege buchen, Kontoauszüge einlesen, To-dos pflegen, jede Einstellung ändern – und natürlich deine Zahlen erklären. Schick mir einfach Daten oder eine Datei, z. B. „Rechnung an Max Muster über 1.500 € für Webdesign", „Buche den Beleg auf die Firma" oder „Stell meine Standard-MwSt auf 7 %".'});
 // Buchungskonten (SKR03, gängige Auswahl) – Vorschlag, vom Steuerberater zu prüfen
 const SKR03_ACCTS = [
   {nr:'8400', name:'Erlöse 19% USt', kind:'ein'},
@@ -1345,7 +1343,7 @@ function App({session}) {
   useEffect(()=>{ try{ localStorage.setItem('sp_theme',theme); }catch(_){} try{ document.body.style.background=C.bg; document.body.style.color=C.txt; document.documentElement.style.background=C.bg; document.documentElement.style.colorScheme=isDark?'dark':'light'; }catch(_){} },[theme,sysDark,isDark]);
   const [yr,   setYr]   = useState(now.getFullYear());
   const [mo,   setMo]   = useState(now.getMonth());
-  const [tab,  setTab]  = useState('home');
+  const [tab,  setTab]  = useState('kunden');           // Startseite = Kunden
   const [sideOpen,setSideOpen]= useState(()=>{ try{ return localStorage.getItem('buqo_side')!=='0'; }catch(_){ return true; } }); // Sidebar aus-/eingeklappt
   useEffect(()=>{ try{ localStorage.setItem('buqo_side',sideOpen?'1':'0'); }catch(_){} },[sideOpen]);
   const [moreOpen,setMoreOpen]= useState(false);      // Sidebar-Gruppe „Mehr" aufgeklappt
@@ -1430,6 +1428,8 @@ function App({session}) {
     Object.assign(BPrs,{background:C.priL,color:C.pri});
   }
   const [names,setNames]= useState({p1:'Immobilie 1',p2:'Immobilie 2',p3:'Immobilie 3',unternehmen:'Firma'});
+  useEffect(()=>{ dataRef.current=data; },[data]);
+  useEffect(()=>{ namesRef.current=names; },[names]);
   const [ready,setReady]= useState(false);
   const [saved,setSaved]= useState(true);
   const [toast,setToast]= useState('');
@@ -1483,10 +1483,6 @@ function App({session}) {
   const [belegSearch,setBelegSearch]= useState(''); // Belege-Suche
   const [belegEdit,setBelegEdit]= useState(null);   // Beleg-Detailansicht {loc, item}
   const [zipBusy,setZipBusy]= useState(false);
-  const chat = data.chat || [];                   // KI-Berater Verlauf (gespeichert)
-  const setChat = updater => setData(prev=>{ const cur=prev.chat||[]; const next=(typeof updater==='function'?updater(cur):updater).slice(-40); return {...prev, chat:next}; });
-  const [chatInput,setChatInput]= useState('');
-  const [aiBusy,setAiBusy]= useState(false);
   const [botOpen,setBotOpen]= useState(false);     // In-App-Assistent (Chatbot) — als Splitscreen rechts
   const [botInput,setBotInput]= useState('');
   const [botWidth,setBotWidth]= useState(()=>Math.round(Math.min(460, Math.max(340, (typeof window!=='undefined'?window.innerWidth:1200)*0.3))));  // Splitscreen-Breite, ziehbar
@@ -1495,11 +1491,18 @@ function App({session}) {
   const botRecRef=useRef(null);
   const [botFile,setBotFile]= useState(null);        // an den Assistenten angehängte Datei
   const [botBusy,setBotBusy]= useState(false);        // Assistent arbeitet (KI)
-  const [botFlow,setBotFlow]= useState(null);         // laufender Dialog-Flow (z. B. Rechnung erstellen)
+  const [botPending,setBotPending]= useState(null);   // vom Assistenten vorbereiteter Rechnungsentwurf, wartet auf Bestätigung
+  const botPendingRef=useRef(null);
+  const [botSteps,setBotSteps]= useState([]);          // gerade laufende Werkzeug-Schritte (Anzeige während der Antwort)
+  const [botModel,setBotModel]= useState(DEFAULT_ASSISTANT_MODEL); // KI-Modell des Assistenten (in data.assistant.model gespeichert)
+  const botAttachmentRef=useRef(null);                 // Datei der aktuellen Nachricht (für add_booking / extract_attachment_items)
+  const turnActionRef=useRef(null);                    // UI-Aktion (Buttons) für die Antwort der aktuellen Runde
+  const botRestoredRef=useRef(false);                  // Verlauf aus data.assistantChat übernommen?
+  const dataRef=useRef({}); const namesRef=useRef({}); // aktuellster Datenstand für die Werkzeuge des Assistenten
   const [botUnread,setBotUnread]= useState(0);        // ungelesene Assistenten-Nachrichten (Badge am Chat-Button)
   const botSeenRef=useRef(1);                          // wie viele Nachrichten der Nutzer schon gesehen hat
   const [botInvPreview,setBotInvPreview]= useState(null); // Rechnungs-Entwurf-Vorschau aus dem Chat (vor dem Erstellen)
-  const [botMsgs,setBotMsgs]= useState([{role:'assistant',content:'Hey! Ich bin deine KI-Buchhaltung – quasi dein persönlicher Steuerberater rund um die Uhr. Ich kenne deine Zahlen, erkläre sie dir verständlich, warne früh bei Risiken und nehme dir Arbeit ab: Rechnungen, Belege, Auswertungen. Frag einfach los – z. B. „Wie steht meine Firma da?", „Worauf muss ich steuerlich achten?", „Mach mir eine Rechnung an Max über 1500" – oder häng eine Datei an, dann lese ich sie aus.'}]);
+  const [botMsgs,setBotMsgs]= useState([BOT_WELCOME()]);
   const [belegOpen,setBelegOpen]= useState(false); // Beleg-Erfassung
   const [belegBusy,setBelegBusy]= useState(false);
   const [belegRes,setBelegRes]= useState(null);    // {name,amount,kind,info}
@@ -1533,12 +1536,14 @@ function App({session}) {
   const subSlug = (v)=> v==='wied' ? 'wiederkehrend' : v;
   const parseSub = (s)=> s==='wiederkehrend' ? 'wied' : s;
   useEffect(()=>{
-    const valid=new Set(['home','quellen','immo','unter','privat','import','berater','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
+    const valid=new Set(['quellen','immo','unter','privat','import','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
     const apply=()=>{ const raw=(window.location.hash||'').replace(/^#\/?/,''); if(!raw) return; const parts=raw.split('/'); const head=parts[0];
       if(head!=='erfassen') setCapture(null);
       if(head!=='rechnung-erstellen') setInvEdit(null);
       if(head==='erfassen' || head==='rechnung-erstellen') return;
       if(head==='analyse'){ setTab('yr'); if(parts[1]) setYrView(parts[1]==='jahresuebersicht'?'jahr':'monat'); return; }
+      if(head==='home'){ setTab('kunden'); return; }                       // alte Übersicht → Kunden
+      if(head==='berater'){ setTab('kunden'); setBotOpen(true); return; }  // alter KI-Berater → Assistent
       if(valid.has(head)){ setTab(head); return; }
       // Konto-Slug → Konten-Akkordeon öffnen
       if(head==='firma'){ setTab('quellen'); setOpenAcct('unter'); if(parts[1]) setUnterTab(parseSub(parts[1])); return; }
@@ -3064,128 +3069,128 @@ function App({session}) {
     }catch(e){ setToast('Export fehlgeschlagen: '+(e.message||e)); }
   };
 
-  /* ── KI-Berater (Sonnet 4.6 über Supabase-Funktion) ── */
-  const advisorNotes = data.advisorNotes || [];
-  const addNote = (text) => setData(prev=>({...prev, advisorNotes:[{id:uid(), text, ts:new Date().toISOString()}, ...(prev.advisorNotes||[])]}));
-  const delNote = (id) => setData(prev=>({...prev, advisorNotes:(prev.advisorNotes||[]).filter(n=>n.id!==id)}));
-  const aiSend = async (text) => {
-    const q=(text||chatInput).trim(); if(!q||aiBusy) return;
-    const next=[...chat,{role:'user',content:q}];
-    setChat(next); setChatInput(''); setAiBusy(true);
-    try{
-      const monatswerte = Array.from({length:12},(_,i)=>{const t=calcTotals(getMD(yr,i),yr,i);return {monat:MONTHS[i],einnahmen:t.totalInc,ausgaben:t.totalExp,ergebnis:t.net};});
-      const snapshot = { namen:names, jahr:yr, monatswerte, jahresdaten:data[yr]||{} };
-      const system = "Du bist der persönliche Finanz- und Steuer-Assistent in der App „Buqo“ für einen Nutzer in Deutschland (Immobilien-Vermietung, ein Unternehmen, private Ausgaben). "
-        + "Du kennst seine echten Daten (JSON unten; Beträge in EUR, Monate 0=Januar … 11=Dezember; Ausgaben sind positiv gespeichert). "
-        + "Antworte auf Deutsch: konkret, freundlich, kompakt, mit echten Zahlen aus den Daten. Gib praktische Hinweise (worauf achten, wo evtl. sparen, was in Deutschland häufig absetzbar ist). "
-        + "Erfinde niemals Zahlen. Wenn Daten fehlen, sag es. "
-        + "WICHTIG: Du bist KEIN zugelassener Steuerberater – weise bei verbindlichen Steuerfragen kurz darauf hin, dass ein echter Steuerberater das prüfen sollte. "
-        + "Schreibe in normalem Fließtext mit kurzen Absätzen. KEIN Markdown: keine #-Überschriften, keine Sternchen, keine Tabellen-Pipes. Für Aufzählungen nutze einfache Bindestriche.\n\n"
-        + "DATEN (Jahr "+yr+"):\n"+JSON.stringify(snapshot);
-      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-sonnet-4-6', max_tokens:1800, system, messages: next.map(m=>({role:m.role,content:m.content})) } });
-      if(error) throw error;
-      if(resp && resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
-      const txt = (resp && resp.content && resp.content[0] && resp.content[0].text) || 'Keine Antwort erhalten.';
-      setChat(c=>[...c,{role:'assistant',content:txt}]);
-    }catch(e){ setChat(c=>[...c,{role:'assistant',content:'⚠️ Fehler: '+(e.message||e)+'\n\n(Bist du eingeloggt? Ist die Funktion „ai" deployt und der Schlüssel hinterlegt?)'}]); }
-    setAiBusy(false);
-  };
-
-  /* ── In-App-Assistent (Chatbot, vollständig lokal – keine Daten extern) ── */
-  const monthIdxOf = (q)=>{ for(let i=0;i<12;i++){ if(q.includes(MONTHS[i].toLowerCase())||q.includes(MONTHS[i].toLowerCase().slice(0,3))) return i; } return -1; };
-  const yearTotals = ()=>{ let inc=0,exp=0; for(let i=0;i<12;i++){ const t=calcTotals(getMD(yr,i),yr,i); inc+=t.totalInc; exp+=t.totalExp; } return {inc,exp,net:inc-exp}; };
-  const botReply = (raw)=>{
-    const q=String(raw||'').toLowerCase().trim();
-    const go=(t,label)=>{ setTab(t); return 'Öffne '+label+'.'; };
-    // Import: Buchungen/Entwürfe auswählen ("wähle alle an, die mit X anfangen")
-    if(/\b(w(ä|ae)hl|markier|select|ausw(ä|ae)hl|anw(ä|ae)hl)/i.test(raw) && (tab==='import' || /\bimport\b|buchung|posten|beleg|entw(ü|ue)rf/i.test(q))){
-      const list=data.drafts||[];
-      if(/\b(keine|aufheben|abw(ä|ae)hl|zur(ü|ue)cksetzen|nichts)\b/i.test(q)){ setDraftSel([]); setTab('import'); return 'Auswahl aufgehoben.'; }
-      let term=null, mode='contains';
-      let m=raw.match(/mit\s+["„]?([^"“]+?)["“]?\s+(?:anfangen|beginnen|starten)/i); if(m){ term=m[1].trim(); mode='prefix'; }
-      if(!term){ m=raw.match(/["„]([^"“]+)["“]/); if(m) term=m[1].trim(); }
-      if(!term){ m=raw.match(/(?:enthalten|enthält|beinhalten|mit|nach)\s+([\wäöüß.&\-]{2,})/i); if(m) term=m[1].trim(); }
-      setTab('import');
-      if(!term){ const ids=list.map(d=>d.id); setDraftSel(ids); return ids.length+' Buchung'+(ids.length!==1?'en':'')+' ausgewählt.'; }
-      const tl=term.toLowerCase();
-      const ids=list.filter(d=>{ const n=String(d.name||'').toLowerCase(); const nt=String(d.note||'').toLowerCase(); return mode==='prefix'? n.startsWith(tl) : (n.includes(tl)||nt.includes(tl)); }).map(d=>d.id);
-      setDraftSel(ids);
-      return ids.length? (ids.length+' Buchung'+(ids.length!==1?'en':'')+' '+(mode==='prefix'?'die mit':'mit')+' „'+term+'" ausgewählt – du kannst sie jetzt zuordnen oder verwerfen.') : ('Keine Buchung mit „'+term+'" gefunden.');
-    }
-    // Neue Objekte anlegen
-    const nk=raw.match(/neue[rn]?\s+kunden?\s+(.+)/i);
-    if(nk){ const name=nk[1].trim(); const parts=name.split(/\s+/); setCustEdit({id:uid(),anrede:'',name,firstName:parts[0]||'',lastName:parts.slice(1).join(' '),company:'',address:'',phone:'',email:'',website:'',custNo:nextCustNo(invDomain),domain:invDomain}); setCustTab('details'); setTab('kunden'); return 'Ich habe „'+name+'" als neuen Kunden vorbereitet (Nr. '+nextCustNo(invDomain)+'). Ergänze die Details und speichere.'; }
-    if(/neue?\s+(wiederkehrende?\s+rechnung)/i.test(raw)){ startRecurInvoice(invDomain); return 'Neue wiederkehrende Rechnung geöffnet.'; }
-    if(/neue?\s+(rechnung|invoice)/i.test(raw)){ setInvKind('einzel'); setInvEdit(newInvoice(invDomain)); setTab('rechnung'); return 'Neue Rechnung geöffnet.'; }
-    // Analyse
-    if(/(bester|bestes|stärkster|stärkster).*(monat|ergebnis)/.test(q)||/welcher monat.*(beste|meist)/.test(q)){ let best=-1,bv=-Infinity; for(let i=0;i<12;i++){const t=calcTotals(getMD(yr,i),yr,i); if(t.net>bv){bv=t.net;best=i;}} return 'Bester Monat '+yr+': '+MONTHS[best]+' mit '+(bv>=0?'+':'')+fmt(bv)+'.'; }
-    if(/(schlechtester|schwächster).*(monat|ergebnis)/.test(q)){ let w=-1,wv=Infinity; for(let i=0;i<12;i++){const t=calcTotals(getMD(yr,i),yr,i); if(t.net<wv){wv=t.net;w=i;}} return 'Schwächster Monat '+yr+': '+MONTHS[w]+' mit '+(wv>=0?'+':'')+fmt(wv)+'.'; }
-    if(/(ergebnis|gewinn|einnahmen|ausgaben|umsatz|bilanz|wie.*(läuft|lief))/.test(q)){
-      const mi=monthIdxOf(q);
-      if(mi>=0){ const t=calcTotals(getMD(yr,mi),yr,mi); return MONTHS[mi]+' '+yr+': Einnahmen '+fmt(t.totalInc)+', Ausgaben '+fmt(t.totalExp)+', Ergebnis '+(t.net>=0?'+':'')+fmt(t.net)+'.'; }
-      const y=yearTotals(); return 'Jahr '+yr+': Einnahmen '+fmt(y.inc)+', Ausgaben '+fmt(y.exp)+', Ergebnis '+(y.net>=0?'+':'')+fmt(y.net)+'. Für Details öffne die Analyse.'; }
-    // Navigation
-    if(/analyse|übersicht|auswert/.test(q)) return go('yr','die Analyse');
-    if(/rechnung/.test(q)) return go('rechnung','Rechnungen');
-    if(/kund/.test(q)) return go('kunden','Kunden');
-    if(/import|bankauszug|beleg.?import/.test(q)) return go('import','Import');
-    if(/beleg/.test(q)) return go('belege','die Belege');
-    if(/steuer/.test(q)) return go('steuer','die Steuerprognose');
-    if(/einstellung|profil|firmendaten|logo/.test(q)) return go('settings','Einstellungen');
-    if(/konto|konten|home|start/.test(q)) return go('quellen','die Konten');
-    return null; // nicht lokal beantwortbar → echte KI mit Datenkontext
-  };
-  // Kompakter Finanz-Kontext für die KI (alle Bereiche, knapp gehalten)
+  /* ── Buqo-Assistent: KI-Agent mit Werkzeugen über die ganze App (Kunden, Rechnungen, Buchungen,
+        Einstellungen, Navigation). Alles bleibt in den Daten des eingeloggten Kontos (app_state). ── */
+  // Werkzeuge lesen immer den aktuellsten Stand (dataRef), auch mitten in einer Tool-Schleife –
+  // setData ist asynchron, deshalb wird jede Änderung zusätzlich sofort auf die Refs angewendet.
+  const D = ()=>dataRef.current; const N = ()=>namesRef.current;
+  const mutate = (fn)=>{ const res=fn(D()); dataRef.current=res.data; setData(prev=>{ try{ return fn(prev).data; }catch(e){ return prev; } }); return res; };
+  const applyData = (fn)=>{ dataRef.current=fn(D()); setData(prev=>{ try{ return fn(prev); }catch(e){ return prev; } }); };
+  const setPending = (v)=>{ botPendingRef.current=v; setBotPending(v); };
+  const getMDx = (y,m)=> (D()[y]&&D()[y][m]) || emptyMonth();
+  // (r2 – Rundung auf Cent – ist weiter unten in der Steuer-Engine deklariert und hier nutzbar)
+  const yearTotals = (y)=>{ const Y=y||yr; let inc=0,exp=0; for(let i=0;i<12;i++){ const t=calcTotals(getMDx(Y,i),Y,i); inc+=t.totalInc; exp+=t.totalExp; } return {inc,exp,net:inc-exp}; };
+  // Kompakter Finanz-Kontext für den Systemprompt (alle Bereiche, knapp gehalten)
   const buildFinanceContext = ()=>{ const lines=[]; try{
-    const y=yearTotals(); lines.push('Jahr '+yr+': Einnahmen '+fmt(y.inc)+', Ausgaben '+fmt(y.exp)+', Ergebnis '+(y.net>=0?'+':'')+fmt(y.net)+'.');
-    const mo2=[]; for(let i=0;i<12;i++){ const t=calcTotals(getMD(yr,i),yr,i); if(t.totalInc||t.totalExp) mo2.push(MONTHS[i].slice(0,3)+' '+(t.net>=0?'+':'')+fmt(t.net)); } if(mo2.length) lines.push('Monatsergebnisse '+yr+': '+mo2.join(' · ')+'.');
-    const invs=data.invoices||[]; const paid=invs.filter(x=>x.paid).length; const openSum=invs.filter(x=>!x.paid).reduce((s,x)=>s+(x.total||0),0); lines.push('Rechnungen: '+invs.length+' gesamt, '+paid+' bezahlt, '+(invs.length-paid)+' offen (offene Summe '+fmt(openSum)+').');
-    lines.push('Wiederkehrende Rechnungen: '+((data.recurInvoices||[]).length)+'. Kunden: '+((data.customers||[]).length)+'.');
-    try{ const ob=openBelegeList?openBelegeList().length:0; lines.push('Offene Belege (noch nicht per Bankauszug bestätigt): '+ob+'.'); }catch(_){ }
-    const dr=(data.drafts||[]).length; if(dr) lines.push('Unbearbeitete Kontoauszug-Buchungen: '+dr+'.');
+    const y=yearTotals(yr); lines.push('Jahr '+yr+': Einnahmen '+fmt(y.inc)+', Ausgaben '+fmt(y.exp)+', Ergebnis '+(y.net>=0?'+':'')+fmt(y.net)+'.');
+    const mo2=[]; for(let i=0;i<12;i++){ const t=calcTotals(getMDx(yr,i),yr,i); if(t.totalInc||t.totalExp) mo2.push(MONTHS[i].slice(0,3)+' '+(t.net>=0?'+':'')+fmt(t.net)); } if(mo2.length) lines.push('Monatsergebnisse '+yr+': '+mo2.join(' · ')+'.');
+    const t=calcTotals(getMDx(yr,mo),yr,mo); lines.push(MONTHS[mo]+' '+yr+': Einnahmen '+fmt(t.totalInc)+', Ausgaben '+fmt(t.totalExp)+', Ergebnis '+(t.net>=0?'+':'')+fmt(t.net)+'.');
+    const invs=D().invoices||[]; const paid=invs.filter(x=>x.paid).length; const openSum=invs.filter(x=>!x.paid).reduce((s,x)=>s+(x.total||0),0); const od=overdueInvoices().length; lines.push('Rechnungen: '+invs.length+' gesamt, '+paid+' bezahlt, '+(invs.length-paid)+' offen (offene Summe '+fmt(openSum)+'), '+od+' überfällig.');
+    try{ lines.push('Offene Belege (noch nicht per Bankauszug bestätigt): '+openBelegeList().length+'.'); }catch(_){ }
+    const dr=(D().drafts||[]).length; if(dr) lines.push('Unbearbeitete Kontoauszug-Buchungen im Bank-Import: '+dr+'.');
   }catch(e){ lines.push('(Kontext teilweise nicht lesbar)'); } return lines.join('\n'); };
-  // P2.2: Tools, die die KI im Chat wirklich aufrufen kann (echte Daten/Aktionen statt nur Text)
-  const runBotTool = async (name, input)=>{
-    if(name==='get_overdue_invoices'){
-      const list=overdueInvoices().map(iv=>{ const c=invCustomer(iv); const due=iv.due||addDays(iv.date,14); const days=Math.max(1,Math.round((Date.now()-new Date(due).getTime())/86400000)); return { rechnungsnummer:iv.number, kunde:c.name||'', betrag:invTotals(iv.items).gross, tageUeberfaellig:days }; });
-      return { anzahl:list.length, rechnungen:list };
-    }
-    if(name==='prepare_payment_reminder'){
-      const inv=(data.invoices||[]).find(iv=>String(iv.number||'').toLowerCase()===String((input&&input.invoiceNumber)||'').toLowerCase());
-      if(!inv) return { ok:false, error:'Rechnung mit dieser Nummer nicht gefunden.' };
-      await startMahnung(inv);
-      return { ok:true, hinweis:'E-Mail-Entwurf wurde geöffnet – der Nutzer muss ihn noch prüfen und senden.' };
-    }
-    if(name==='open_app_tab'){
-      setTab((input&&input.tab)||'rechnung');
-      return { ok:true };
-    }
-    return { ok:false, error:'Unbekanntes Tool: '+name };
+  // Kontext für den Systemprompt (wird pro Nachricht frisch gebaut)
+  const buildAssistantContext = (attachment)=>{ const d=D(), n=N(); const ctx={};
+    try{ ctx.today=new Date().toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}); }catch(e){ ctx.today=new Date().toISOString().slice(0,10); }
+    ctx.period=MONTHS[mo]+' '+yr;
+    ctx.user=[String((d.profile||{}).name||'').trim(), (session&&session.user&&session.user.email)||''].filter(Boolean).join(', ');
+    ctx.accounts=ACT.accountList(n, acctCreated);
+    const co=d.company||{}; ctx.company=[co.name, co.address&&String(co.address).replace(/\n/g,', '), co.taxId&&('StNr '+co.taxId), co.ustId&&('USt-ID '+co.ustId), (co.defMwst!=null&&co.defMwst!=='')&&('Standard-MwSt '+co.defMwst+' %')].filter(Boolean).join(' · ');
+    ctx.finance=buildFinanceContext();
+    ctx.counts=(d.customers||[]).length+' Kunden, '+(d.invoices||[]).length+' Rechnungen, '+(d.recurInvoices||[]).length+' wiederkehrende Rechnungen, '+(d.todos||[]).filter(t=>!t.done).length+' offene To-dos';
+    const p=botPendingRef.current; if(p&&p.inv){ ctx.pendingInvoice=p.inv.number+' an '+(p.inv.custName||'?')+' über '+fmt(invTotals(p.inv.items).gross); }
+    if(attachment) ctx.attachment=attachment.name+' ('+attachment.kind+')';
+    return ctx; };
+  // Kunde zu einer Rechnung – aus dem aktuellsten Datenstand
+  const invCustomerX = (inv)=>{ const c=(D().customers||[]).find(x=>x.id===inv.customerId); if(c) return c; return {name:inv.custName||'', address:inv.custAddress||'', email:inv.custEmail||'', firstName:inv.firstName||'', lastName:inv.lastName||'', company:inv.company||'', anrede:inv.anrede||''}; };
+  // Rechnung buchen (für den Assistenten) – wie saveInvoice, aber ohne Editor/Tab-Wechsel und mit
+  // sofortiger Aktualisierung von dataRef, damit Folge-Werkzeuge die Rechnung schon sehen.
+  const bookInvoiceObj = async (inv0)=>{ let inv={...inv0, number: inv0.number||ACT.nextInvNo(D(), String(inv0.date||'').slice(0,4))}; const tot=invTotals(inv.items); const dt=new Date(inv.date); const ty=isNaN(dt)?yr:dt.getFullYear(); const tm=isNaN(dt)?mo:dt.getMonth(); const account=inv.account||'unter'; const isExpense=tot.gross<0;
+    const cName=(inv.custName||inv.company||[inv.firstName,inv.lastName].filter(Boolean).join(' ')||'').trim();
+    if(!inv.customerId && inv.saveCust!==false && cName){ const existing=ACT.findCustomer(D(), cName); if(existing){ inv={...inv,customerId:existing.id}; } else { const newC={id:uid(),name:cName,firstName:inv.firstName||'',lastName:inv.lastName||'',company:inv.company||'',anrede:inv.anrede||'',address:inv.custAddress||'',email:inv.custEmail||'',custNo:ACT.nextCustNo(D(), inv.domain||'unter'),domain:inv.domain||'unter'}; applyData(prev=>({...prev, customers:[...(prev.customers||[]).filter(x=>x.id!==newC.id), newC]})); inv={...inv,customerId:newC.id}; } }
+    const cust=invCustomerX(inv); let pdfPath=inv.pdfPath||null;
+    try{ const blob=await buildInvoicePDF(inv); if(blob){ const path=['Rechnungen',String(ty),'Rechnung_'+safeName(inv.number)+'.pdf'].map(safeName).join('/'); const {error}=await sb.storage.from('belege').upload(path,blob,{upsert:true,contentType:'application/pdf'}); if(!error)pdfPath=path; } }catch(e){}
+    const sentDate=inv.sentDate||new Date().toISOString().slice(0,10); const saved={...inv,total:tot.gross,account,pdfPath,sentDate,booked:true}; const itemId=uid();
+    applyData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const list=[...(nd.invoices||[])]; const i=list.findIndex(x=>x.id===inv.id); if(i<0)list.push(saved); else list[i]=saved; nd.invoices=list; if(!nd[ty])nd[ty]={}; if(!nd[ty][tm])nd[ty][tm]=emptyMonth(); const item={...newItem('Rechnung '+inv.number+((cust&&cust.name)?(' · '+cust.name):'')),id:itemId,amount:Math.abs(tot.gross),belegnr:inv.number,datum:inv.date,netto:Math.abs(tot.net),category:'Allgemein',note:'Rechnung',invId:inv.id}; _bookKind(nd[ty][tm],account,isExpense?'aus':'ein',item); return nd; });
+    return saved;
   };
-  const botAskAI = async (q)=>{ setBotBusy(true);
-    try{ const ctx=buildFinanceContext();
-      const sys="Du bist der persönliche KI-Buchhalter und Steuerberater-Assistent der Finanz-App des Nutzers. Du kennst dessen komplette Finanzdaten (siehe KONTEXT) und hast Werkzeuge für überfällige Rechnungen, Mahnungen und Navigation – nutze sie, statt zu raten. Sprich wie ein erfahrener, vertrauter CFO/Steuerberater in Ich-Form, persönlich und zupackend (z. B. ‚klar, ich mach das für dich'). WICHTIG: Antworte in maximal 2–3 kurzen Sätzen, komm sofort auf den Punkt – keine Aufzählungen, keine Einleitungen, keine Wiederholung der Frage. Stelle höchstens EINE Rückfrage auf einmal. Kein Markdown, keine Tabellen, Beträge in Euro. Wenn Daten fehlen, sag es ehrlich in einem Satz. Bei steuerlichen Aussagen kurzer Zusatz, dass der Steuerberater final entscheidet.";
-      const usr="KONTEXT (aktuelle Finanzdaten des Nutzers):\n"+ctx+"\n\nFrage des Nutzers: "+q;
-      let messages=[{role:'user',content:[{type:'text',text:usr}]}];
-      let finalText=null;
-      for(let guard=0; guard<3 && finalText===null; guard++){
-        const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:900, system:sys, messages, tools:BOT_TOOLS } });
-        if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
-        const blocks=(resp&&resp.content)||[];
-        const toolUses=blocks.filter(b=>b.type==='tool_use');
-        if(!toolUses.length){ finalText=blocks.map(b=>b.text).filter(Boolean).join('\n')||'(keine Antwort)'; break; }
-        messages=[...messages, {role:'assistant', content:blocks}];
-        const toolResults=[];
-        for(const tu of toolUses){
-          let result; try{ result=await runBotTool(tu.name, tu.input||{}); }catch(e){ result={ok:false,error:String(e.message||e)}; }
-          toolResults.push({type:'tool_result', tool_use_id:tu.id, content:JSON.stringify(result)});
-        }
-        messages=[...messages, {role:'user', content:toolResults}];
-      }
-      setBotMsgs(m=>[...m,{role:'assistant',content:finalText||'(keine Antwort)'}]);
-    }catch(e){ setBotMsgs(m=>[...m,{role:'assistant',content:'Sorry, das konnte ich gerade nicht beantworten ('+(e.message||e)+'). Frag mich gern nochmal oder etwas konkreter.'}]); }
-    setBotBusy(false);
+  const invoiceSummary = (inv)=>{ const tot=invTotals(inv.items); return { nummer:inv.number, kunde:inv.custName||'', anschrift:inv.custAddress||'', email:inv.custEmail||'', konto:accLabel(inv.account||inv.domain||'unter'), datum:inv.date, faellig:inv.due, positionen:(inv.items||[]).map(i=>({desc:i.desc, qty:i.qty, price:i.price, mwst:i.mwst})), netto:r2(tot.net), mwst:r2(tot.tax), brutto:r2(tot.gross) }; };
+  // Beleg-Datei (Anhang im Chat) zu einer Buchung in den Speicher legen → filePath/fileName
+  const uploadBookingFile = async (file, account, kind, y, m, name, belegnr)=>{ let f=file; try{ f=await imageToPdfFile(file); }catch(e){ f=file; }
+    const folder = account==='unter' ? [N().unternehmen||'Firma', kind==='ein'?'Einnahmen':'Ausgaben'] : PROPS.includes(account) ? ['Immobilien', N()[account]||account] : ['Privat'];
+    const fname=belegFileName(name, belegnr, f.name||file.name); const path=[...folder, String(y), String(m+1).padStart(2,'0')+' '+MONTHS[m], fname].map(safeName).join('/');
+    const {error}=await sb.storage.from('belege').upload(path, f, {upsert:true, contentType:f.type||'application/octet-stream'}); if(error) throw new Error('Beleg-Upload fehlgeschlagen: '+error.message); return {path, fname}; };
+  const openTabFor = (tab, sub)=>{ const t=String(tab||'').toLowerCase().replace(/[^a-z-]/g,''); const s=String(sub||'').toLowerCase();
+    const map={ kunden:'kunden', kunde:'kunden', rechnung:'rechnung', rechnungen:'rechnung', belege:'belege', beleg:'belege', bank:'import', import:'import', kontoauszug:'import', aufgaben:'aufgaben', todo:'aufgaben', todos:'aufgaben', konten:'quellen', konto:'quellen', quellen:'quellen', steuer:'steuer', steuerprognose:'steuer', steuern:'steuern', auswertungen:'steuern', analyse:'yr', yr:'yr', raten:'raten', kredite:'raten', events:'kal', kalender:'kal', kal:'kal', download:'download', kosten:'kosten', sevdesk:'import', settings:'settings', einstellungen:'settings' };
+    const id=map[t]; if(!id) return false;
+    setCustEdit(null); setInvView(null);
+    if(t==='bank'||t==='kontoauszug'||t==='import'){ setTab('import'); setImportTab('bank'); return true; }
+    if(t==='sevdesk'){ setTab('import'); setImportTab('sevdesk'); return true; }
+    if(id==='rechnung'){ if(/neu|new/.test(s)){ setInvKind('einzel'); setRecInvEdit(null); setInvEdit(newInvoice(invDomain)); } else if(/wieder|recur/.test(s)){ startRecurInvoice(invDomain); return true; } else { setInvEdit(null); } setTab('rechnung'); return true; }
+    if(id==='quellen'){ const k=s?ACT.resolveAccount(s, N()):''; if(s==='alle'||!k){ setOpenAcct(null); } else { if(PROPS.includes(k)) setSp(k); setOpenAcct(k); } setTab('quellen'); return true; }
+    if(id==='steuern'){ if(['ustva','euer','guv','bwa','susa','datev'].includes(s)) setSteuernTab(s); setTab('steuern'); return true; }
+    if(id==='settings'){ if(['profil','abo','konten','team','berater','gmail','email-import','admin'].includes(s)) setSettingsTab(s); setTab('settings'); return true; }
+    setTab(id); return true; };
+  // ── Die Werkzeuge selbst ──
+  const runTool = async (name, input)=>{ input=input||{};
+    const need=(cond,msg)=>{ if(!cond) throw new Error(msg); };
+    const today=new Date().toISOString().slice(0,10);
+    switch(name){
+      case 'get_overview': { const y=input.year||yr; const m=input.month?Math.min(12,Math.max(1,+input.month))-1:mo; const t=calcTotals(getMDx(y,m),y,m); const yt=yearTotals(y); const perMonth=[]; for(let i=0;i<12;i++){ const tt=calcTotals(getMDx(y,i),y,i); if(tt.totalInc||tt.totalExp) perMonth.push({monat:MONTHS[i],einnahmen:r2(tt.totalInc),ausgaben:r2(tt.totalExp),ergebnis:r2(tt.net)}); }
+        const konten={}; Object.keys(t.acct||{}).forEach(k=>{ if(k==='unter'||k==='privat'||acctCreated(k)) konten[accLabel(k)]={einnahmen:r2(t.acct[k].inc),ausgaben:r2(t.acct[k].exp)}; });
+        const inv=ACT.listInvoices(D(),{status:'alle',limit:1},today); const ov=ACT.listInvoices(D(),{status:'ueberfaellig',limit:20},today); let ob=0; try{ ob=openBelegeList().length; }catch(e){}
+        return { monat:MONTHS[m]+' '+y, monatEinnahmen:r2(t.totalInc), monatAusgaben:r2(t.totalExp), monatErgebnis:r2(t.net), kontenImMonat:konten, jahr:y, jahrEinnahmen:r2(yt.inc), jahrAusgaben:r2(yt.exp), jahrErgebnis:r2(yt.net), monate:perMonth, rechnungen:{gesamt:inv.anzahl, offeneSumme:inv.offeneSumme, ueberfaellig:ov.rechnungen.map(v=>({nummer:v.number,kunde:v.kunde,brutto:v.brutto,tageUeberfaellig:v.tageUeberfaellig}))}, offeneBelege:ob, unbearbeiteteBankumsaetze:(D().drafts||[]).length, offeneTodos:(D().todos||[]).filter(x=>!x.done).length, kunden:(D().customers||[]).length }; }
+      case 'list_customers': { const list=ACT.listCustomers(D(),N(),input); return { anzahl:list.length, kunden:list.slice(0,200) }; }
+      case 'list_invoices': return ACT.listInvoices(D(), input, today);
+      case 'get_invoice': { const iv=ACT.findInvoice(D(), input.number); need(iv,'Rechnung „'+(input.number||'')+'" nicht gefunden.'); return ACT.invoiceView(D(), iv, today); }
+      case 'list_bookings': return ACT.listBookings(D(), N(), input);
+      case 'list_todos': { const list=ACT.listTodos(D(), input); return { anzahl:list.length, todos:list }; }
+      case 'list_recurring_invoices': return { anzahl:(D().recurInvoices||[]).length, rechnungen:(D().recurInvoices||[]).map(r=>ACT.recurringInvoiceView(D(), r)) };
+      case 'get_settings': return ACT.getSettings(D(), N(), { section:input.section||'alle', account:input.account, year:input.year, theme, created:acctCreated });
+      case 'get_tax_estimate': { const y=input.year||yr; const f=taxFactsFor(y); const pr=(D().taxProfile||{})[y]||{}; const gewinnFirma=f.acct.unter.inc-f.acct.unter.exp; const vv=PROPS.reduce((sum,p)=>{ const a=f.acct[p]||{inc:0,exp:0,inserate:0}; const gw=num((pr.gebaeudewert||{})[p]); const afa=gw>0?Math.round(gw*(num((pr.afaSatz||{})[p])||2))/100:0; return sum+a.inc+(a.inserate||0)-a.exp-afa; },0);
+        const tax=berechneSteuer({year:y,zusammen:pr.veranlagung==='zusammen',kirche:num(pr.kirche),hebesatz:num(pr.hebesatz)||400,einkuenfte:{gewerbe:pr.firmaArt==='freiberuf'?0:gewinnFirma,freiberuf:pr.firmaArt==='freiberuf'?gewinnFirma:0,vv},vorsorge:{kvpv:num(pr.kvpv),altersvorsorge:num(pr.altersvorsorge),sonstige:num(pr.sonstigeVorsorge)},sonderausgaben:num(pr.sonderausgaben),kinder:num(pr.kinder),vorauszahlungen:{est:num(pr.vzEst),gewst:num(pr.vzGewst)}});
+        return { jahr:y, gewinnFirma:r2(gewinnFirma), einkuenfteVermietung:r2(vv), zuVersteuerndesEinkommen:r2(tax.zvE), einkommensteuer:r2(tax.estFest), soli:r2(tax.soli), kirchensteuer:r2(tax.kist), gewerbesteuer:r2(tax.gewerbe&&tax.gewerbe.steuer), gesamt:r2(tax.gesamt), vorausgezahlt:r2(tax.vorausgezahlt), nachzahlung:r2(tax.nachzahlung), ruecklageProMonat:r2(tax.ruecklageMonat), hinweis:'Schätzung auf Basis des Steuerprofils – der Steuerberater entscheidet final.' }; }
+      case 'create_customer': { const id=uid(); const res=mutate(d=>ACT.addCustomer(d, N(), input, id)); return { ok:true, id:res.customer.id, name:res.customer.name, kundennummer:res.customer.custNo, konto:accLabel(res.customer.domain) }; }
+      case 'update_customer': { const res=mutate(d=>ACT.updateCustomer(d, N(), input.customer, input)); return { ok:true, id:res.customer.id, name:res.customer.name, geaendert:res.changed }; }
+      case 'delete_customer': { need(input.confirmed===true,'Löschen braucht die ausdrückliche Bestätigung des Nutzers (confirmed=true).'); const res=mutate(d=>ACT.deleteCustomer(d, input.customer)); if(custEdit&&custEdit.id===res.customer.id) setCustEdit(null); return { ok:true, geloescht:res.customer.name }; }
+      case 'create_invoice': { const {inv,missing}=ACT.buildInvoiceDraft(D(), N(), input, { id:uid(), defMwst:defMwstFor, today }); if(missing.length) return { ok:false, error:'Es fehlt: '+missing.join(', ')+'.', fehlt:missing, entwurf:invoiceSummary(inv) };
+        if(input.book_now===true){ setPending(null); const saved=await bookInvoiceObj(inv); const c=invCustomerX(saved); turnActionRef.current={type:'invoiceDone', invId:saved.id, hasMail:!!String(c.email||'').trim()}; return { ok:true, booked:true, number:saved.number, brutto:r2(invTotals(saved.items).gross), kunde:c.name||saved.custName, pdf:!!saved.pdfPath }; }
+        setPending({type:'invoice', inv}); turnActionRef.current={type:'confirmInvoice', inv}; return { ok:true, booked:false, number:inv.number, vorschau:invoiceSummary(inv), hinweis:'Vorschau mit Bestätigungs-Button wird dem Nutzer angezeigt. Erst nach Bestätigung wird gebucht.' }; }
+      case 'confirm_invoice': { const p=botPendingRef.current; need(p&&p.inv,'Es liegt kein Rechnungsentwurf zur Bestätigung vor.'); setPending(null); const saved=await bookInvoiceObj(p.inv); const c=invCustomerX(saved); turnActionRef.current={type:'invoiceDone', invId:saved.id, hasMail:!!String(c.email||'').trim()}; return { ok:true, booked:true, number:saved.number, brutto:r2(invTotals(saved.items).gross), kunde:c.name||saved.custName, konto:accLabel(saved.account) }; }
+      case 'mark_invoice_paid': { const res=mutate(d=>ACT.setInvoicePaid(d, input.number, input.paid!==false, input.date)); return { ok:true, number:res.invoice.number, bezahlt:res.invoice.paid, bezahltAm:res.invoice.paidDate }; }
+      case 'delete_invoice': { need(input.confirmed===true,'Löschen braucht die ausdrückliche Bestätigung des Nutzers (confirmed=true).'); const res=mutate(d=>ACT.deleteInvoice(d, input.number)); if(invView&&invView.id===res.invoice.id) setInvView(null); return { ok:true, geloescht:res.invoice.number }; }
+      case 'send_invoice_email': { const iv=ACT.findInvoice(D(), input.number); need(iv,'Rechnung „'+(input.number||'')+'" nicht gefunden.'); openMailCompose(iv); return { ok:true, number:iv.number, hinweis:'Versandvorschau geöffnet – der Nutzer prüft und klickt selbst auf „Jetzt senden".' }; }
+      case 'prepare_payment_reminder': { const iv=ACT.findInvoice(D(), input.number); need(iv,'Rechnung „'+(input.number||'')+'" nicht gefunden.'); need(!iv.paid,'Rechnung '+iv.number+' ist bereits bezahlt.'); await startMahnung(iv); return { ok:true, number:iv.number, hinweis:'E-Mail-Entwurf geöffnet – wird erst nach Klick des Nutzers gesendet.' }; }
+      case 'create_recurring_invoice': { const {inv,missing}=ACT.buildInvoiceDraft(D(), N(), input, { id:uid(), defMwst:defMwstFor, today }); if(missing.length) return { ok:false, error:'Es fehlt: '+missing.join(', ')+'.', fehlt:missing };
+        let customerId=inv.customerId; if(!customerId){ const id=uid(); const res=mutate(d=>ACT.addCustomer(d, N(), { name:inv.custName, address:inv.custAddress, email:inv.custEmail, account:inv.domain }, id)); customerId=res.customer.id; }
+        const fromM=Math.min(12,Math.max(1,+input.from_month||1))-1, fromY=+input.from_year||yr, toY=+input.to_year||fromY, toM=input.to_month?Math.min(12,Math.max(1,+input.to_month))-1:11;
+        const rec={ id:uid(), domain:inv.domain, account:inv.account||inv.domain, customerId, custName:inv.custName, custAddress:inv.custAddress, custEmail:inv.custEmail, firstName:inv.firstName||'', lastName:inv.lastName||'', company:inv.company||'', anrede:inv.anrede||'', saveCust:false, fromY, fromM, toY, toM, genDay:Math.min(28,Math.max(1,+input.gen_day||1)), items:inv.items, note:inv.note||'', headerText:inv.headerText, footerText:inv.footerText, active:true };
+        applyData(prev=>({...prev, recurInvoices:[...(prev.recurInvoices||[]), rec]})); setTimeout(()=>{ try{ genRecInvoices(); }catch(e){} },80);
+        return { ok:true, id:rec.id, kunde:rec.custName, von:MONTHS[fromM]+' '+fromY, bis:MONTHS[toM]+' '+toY, brutto:r2(invTotals(rec.items).gross), hinweis:'Fällige Rechnungen werden automatisch erzeugt.' }; }
+      case 'add_booking': { const ids=[]; for(let i=0;i<130;i++) ids.push(uid()); const file=botAttachmentRef.current; const acct=ACT.resolveAccount(input.account, N()); need(acct,'Konto „'+(input.account||'')+'" nicht gefunden.');
+        let fileInfo=null; if(file && input.attach_file!==false && !input.recurring){ const d0=ACT.toISO(input.date)||today; const dt=new Date(d0); const y0=isNaN(dt)?yr:dt.getFullYear(), m0=isNaN(dt)?mo:dt.getMonth(); try{ fileInfo=await uploadBookingFile(file, acct, input.kind==='ein'?'ein':'aus', y0, m0, input.name, input.belegnr); }catch(e){ fileInfo={error:String(e.message||e)}; } }
+        const inp={...input, filePath:(fileInfo&&fileInfo.path)||null, fileName:(fileInfo&&fileInfo.fname)||''}; const res=mutate(d=>ACT.addBooking(d, N(), inp, { ids, today, guessCategory })); if(fileInfo&&!fileInfo.error) botAttachmentRef.current=null;
+        return { ok:true, id:res.item.id, konto:accLabel(res.account), art:res.kind, name:res.item.name, betrag:res.item.amount, datum:res.item.datum, kategorie:res.item.category, status:res.item.status, monate:res.months, beleg:fileInfo&&!fileInfo.error?'gespeichert':(fileInfo&&fileInfo.error?('nicht gespeichert: '+fileInfo.error):'kein Anhang') }; }
+      case 'update_booking': { const res=mutate(d=>ACT.updateBooking(d, N(), input.id, input)); return { ok:true, id:res.item.id, geaendert:res.changed, konto:accLabel(res.account), art:res.kind, name:res.item.name, betrag:res.item.amount }; }
+      case 'delete_booking': { need(input.confirmed===true,'Löschen braucht die ausdrückliche Bestätigung des Nutzers (confirmed=true).'); const res=mutate(d=>ACT.deleteBooking(d, input.id)); return { ok:true, geloescht:res.item.name, betrag:res.item.amount }; }
+      case 'add_import_drafts': { const list=(input.items||[]).map(p=>{ const nm=String(p.name||'Umsatz').slice(0,70); const note=String(p.note||''); return { id:uid(), name:nm, amount:Math.abs(num(p.amount)), kind:(p.kind==='ein'?'ein':'aus'), belegnr:String(p.belegnr||''), datum:ACT.toISO(p.date)||'', category:(String(p.category||'')||guessCategory(nm+' '+note)), note, netto:'', mwst:'', info:'' }; }).filter(p=>p.amount>0); need(list.length,'Keine gültigen Umsätze übergeben.'); addImportDrafts(list); setTab('import'); setImportTab('bank'); return { ok:true, added:list.length, hinweis:'Im Bank-Import zur Zuordnung – Dubletten und Zahlungseingänge werden dort automatisch markiert.' }; }
+      case 'extract_attachment_items': { const file=botAttachmentRef.current; need(file,'Es hängt keine Datei an der aktuellen Nachricht.'); const {quelle,list}=await aiExtractPosten(file); if(input.import!==false && list.length){ addImportDrafts(list); setTab('import'); setImportTab('bank'); } return { ok:true, quelle, count:list.length, importiert:input.import!==false&&list.length>0, posten:list.slice(0,80).map(p=>({name:p.name, betrag:p.amount, art:p.kind, datum:p.datum, kategorie:p.category})) }; }
+      case 'create_todo': { const res=mutate(d=>ACT.addTodo(d, input, uid())); return { ok:true, id:res.todo.id, titel:res.todo.title }; }
+      case 'update_todo': { const res=mutate(d=>ACT.updateTodo(d, input.id, input)); return { ok:true, id:res.todo.id, titel:res.todo.title, erledigt:!!res.todo.done }; }
+      case 'delete_todo': { const res=mutate(d=>ACT.deleteTodo(d, input.id)); return { ok:true, geloescht:res.todo.title }; }
+      case 'update_settings': { const opts={ account:input.account, year:input.year, mode:isDark?'dark':'light' }; const res=ACT.updateSettings(D(), N(), input.section, input.patch||{}, opts);
+        if(res.data!==D()){ dataRef.current=res.data; setData(prev=>{ try{ return ACT.updateSettings(prev, N(), input.section, input.patch||{}, opts).data; }catch(e){ return prev; } }); }
+        if(res.names!==N()){ namesRef.current=res.names; setNames(prev=>{ try{ return ACT.updateSettings(D(), prev, input.section, input.patch||{}, opts).names; }catch(e){ return prev; } }); }
+        if(res.theme) setTheme(res.theme); if(input.section==='assistent' && input.patch && input.patch.model){ const mm=ASSISTANT_MODELS.find(x=>x.id===input.patch.model); if(mm) setBotModel(mm.id); }
+        return { ok:res.applied.length>0, geaendert:res.applied, ignoriert:res.ignored, ...(res.applied.length?{}:{error:'Kein bekanntes Feld geändert.'}) }; }
+      case 'open_app_tab': { const ok=openTabFor(input.tab, input.sub); if(!ok) return { ok:false, error:'Unbekannter Bereich: '+(input.tab||'') }; if(isMobile) setBotOpen(false); return { ok:true }; }
+      case 'set_period': { const y=+input.year; const m=Math.min(12,Math.max(1,+input.month||1))-1; need(y>2000&&y<2100,'Ungültiges Jahr.'); setYr(y); setMo(m); return { ok:true, zeitraum:MONTHS[m]+' '+y }; }
+      case 'export_data': { exportData(); return { ok:true }; }
+      default: return { ok:false, error:'Unbekanntes Werkzeug: '+name };
+    }
   };
+  // Aufruf des KI-Proxys; Fehlermeldungen des Proxys/der API lesbar machen
+  const botInvoke = async (body)=>{ const {data:resp,error}=await aiInvoke({body}); if(error){ let msg=error.message||'KI-Fehler'; try{ if(error.context&&typeof error.context.json==='function'){ const j=await error.context.json(); if(j&&j.error) msg=(typeof j.error==='string'?j.error:(j.error.message||msg)); } }catch(_){ } throw new Error(msg); } if(resp&&resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error)); return resp; };
   // Datei (PDF/Bild/XML/CSV) per KI in Posten zerlegen
   const aiExtractPosten = async (file)=>{
     const isPdf = file.type==='application/pdf' || /\.pdf$/i.test(file.name);
@@ -3205,61 +3210,10 @@ function App({session}) {
     const list=(parsed.p||[]).map(p=>{ const belegnr=String(p.r||''); const datum=toISO(p.d||''); const name=String(p.b||'Posten').slice(0,70); const note=String(p.z||''); return { id:uid(), name, amount:Math.abs(parseFloat(String(p.a!=null?p.a:0).replace(',','.'))||0), kind:((p.k||'')==='e'?'ein':'aus'), belegnr, datum, category:(String(p.c||'')||guessCategory(name+' '+note)), note, netto:(p.nt!=null&&p.nt!=='')?Math.abs(parseFloat(String(p.nt).replace(',','.'))||0):'', mwst:(p.mw!=null&&p.mw!=='')?String(p.mw).replace('%','').trim():'', info:[belegnr&&('Nr. '+belegnr)].filter(Boolean).join(' · ') }; }).filter(p=>p.amount>0);
     return { quelle:String(parsed.quelle||''), list };
   };
-  const handleBotFile = async (file)=>{
-    setBotBusy(true); setBotMsgs(m=>[...m,{role:'assistant',content:'Lese „'+file.name+'" aus … einen Moment.'}]);
-    try{ const {quelle,list}=await aiExtractPosten(file);
-      if(!list.length){ setBotMsgs(m=>[...m,{role:'assistant',content:'Ich konnte in „'+file.name+'" keine Posten erkennen.'}]); }
-      else { const months=Array.from(new Set(list.map(p=>p.datum&&toISO(p.datum).slice(0,7)).filter(Boolean))); const monLbl=months.length?(' ('+months.map(k=>{const a=k.split('-');return (MONTHS[(+a[1])-1]||'')+' '+a[0];}).join(', ')+')'):''; const ein=list.filter(p=>p.kind==='ein').length, aus=list.length-ein;
-        setBotMsgs(m=>[...m,{role:'assistant',content:'In '+(quelle||'der Datei')+' habe ich '+list.length+' Posten erkannt'+monLbl+' – '+ein+' Einnahmen, '+aus+' Ausgaben. Soll ich sie in den Import übernehmen? Dort kannst du sie prüfen und dem passenden Monat/Konto zuordnen.', action:{type:'import', drafts:list}}]); }
-    }catch(e){ setBotMsgs(m=>[...m,{role:'assistant',content:'⚠️ Konnte die Datei nicht auslesen: '+(e.message||e)}]); }
-    setBotBusy(false); setBotFile(null);
-  };
   const applyBotImport = (drafts)=>{ addImportDrafts(drafts||[]); setBotMsgs(m=>[...m,{role:'assistant',content:(drafts||[]).length+' Posten in den Kontoauszug übernommen – ich öffne den Bereich.'}]); setTab('import'); setImportTab('bank'); };
 
-  // ── Rechnung per Chat erstellen (fragt Pflichtfelder ab) ──
-  const matchAccount=(q)=>{ const lc=String(q||'').toLowerCase(); if(/privat/.test(lc))return 'privat'; if(/firma|unternehm/.test(lc))return 'unter'; for(const p of PROPS){ const nm=(names[p]||'').toLowerCase(); if(nm && lc.includes(nm)) return p; } return null; };
-  const nextInvoiceNeed=(inv)=>{ if(!(inv.customerId||String(inv.custName||'').trim())) return 'kunde'; if(!String(inv.custAddress||'').trim()) return 'adresse'; const it=(inv.items||[])[0]; if(!it||!num(it.price)) return 'position'; if(!inv.account) return 'konto'; return 'confirm'; };
-  const invFieldOptions=(need,inv)=>{ const dom=inv.domain||'unter';
-    if(need==='kunde'){ const cs=customersFor(dom).slice(0,6).filter(c=>(c.name||'').trim()).map(c=>({label:c.name,value:c.name})); return cs.length?cs:null; }
-    if(need==='konto'){ const o=[{label:'Firma',value:'Firma'}]; PROPS.forEach(p=>{ if(names[p]) o.push({label:names[p],value:names[p]}); }); o.push({label:'Privat',value:'Privat'}); return o; }
-    return null;
-  };
-  const askNextInvoiceField=(inv)=>{ const need=nextInvoiceNeed(inv); setBotFlow({type:'invoice', inv, step:need});
-    if(need==='confirm'){ const cust=invCustomer(inv); const tot=invTotals(inv.items); const posL=(inv.items||[]).map(i=>i.desc+' · '+fmt(num(i.price)*num(i.qty||1))).join(', '); setBotMsgs(m=>[...m,{role:'assistant',content:'Bitte prüfen:\n• Kunde: '+((cust.name||inv.custName)||'—')+'\n• Adresse: '+(inv.custAddress||'—')+'\n• Position: '+posL+'\n• Konto: '+accLabel(inv.account)+'\n• Gesamt: '+fmt(tot.gross)+'\n\nErstellt wird erst, wenn du bestätigst.', action:{type:'confirmInvoice', inv}}]); return; }
-    if(need==='kunde'){ setBotMsgs(m=>[...m,{role:'assistant',content:'An welchen Kunden soll die Rechnung gehen? Wähl unten aus – oder tipp den Namen ein, wenn es ein neuer Kunde ist.', action:{type:'customerPick', domain:(inv.domain||'unter')}}]); return; }
-    const Q={ adresse:'Wie lautet die Anschrift des Kunden? (Straße, PLZ Ort)', position:'Was soll berechnet werden? Beschreibung + Betrag, z. B. „Webdesign 1500".', konto:'Sag mir nur noch, zu welchem Konto '+(inv.custName?('„'+inv.custName+'"'):'der Kunde')+' gehört – dann übernehme ich den Rest.' };
-    const opts=invFieldOptions(need,inv);
-    setBotMsgs(m=>[...m,{role:'assistant',content:Q[need]||'Bitte ergänzen.', action: opts?{type:'options',options:opts}:null}]);
-  };
-  const startInvoiceFlow=(q)=>{ const ql=String(q||'').toLowerCase(); const dom=/immobil|vermiet|\bmiete\b/.test(ql)?'immo':'unter'; const inv=newInvoice(dom);
-    let m=q.match(/(?:^|\s)(?:an|für)\s+(?:die\s+|herr[n]?\s+|frau\s+)?([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-&]{1,40}?)(?=\s+(?:über|betrag|für|mit|,|\.|$))/i) || q.match(/kunde[n]?\s+([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-&]{1,40})/i);
-    const custName=m?m[1].trim():'';
-    if(custName){ const c=customersFor(dom).find(x=>(x.name||'').toLowerCase().includes(custName.toLowerCase().split(' ')[0])); if(c){ inv.customerId=c.id; inv.custName=c.name||''; inv.custAddress=c.address||''; inv.custEmail=c.email||''; inv.saveCust=false; } else inv.custName=custName; }
-    let am=q.match(/(\d+(?:[.,]\d{1,2})?)\s*(?:euro|eur|€)/i)||q.match(/(?:über|betrag|von)\s+(\d+(?:[.,]\d{1,2})?)/i);
-    if(am){ const price=Math.abs(parseFloat(am[1].replace(',','.'))||0); if(price>0){ let dm=q.match(/(?:für|:)\s+([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß .\-]{2,40})/i); inv.items=[{desc:(dm?dm[1].trim():'Leistung'),qty:1,price,mwst:defMwstFor(dom)}]; } }
-    setBotMsgs(m=>[...m,{role:'assistant',content:'Alles klar, ich erstelle eine '+(dom==='immo'?'Immobilien-':'')+'Rechnung. Ich frage die Pflichtangaben ab.'}]);
-    askNextInvoiceField(inv);
-  };
-  const advanceFlow = async (q)=>{ const flow=botFlow; if(!flow){ return; } if(/^(abbrechen|stop|abbruch|nein,? danke|cancel)\s*$/i.test(String(q||''))){ setBotFlow(null); setBotMsgs(m=>[...m,{role:'assistant',content:'Okay, abgebrochen.'}]); return; }
-    const inv={...flow.inv}; const step=flow.step;
-    if(step==='kunde'){ const name=q.trim(); const c=customersFor(inv.domain||'unter').find(x=>(x.name||'').toLowerCase().includes(name.toLowerCase().split(' ')[0])); if(c){ inv.customerId=c.id; inv.custName=c.name||''; inv.custAddress=c.address||''; inv.custEmail=c.email||''; inv.saveCust=false; } else { inv.custName=name; inv.customerId=''; setBotMsgs(m=>[...m,{role:'assistant',content:'„'+name+'" ist neu – ich lege ihn beim Erstellen automatisch als Kunde an.'}]); } }
-    else if(step==='adresse'){ inv.custAddress=q.trim(); }
-    else if(step==='position'){ const am=q.match(/(\d+(?:[.,]\d{1,2})?)/); const price=am?Math.abs(parseFloat(am[1].replace(',','.'))||0):0; const desc=q.replace(/(\d+(?:[.,]\d{1,2})?)\s*(euro|eur|€)?/i,'').replace(/[,;]+\s*$/,'').trim()||'Leistung'; inv.items=[{desc,qty:1,price,mwst:defMwstFor(inv.domain)}]; }
-    else if(step==='konto'){ const acc=matchAccount(q); if(acc) inv.account=acc; else { setBotMsgs(m=>[...m,{role:'assistant',content:'Das Konto habe ich nicht erkannt. Sag z. B. „Firma", „'+(names[PROPS[0]]||'Immobilie')+'" oder „Privat".'}]); setBotFlow({...flow,inv}); return; } }
-    askNextInvoiceField(inv);
-  };
-  // Rechnung buchen (für Assistent) – wie saveInvoice, aber ohne Editor/Tab-Wechsel
-  const bookInvoiceObj = async (inv0)=>{ let inv={...inv0, number: inv0.number||nextInvNo()}; const tot=invTotals(inv.items); const dt=new Date(inv.date); const ty=isNaN(dt)?yr:dt.getFullYear(); const tm=isNaN(dt)?mo:dt.getMonth(); const account=inv.account||'unter'; const isExpense=tot.gross<0;
-    const cName=(inv.custName||inv.company||[inv.firstName,inv.lastName].filter(Boolean).join(' ')||'').trim();
-    if(!inv.customerId && inv.saveCust!==false && cName){ const newC={id:uid(),name:cName,firstName:inv.firstName||'',lastName:inv.lastName||'',company:inv.company||'',anrede:inv.anrede||'',address:inv.custAddress||'',email:inv.custEmail||'',custNo:nextCustNo(inv.domain||'unter'),domain:inv.domain||'unter'}; saveCustomer(newC); inv={...inv,customerId:newC.id}; }
-    const cust=invCustomer(inv); let pdfPath=inv.pdfPath||null;
-    try{ const blob=await buildInvoicePDF(inv); if(blob){ const path=['Rechnungen',String(ty),'Rechnung_'+safeName(inv.number)+'.pdf'].map(safeName).join('/'); const {error}=await sb.storage.from('belege').upload(path,blob,{upsert:true,contentType:'application/pdf'}); if(!error)pdfPath=path; } }catch(e){}
-    const sentDate=inv.sentDate||new Date().toISOString().slice(0,10); const saved={...inv,total:tot.gross,account,pdfPath,sentDate,booked:true};
-    setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const list=[...(nd.invoices||[])]; const i=list.findIndex(x=>x.id===inv.id); if(i<0)list.push(saved); else list[i]=saved; nd.invoices=list; if(!nd[ty])nd[ty]={}; if(!nd[ty][tm])nd[ty][tm]=emptyMonth(); const item={...newItem('Rechnung '+inv.number+((cust&&cust.name)?(' · '+cust.name):'')),amount:Math.abs(tot.gross),belegnr:inv.number,datum:inv.date,netto:Math.abs(tot.net),category:'Allgemein',note:'Rechnung',invId:inv.id}; _bookKind(nd[ty][tm],account,isExpense?'aus':'ein',item); return nd; });
-    return saved;
-  };
-  const finalizeBotInvoice = async ()=>{ const flow=botFlow; if(!flow||botBusy) return; setBotBusy(true); setBotFlow(null); setBotMsgs(m=>[...m,{role:'assistant',content:'Erstelle und buche die Rechnung …'}]);
-    try{ const saved=await bookInvoiceObj(flow.inv); const cust=invCustomer(saved); const hasMail=!!String(cust.email||'').trim(); setBotMsgs(m=>[...m,{role:'assistant',content:'✅ Rechnung '+saved.number+' erstellt und auf „'+accLabel(saved.account)+'" gebucht.'+(hasMail?'\n\nSoll ich sie '+(cust.name?('an '+cust.name+' '):'')+'per E-Mail an '+cust.email+' senden?':'\n\nMöchtest du sie ansehen oder per E-Mail senden?'), action:{type:'invoiceDone', invId:saved.id, hasMail}}]); }
+  const finalizeBotInvoice = async ()=>{ const p=botPendingRef.current; if(!p||!p.inv||botBusy) return; setBotBusy(true); setPending(null); setBotMsgs(m=>[...m,{role:'assistant',content:'Erstelle und buche die Rechnung …'}]);
+    try{ const saved=await bookInvoiceObj(p.inv); const cust=invCustomerX(saved); const hasMail=!!String(cust.email||'').trim(); setBotMsgs(m=>[...m,{role:'assistant',content:'✅ Rechnung '+saved.number+' erstellt und auf „'+accLabel(saved.account)+'" gebucht.'+(hasMail?'\n\nSoll ich sie '+(cust.name?('an '+cust.name+' '):'')+'per E-Mail an '+cust.email+' senden?':'\n\nMöchtest du sie ansehen oder per E-Mail senden?'), steps:[{name:'confirm_invoice',label:'Rechnung '+saved.number+' gebucht',result:{ok:true}}], action:{type:'invoiceDone', invId:saved.id, hasMail}}]); }
     catch(e){ setBotMsgs(m=>[...m,{role:'assistant',content:'⚠️ Konnte die Rechnung nicht erstellen: '+(e.message||e)}]); }
     setBotBusy(false);
   };
@@ -3329,14 +3283,28 @@ function App({session}) {
     const t=setInterval(()=>{ syncAutoTodos(); }, 60000);
     return ()=>clearInterval(t);
   }, [ready]);
+  // Verlauf pro Konto in der App speichern (data.assistantChat) – ohne Dateien, nur Text + Aktionen
+  useEffect(()=>{ if(!ready) return; const stored=(data.assistantChat||[]); if(stored.length && botMsgs.length<=1 && !botRestoredRef.current){ botRestoredRef.current=true; setBotMsgs(stored.map(m=>({role:m.role, content:m.content||'', steps:m.steps||undefined, attachmentName:m.attachmentName||undefined}))); botSeenRef.current=stored.length; } else botRestoredRef.current=true; },[ready]);
+  useEffect(()=>{ if(!ready || !botRestoredRef.current) return; const slim=botMsgs.slice(-60).map(m=>({role:m.role, content:String(m.content||'').slice(0,6000), ...(m.steps&&m.steps.length?{steps:m.steps.map(s=>({name:s.name,label:s.label,result:{ok:!(s.result&&s.result.ok===false)}}))}:{}), ...(m.attachmentName?{attachmentName:m.attachmentName}:{})})); const cur=JSON.stringify(data.assistantChat||[]); if(cur===JSON.stringify(slim)) return; setData(prev=>({...prev, assistantChat:slim})); },[botMsgs, ready]);
+  const botReset = ()=>{ if(botBusy) return; setPending(null); setBotMsgs([BOT_WELCOME()]); botSeenRef.current=1; };
+  const chooseBotModel = (v)=>{ if(!ASSISTANT_MODELS.some(m=>m.id===v)) return; setBotModel(v); setData(prev=>({...prev, assistant:{...(prev.assistant||{}), model:v}})); };
+  useEffect(()=>{ if(!ready) return; const mm=(data.assistant||{}).model; if(mm && ASSISTANT_MODELS.some(x=>x.id===mm)) setBotModel(mm); },[ready]);
   const botSend = async (text)=>{ const q=(text!=null?text:botInput).trim(); const file=botFile; if(botBusy) return; if(!q && !file) return; if(botRecOn){ try{ botRecRef.current&&botRecRef.current.stop(); }catch(_){ } setBotRecOn(false); }
-    setBotMsgs(m=>[...m,{role:'user',content:(q||'')+(file?((q?' ':'')+'📎 '+file.name):'')}]); setBotInput(''); { const ta=document.querySelector('#botInputArea'); if(ta){ta.style.height='auto';} }
-    if(botFlow){ await advanceFlow(q); return; }
-    if(file){ await handleBotFile(file); return; }
-    if(/\brechnung/i.test(q) && /(erstell|erzeug|schreib|\bmach\b|stell|leg)/i.test(q)){ startInvoiceFlow(q); return; }
-    const reply=botReply(q);
-    if(reply!=null){ setBotBusy(true); await new Promise(r=>setTimeout(r, 480+Math.min(700, reply.length*5))); setBotBusy(false); setBotMsgs(m=>[...m,{role:'assistant',content:reply}]); }
-    else { await botAskAI(q); }
+    const userMsg={role:'user',content:q||'', attachmentName:file?file.name:undefined};
+    const history=[...botMsgs, userMsg];
+    setBotMsgs(m=>[...m,userMsg]); setBotInput(''); setBotFile(null); setBotBusy(true); setBotSteps([]); { const ta=document.querySelector('#botInputArea'); if(ta){ta.style.height='auto';} }
+    turnActionRef.current=null; botAttachmentRef.current=file||null;
+    try{
+      const attachment = file ? await attachmentFromFile(file, fileToB64) : null;
+      const system = buildSystemPrompt(buildAssistantContext(attachment));
+      const messages = buildApiMessages(history, { maxMessages:18, attachment });
+      const modelInfo = ASSISTANT_MODELS.find(m=>m.id===botModel) || ASSISTANT_MODELS[0];
+      const { text:answer, steps } = await runAssistantTurn({ invoke:botInvoke, model:modelInfo.id, adaptive:!!modelInfo.adaptive, effort:'medium', system, tools:ASSISTANT_TOOLS, messages, executeTool:runTool, maxTokens:4000, maxRounds:12, onStep:(st)=>setBotSteps(s=>[...s, stepLabel(st)]) });
+      const stepsSlim = steps.map(s=>({ name:s.name, label:stepLabel(s), result:{ ok:!(s.result&&s.result.ok===false) } }));
+      const act=turnActionRef.current||null; const shown=cleanMd(answer)||answer; // Updater läuft erst beim Rendern – Werte vorher festhalten
+      setBotMsgs(m=>[...m,{role:'assistant',content:shown, steps:stepsSlim.length?stepsSlim:undefined, action:act}]);
+    }catch(e){ setBotMsgs(m=>[...m,{role:'assistant',content:'Sorry, das hat gerade nicht geklappt ('+(e.message||e)+'). Versuch es bitte gleich nochmal.'}]); }
+    botAttachmentRef.current=null; turnActionRef.current=null; setBotBusy(false); setBotSteps([]);
   };
   const analyzeTax = async () => {
     if(taxBusy) return;
@@ -3791,7 +3759,6 @@ function App({session}) {
   const MORE_TABS=['raten','yr','kal','download','kosten'];
   const moreActive = moreOpen || MORE_TABS.includes(tab) || (tab==='import'&&importTab==='sevdesk');
   const SIDE_NAV=[
-    {id:'home',label:'Übersicht',icon:P.home},
     {id:'belege',label:'Belege',icon:P.clip,badge:openBelegCount},
     {key:'bank',id:'import',label:'Bank',icon:P.bank,badge:drafts.length,active:(tab==='import'&&importTab!=='sevdesk'),onClick:()=>{setTab('import');setImportTab('bank');}},
     {id:'aufgaben',label:'To-do',icon:P.check,badge:openTodoCount},
@@ -3804,7 +3771,6 @@ function App({session}) {
     {section:'Steuern'},
     {id:'steuer',label:'Steuerprognose',icon:P.percent},
     {id:'steuern',label:'Auswertungen',icon:P.doc},
-    {id:'berater',label:'KI-Berater',icon:P.spark},
     {section:'Mehr',toggle:true},
     ...(moreActive?[
       {key:'sevdesk',id:'import',label:'Umzug aus sevDesk',icon:P.swap,active:(tab==='import'&&importTab==='sevdesk'),onClick:()=>{setTab('import');setImportTab('sevdesk');}},
@@ -3833,7 +3799,7 @@ function App({session}) {
       {/* ═══ SIDEBAR (Desktop) ═══ */}
       {!isMobile && (
         <aside style={{position:'fixed',left:10,top:10,bottom:10,width:railW-10,zIndex:50,display:'flex',flexDirection:'column',background:C.surf,border:'1px solid '+C.bdr,borderRadius:22,boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03), 0 8px 24px rgba(0,0,0,0.04)',transition:'width .18s ease'}}>
-          <button onClick={()=>setTab('home')} title="Übersicht" style={{display:'flex',alignItems:'center',gap:10,background:'none',border:'none',cursor:'pointer',padding:sideOpen?'20px 22px 14px':'20px 0 14px',justifyContent:sideOpen?'flex-start':'center',fontFamily:'inherit',flexShrink:0}}>
+          <button onClick={()=>{ setCustEdit(null); setTab('kunden'); }} title="Kunden" style={{display:'flex',alignItems:'center',gap:10,background:'none',border:'none',cursor:'pointer',padding:sideOpen?'20px 22px 14px':'20px 0 14px',justifyContent:sideOpen?'flex-start':'center',fontFamily:'inherit',flexShrink:0}}>
             <BuqoMark sz={30}/>{sideOpen && <span style={{fontSize:21,fontWeight:800,letterSpacing:'-0.03em',color:C.txt}}>Buqo</span>}
           </button>
           <nav style={{flex:1,overflowY:'auto',overflowX:'hidden',padding:sideOpen?'0 12px':'0 14px',display:'flex',flexDirection:'column',gap:2}}>
@@ -3895,7 +3861,7 @@ function App({session}) {
           </div>
         </>)}
         {isMobile && (<>
-          <button onClick={()=>setTab('home')} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
+          <button onClick={()=>{ setCustEdit(null); setTab('kunden'); }} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
 
           <div style={{flex:1}} />
 
@@ -3976,73 +3942,6 @@ function App({session}) {
       {/* ═══ CONTENT ═══ */}
       <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',background:C.bg,marginLeft:railW+secW,marginRight:isMobile?0:(botOpen?botWidth:(todoDetail?420:0))}}>
         <div style={{padding:isMobile?'18px 14px 96px':'14px 36px 56px',maxWidth:(tab==='rechnung'&&invEdit)?1320:1180,margin:'0 auto'}}>
-
-          {/* ══ ÜBERSICHT: Monatskennzahlen, Steuer-Rücklage, Beleg-Dropzone, To-dos, Konten ══ */}
-          {tab==='home' && (()=>{
-            const hour=new Date().getHours(); const greet=hour<11?'Guten Morgen':hour<18?'Hallo':'Guten Abend';
-            const who=String(profile.name||'').trim().split(/\s+/)[0]||'';
-            const openList=todos.filter(t=>!t.done); const open=openList.slice(0,5);
-            const konten=[
-              {key:'unter',name:names.unternehmen||'Firma',inc:tot.unterInc,exp:tot.unterExp,icon:acctIconOf('unter'),go:()=>{setOpenAcct('unter');setTab('quellen');}},
-              ...PROPS.filter(acctCreated).map(p=>{ const r=calcProp(md.props?.[p],yr,mo); return {key:p,name:names[p],inc:r.netto,exp:r.exp,icon:acctIconOf(p),go:()=>{setSp(p);setOpenAcct(p);setTab('quellen');}}; }),
-              {key:'privat',name:names.privatLabel||'Privat',inc:sumItems(md.privat?.einnahmen,yr,mo),exp:tot.privatExp,icon:acctIconOf('privat'),go:()=>{setOpenAcct('privat');setTab('quellen');}},
-            ];
-            // Steuer-Schätzung fürs gewählte Jahr – dieselbe Engine wie die Steuerprognose, Annahmen aus dem Steuerprofil
-            let tax=null; try{ const f=taxFactsFor(yr); const pr=(data.taxProfile||{})[yr]||{}; const gewinnFirma=f.acct.unter.inc-f.acct.unter.exp; const vv=PROPS.reduce((sum,p)=>{ const a=f.acct[p]||{inc:0,exp:0,inserate:0}; const gw=num((pr.gebaeudewert||{})[p]); const afa=gw>0?Math.round(gw*(num((pr.afaSatz||{})[p])||2))/100:0; return sum+a.inc+(a.inserate||0)-a.exp-afa; },0);
-              tax=berechneSteuer({year:yr,zusammen:pr.veranlagung==='zusammen',kirche:num(pr.kirche),hebesatz:num(pr.hebesatz)||400,einkuenfte:{gewerbe:pr.firmaArt==='freiberuf'?0:gewinnFirma,freiberuf:pr.firmaArt==='freiberuf'?gewinnFirma:0,vv},vorsorge:{kvpv:num(pr.kvpv),altersvorsorge:num(pr.altersvorsorge),sonstige:num(pr.sonstigeVorsorge)},sonderausgaben:num(pr.sonderausgaben),kinder:num(pr.kinder),vorauszahlungen:{est:num(pr.vzEst),gewst:num(pr.vzGewst)}}); }catch(e){ tax=null; }
-            const tile=(label,val,col,sub,onClick)=>(<div key={label} onClick={onClick} style={{...SC,padding:'18px 20px',flex:1,minWidth:170,cursor:onClick?'pointer':'default'}}><div style={{fontSize:12.5,color:C.sub,fontWeight:600,marginBottom:8}}>{label}</div><div style={{fontSize:26,fontWeight:800,color:col||C.txt,letterSpacing:'-0.02em',...NUM}}>{val}</div>{sub&&<div style={{fontSize:12,color:onClick?C.pri:C.mut,fontWeight:onClick?700:500,marginTop:6}}>{sub}</div>}</div>);
-            const onDrop=(e)=>{ e.preventDefault(); const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]; if(f){ setBelegOpen(true); extractBeleg(f); } };
-            const ghost={display:'flex',alignItems:'center',gap:8,background:C.surf2,color:C.txt,border:'none',borderRadius:999,padding:'10px 16px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'};
-            return (<>
-              <div style={{marginBottom:20}}>
-                <div style={{fontSize:14,color:C.sub,marginBottom:2}}>{greet}{who?', '+who:''}</div>
-                <div style={{fontSize:34,fontWeight:800,letterSpacing:'-0.03em'}}>Übersicht</div>
-                <div style={{fontSize:13.5,color:C.sub,marginTop:4}}>{MONTHS[mo]} {yr} · {openList.length?openList.length+' offene Aufgabe'+(openList.length===1?'':'n'):'nichts offen'} · {saved?'alles gespeichert':'speichert…'}</div>
-              </div>
-              <div style={{display:'flex',gap:14,flexWrap:'wrap',marginBottom:14}}>
-                {tile('Einnahmen · '+MONTHS[mo],fmt(tot.totalInc),C.txt)}
-                {tile('Ausgaben · '+MONTHS[mo],'−'+fmt(tot.totalExp),C.txt)}
-                {tile('Ergebnis · '+MONTHS[mo],(tot.net>=0?'+':'')+fmt(tot.net),tot.net>=0?C.txt:C.red)}
-                {tile('Steuer-Rücklage '+yr, tax?fmt(tax.ruecklageMonat)+' / Monat':'—', C.txt, tax?('Bis heute geschätzt '+fmt(tax.gesamt)+' · Steuerprognose ›'):'Steuerprognose öffnen ›', ()=>{ setTxY(yr); setTab('steuer'); })}
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'minmax(0,1.15fr) minmax(0,0.85fr)',gap:14,marginBottom:18,alignItems:'stretch'}}>
-                <div onDragOver={e=>e.preventDefault()} onDrop={onDrop} style={{...SC,padding:'22px 24px',border:'1.5px dashed '+C.bdrM,display:'flex',flexDirection:'column',justifyContent:'center'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
-                    <span style={{width:52,height:52,borderRadius:'50%',background:C.txt,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.camera} sz={22} col={C.bg}/></span>
-                    <div style={{flex:1,minWidth:200}}>
-                      <div style={{fontSize:16.5,fontWeight:800,letterSpacing:'-0.01em'}}>Beleg hochladen – Buqo verbucht ihn</div>
-                      <div style={{fontSize:13,color:C.sub,marginTop:3,lineHeight:1.5}}>Foto oder PDF hierher ziehen. Buqo liest Betrag, Datum, MwSt und Nummer, wählt Konto und Kategorie und legt den Beleg im richtigen Monat ab. Du bestätigst nur noch.</div>
-                    </div>
-                  </div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:16}}>
-                    <button onClick={()=>setBelegOpen(true)} style={{...ghost,background:C.act,color:C.actTxt,border:'none'}}><Ic p={P.upload} sz={15} col={C.actTxt}/> Beleg wählen</button>
-                    <button onClick={()=>{setTab('import');setImportTab('bank');}} style={ghost}><Ic p={P.bank} sz={15} col={C.txt}/> Kontoauszug importieren</button>
-                    <button onClick={()=>setTab('rechnung')} style={ghost}><Ic p={P.receipt} sz={15} col={C.txt}/> Rechnung schreiben</button>
-                    <button onClick={()=>{setTab('import');setImportTab('sevdesk');}} style={ghost}><Ic p={P.swap} sz={15} col={C.txt}/> Aus sevDesk umziehen</button>
-                  </div>
-                </div>
-                <div style={{...SC,padding:'18px 20px'}}>
-                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}><div style={{fontSize:15,fontWeight:700}}>Jetzt erledigen</div><button onClick={()=>setTab('aufgaben')} style={{background:'none',border:'none',color:C.pri,fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle To-dos ›</button></div>
-                  {open.length===0 ? <div style={{fontSize:13.5,color:C.sub,padding:'10px 0',lineHeight:1.5}}>Alles erledigt. Buqo legt hier automatisch To-dos an, wenn ein Beleg fehlt, eine Rechnung überfällig ist oder etwas doppelt aussieht.</div> : open.map(t=>(
-                    <div key={t.id} style={{display:'flex',alignItems:'flex-start',gap:10,borderBottom:'1px solid '+C.sep,padding:'9px 0'}}>
-                      <button onClick={()=>toggleTodoDone(t.id)} title="Erledigt" style={{width:18,height:18,borderRadius:'50%',border:'1.5px solid '+C.bdrM,background:'none',cursor:'pointer',flexShrink:0,marginTop:1,padding:0}}/>
-                      <button onClick={()=>{ if(t.ref) openTodoRef(t); else setTab('aufgaben'); }} style={{flex:1,minWidth:0,background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><span style={{display:'block',fontSize:13.5,fontWeight:600,color:C.txt}}>{t.title}</span>{t.note&&<span style={{display:'block',fontSize:12,color:C.sub,marginTop:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.note}</span>}</button>
-                    </div>
-                  ))}
-                  {openList.length>5 && <div style={{fontSize:12,color:C.mut,marginTop:8}}>+ {openList.length-5} weitere</div>}
-                </div>
-              </div>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}><div style={{fontSize:15,fontWeight:700}}>Deine Konten · {MONTHS[mo]}</div><button onClick={()=>{setOpenAcct(null);setTab('quellen');}} style={{background:'none',border:'none',color:C.pri,fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle Konten ›</button></div>
-              <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(auto-fill, minmax(220px, 1fr))',gap:14,marginBottom:14}}>
-                {konten.map(k=>{ const erg=k.inc-k.exp; const c=acol(k.key); return (
-                  <button key={k.key} onClick={k.go} style={{...SC,padding:'18px 18px',cursor:'pointer',textAlign:'left',fontFamily:'inherit',display:'flex',flexDirection:'column',gap:14,color:C.txt}}>
-                    <span style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}><span style={{width:36,height:36,borderRadius:11,background:C.surf2,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={k.icon} sz={17} col={C.txt}/></span><span style={{fontSize:15,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.name}</span><span style={{width:8,height:8,borderRadius:'50%',background:c,flexShrink:0}}/></span>
-                    <span><span style={{display:'block',fontSize:22,fontWeight:800,color:erg>=0?C.txt:C.red,letterSpacing:'-0.02em',...NUM}}>{erg>=0?'+':''}{fmt(erg)}</span><span style={{display:'block',fontSize:12,color:C.mut,marginTop:3,...NUM}}>{fmt(k.inc)} ein · {fmt(k.exp)} aus</span></span>
-                  </button>
-                ); })}
-              </div>
-            </>);
-          })()}
 
           {/* ══ QUELLEN (Konten-Grid) ══ */}
           {tab==='quellen' && !openAcct && (()=>{
@@ -4413,7 +4312,7 @@ function App({session}) {
                 {[
                   // Auf dem Desktop haben Rechnungen/Bank/Kunden/Aufgaben schon ein eigenes Icon in der Rail — hier nur auf Mobile zusätzlich zeigen (dort gibt's keine Rail).
                   ...(isMobile?[{id:'belege',label:'Belege',icon:P.clip},{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
-                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.percent},{id:'berater',label:'KI-Berater',icon:P.spark},{id:'sevdesk',label:'Umzug aus sevDesk',icon:P.swap,onClick:()=>{setTab('import');setImportTab('sevdesk');}},{id:'kosten',label:'KI-Kosten',icon:P.layers},{id:'settings',label:'Einstellungen',icon:P.gear},
+                  {id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.percent},{id:'sevdesk',label:'Umzug aus sevDesk',icon:P.swap,onClick:()=>{setTab('import');setImportTab('sevdesk');}},{id:'kosten',label:'KI-Kosten',icon:P.layers},{id:'settings',label:'Einstellungen',icon:P.gear},
                 ].map(m=>(
                   <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
@@ -4982,66 +4881,6 @@ function App({session}) {
               </>
             );
           })()}
-
-          {/* ══ KI-BERATER ══ */}
-          {tab==='berater' && (
-            <>
-              <div style={{marginBottom:14}}>
-                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:3,display:'flex',alignItems:'center',gap:8}}><Ic p={P.spark} sz={24} col={C.pri}/> KI-Berater</div>
-                <div style={{fontSize:13,color:C.sub}}>Fragt deine Zahlen (Jahr {yr}) – gibt Hinweise & Spar-Tipps. Kein Ersatz für einen Steuerberater.</div>
-              </div>
-
-              {advisorNotes.length>0 && (
-                <div style={{...SC,marginBottom:14}}>
-                  <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:8,display:'flex',alignItems:'center',gap:6}}><Ic p={P.pin} sz={13} col={C.amb}/> Gespeicherte Notizen</div>
-                  {advisorNotes.map(n=>(
-                    <div key={n.id} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 0',borderBottom:'1px solid '+C.sep}}>
-                      <div style={{flex:1,fontSize:13,color:C.txt,whiteSpace:'pre-wrap',lineHeight:1.5}}>{n.text}</div>
-                      <button onClick={()=>delNote(n.id)} title="Notiz löschen" style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:16,lineHeight:1,flexShrink:0}}>×</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div style={{...SC,minHeight:isMobile?'58vh':440,marginBottom:12}}>
-                {chat.length===0 ? (
-                  <div>
-                    <div style={{fontSize:13,color:C.mut,marginBottom:12,lineHeight:1.5}}>Stell eine Frage zu deinen Finanzen – z.B.:</div>
-                    <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
-                      {['Analysiere mein Jahr '+yr,'Wo kann ich sparen?','Was könnte absetzbar sein?','Welcher Monat war am besten/schlechtesten?'].map(q=>(
-                        <button key={q} onClick={()=>aiSend(q)} disabled={aiBusy} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:10,padding:'9px 13px',fontSize:13,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>{q}</button>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{display:'flex',flexDirection:'column',gap:12}}>
-                    {chat.map((m,i)=>(
-                      <div key={i} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
-                        <div style={{maxWidth:'88%'}}>
-                          <div style={{
-                            background:m.role==='user'?C.act:C.surf2, color:m.role==='user'?C.actTxt:C.txt,
-                            borderRadius:14, padding:'10px 13px', fontSize:14, lineHeight:1.55, whiteSpace:'pre-wrap',
-                          }}>{m.role==='assistant'?cleanMd(m.content):m.content}</div>
-                          {m.role==='assistant' && (
-                            <button onClick={()=>{addNote(cleanMd(m.content)); setToast('Als Notiz gespeichert');}} style={{marginTop:5,background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:12,fontFamily:'inherit',display:'flex',alignItems:'center',gap:5,padding:0}}><Ic p={P.pin} sz={12} col={C.sub}/> Als Notiz speichern</button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {aiBusy && <div style={{fontSize:13,color:C.mut,fontStyle:'italic'}}>Denkt nach…</div>}
-                  </div>
-                )}
-              </div>
-
-              <div style={{display:'flex',gap:8,alignItems:'flex-end'}}>
-                <textarea value={chatInput} onChange={e=>setChatInput(e.target.value)} placeholder="Frage eingeben…" rows={1}
-                  onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); aiSend(); } }}
-                  style={{flex:1,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,color:C.txt,padding:'11px 14px',fontSize:14,outline:'none',fontFamily:'inherit',resize:'none',lineHeight:1.4,minHeight:44}} />
-                <button onClick={()=>aiSend()} disabled={aiBusy||!chatInput.trim()} title="Senden" style={{background:C.act,color:C.actTxt,border:'none',borderRadius:12,width:46,height:46,flexShrink:0,cursor:aiBusy||!chatInput.trim()?'default':'pointer',opacity:aiBusy||!chatInput.trim()?0.5:1,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.send} sz={18} col={C.actTxt}/></button>
-              </div>
-              {chat.length>0 && <button onClick={()=>setChat([])} style={{marginTop:10,background:'none',border:'none',color:C.mut,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>Gespräch zurücksetzen</button>}
-            </>
-          )}
 
           {/* ══ RECHNUNGEN ══ */}
           {tab==='rechnung' && (()=>{
@@ -6428,7 +6267,7 @@ function App({session}) {
         ); };
         return (
           <div style={{position:'fixed',left:0,right:0,bottom:0,zIndex:60,background:C.surf,borderTop:'1px solid '+C.bdr,display:'flex',alignItems:'flex-end',justifyContent:'space-around',height:66,paddingBottom:'max(6px, env(safe-area-inset-bottom))'}}>
-            {cell('home','Übersicht',P.home,['home'])}
+            {cell('kunden','Kunden',P.prson,['kunden'])}
             {cell('quellen','Konten',P.grid,['quellen','immo','unter','privat'])}
             <div style={{flex:1,display:'flex',justifyContent:'center'}}>
               <button onClick={()=>setBelegOpen(true)} title="Beleg erfassen" style={{width:56,height:56,borderRadius:'50%',background:C.act,border:'4px solid '+C.bg,color:C.actTxt,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',marginTop:-22,boxShadow:'0 6px 18px rgba(0,0,0,0.14)'}}>
@@ -6436,7 +6275,7 @@ function App({session}) {
               </button>
             </div>
             <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',color:botOpen?C.pri:C.sub,paddingTop:8,position:'relative'}}><Ic p={P.spark} sz={20} col={botOpen?C.pri:C.sub}/><span style={{fontSize:10,fontWeight:600}}>Assistent</span>{botUnread>0 && <span style={{position:'absolute',top:3,right:'calc(50% - 21px)',minWidth:17,height:17,borderRadius:99,background:C.red,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',boxSizing:'border-box'}}>{botUnread}</span>}</button>
-            {cell('mehr','Mehr',P.menu,['mehr','belege','rechnung','import','berater','kal','yr','steuer','steuern','aufgaben','raten','kunden','download','kosten','settings'])}
+            {cell('mehr','Mehr',P.menu,['mehr','belege','rechnung','import','kal','yr','steuer','steuern','aufgaben','raten','download','kosten','settings'])}
           </div>
         );
       })()}
@@ -7039,15 +6878,18 @@ function App({session}) {
           )}
           <div style={{display:'flex',alignItems:'center',gap:9,padding:'14px 16px',borderBottom:'1px solid '+C.sep,flexShrink:0}}>
             <span style={{width:30,height:30,borderRadius:9,background:hexA(C.pri,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={16} col={C.pri}/></span>
-            <div style={{flex:1}}><div style={{fontSize:14,fontWeight:700,color:C.txt}}>Assistent</div><div style={{fontSize:11,color:C.mut}}>navigiert & rechnet lokal · liest Dateien per KI</div></div>
+            <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:700,color:C.txt}}>Assistent</div><div style={{fontSize:11,color:C.mut,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>erledigt alles in Buqo · Daten bleiben in deinem Konto</div></div>
+            <select value={botModel} onChange={e=>chooseBotModel(e.target.value)} title="KI-Modell des Assistenten" style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:9,color:C.sub,padding:'6px 6px',fontSize:11.5,fontFamily:'inherit',outline:'none',cursor:'pointer',maxWidth:118}}>{ASSISTANT_MODELS.map(m=><option key={m.id} value={m.id}>{m.label} · {m.hint}</option>)}</select>
+            <button onClick={botReset} disabled={botBusy} title="Neues Gespräch" style={{background:C.surf2,border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:botBusy?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit',flexShrink:0}}><Ic p={P.refresh} sz={14} col={C.sub}/></button>
             <button onClick={()=>setBotOpen(false)} style={{background:C.surf2,border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontSize:18,lineHeight:1,fontFamily:'inherit'}}>×</button>
           </div>
           <div style={{flex:1,overflowY:'auto',padding:'14px 16px',display:'flex',flexDirection:'column',gap:10}}>
             {botMsgs.map((m,i)=>{ const primBot={background:C.pri,color:C.priTxt,border:'none',borderRadius:9,padding:'8px 13px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}; const ghostBot={background:C.surf3,border:'1px solid '+C.bdr,color:C.sub,borderRadius:9,padding:'8px 13px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}; const a=m.action; const isLast=i===botMsgs.length-1; return (
               <div key={i} style={{display:'flex',flexDirection:'column',alignItems:m.role==='user'?'flex-end':'flex-start',gap:7}}>
-                <div style={{maxWidth:'88%',background:m.role==='user'?C.act:C.surf2,color:m.role==='user'?C.actTxt:C.txt,borderRadius:m.role==='user'?'13px 13px 4px 13px':'13px 13px 13px 4px',padding:'9px 12px',fontSize:13.5,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{m.content}</div>
+                <div style={{maxWidth:'88%',background:m.role==='user'?C.act:C.surf2,color:m.role==='user'?C.actTxt:C.txt,borderRadius:m.role==='user'?'13px 13px 4px 13px':'13px 13px 13px 4px',padding:'9px 12px',fontSize:13.5,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{m.content}{m.attachmentName && <span style={{display:'block',marginTop:4,fontSize:12,opacity:0.8}}>📎 {m.attachmentName}</span>}</div>
+                {m.role==='assistant' && m.steps && m.steps.length>0 && <div style={{display:'flex',flexWrap:'wrap',gap:5,maxWidth:'88%'}}>{m.steps.map((st,si)=>{ const bad=st.result&&st.result.ok===false; return <span key={si} style={{fontSize:11,fontWeight:600,color:bad?C.red:C.sub,background:C.surf,border:'1px solid '+C.bdr,borderRadius:99,padding:'3px 9px'}}>{bad?'':'✓ '}{st.label||st.name}</span>; })}</div>}
                 {a && isLast && a.type==='import' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>applyBotImport(a.drafts)} style={primBot}>In Import übernehmen</button><button onClick={()=>setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x))} style={ghostBot}>Abbrechen</button></div>}
-                {a && isLast && a.type==='confirmInvoice' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>setBotInvPreview(a.inv||(botFlow&&botFlow.inv)||null)} style={ghostBot}>👁 Anschauen</button><button onClick={finalizeBotInvoice} style={primBot}>Ja, erstellen</button><button onClick={()=>{ setBotFlow(null); setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x).concat([{role:'assistant',content:'Okay, abgebrochen.'}])); }} style={ghostBot}>Abbrechen</button></div>}
+                {a && isLast && a.type==='confirmInvoice' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>setBotInvPreview(a.inv||(botPendingRef.current&&botPendingRef.current.inv)||null)} style={ghostBot}>👁 Anschauen</button><button onClick={finalizeBotInvoice} style={primBot}>Ja, erstellen</button><button onClick={()=>{ setPending(null); setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x).concat([{role:'assistant',content:'Okay, abgebrochen.'}])); }} style={ghostBot}>Abbrechen</button></div>}
                 {a && isLast && a.type==='customerPick' && (()=>{ const cs=customersFor(a.domain||'unter').filter(c=>(c.name||'').trim()); const send=(v)=>{ if(!v) return; setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botSend(v); }; return (
                   <div style={{display:'flex',flexDirection:'column',gap:7,width:'88%'}}>
                     {cs.length>0 && <select defaultValue="" onChange={e=>send(e.target.value)} style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:9,color:C.txt,padding:'10px 12px',fontSize:13,fontFamily:'inherit',outline:'none',cursor:'pointer'}}>
@@ -7073,10 +6915,10 @@ function App({session}) {
                 {a && a.type==='invoiceDone' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>{a.hasMail && <button onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botStartSend(a.invId); }} style={primBot}>✉️ Per E-Mail senden</button>}<button onClick={()=>botPreviewInvoice(a.invId)} style={ghostBot}>📄 Ansehen</button>{!a.hasMail && <button onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botStartSend(a.invId); }} style={ghostBot}>✉️ Senden</button>}<button onClick={()=>setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x).concat([{role:'assistant',content:'Alles erledigt. 👍'}]))} style={ghostBot}>Fertig</button></div>}
               </div>
             ); })}
-            {botBusy && <div style={{display:'flex',justifyContent:'flex-start'}}><div style={{background:C.surf2,borderRadius:'13px 13px 13px 4px',padding:'11px 16px 13px',minWidth:190}}><div style={{fontSize:12.5,color:C.sub,marginBottom:8,display:'flex',alignItems:'center',gap:6}}><Ic p={P.spark} sz={13} col={C.pri}/> Ich denk grad nach…</div><div className="prog"/></div></div>}
+            {botBusy && <div style={{display:'flex',justifyContent:'flex-start'}}><div style={{background:C.surf2,borderRadius:'13px 13px 13px 4px',padding:'11px 16px 13px',minWidth:190,maxWidth:'88%'}}>{botSteps.length>1 && <div style={{fontSize:11.5,color:C.mut,marginBottom:6,lineHeight:1.6}}>{botSteps.slice(0,-1).map((st,si)=><div key={si}>✓ {st}</div>)}</div>}<div style={{fontSize:12.5,color:C.sub,marginBottom:8,display:'flex',alignItems:'center',gap:6}}><Ic p={P.spark} sz={13} col={C.pri}/> {botSteps.length?botSteps[botSteps.length-1]+' …':'Ich denk grad nach…'}</div><div className="prog"/></div></div>}
             {botMsgs.length<=1 && (
               <div style={{display:'flex',flexWrap:'wrap',gap:7,marginTop:2}}>
-                {['Wie steht meine Firma da?','Worauf steuerlich achten?','Rechnung erstellen','Bester Monat','Datei auslesen…'].map(s=>(s==='Datei auslesen…'?
+                {['Wie steht meine Firma da?','Was ist offen oder überfällig?','Erstelle eine Rechnung','Leg einen neuen Kunden an','Zeig mir meine Einstellungen','Datei auslesen…'].map(s=>(s==='Datei auslesen…'?
                   <button key={s} onClick={()=>{ const inp=document.querySelector('#botFileTrigger'); if(inp)inp.click(); }} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 11px',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>{s}</button>
                   :
                   <button key={s} onClick={()=>botSend(s)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 11px',fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>{s}</button>
@@ -7089,7 +6931,7 @@ function App({session}) {
             <div style={{display:'flex',gap:8,alignItems:'flex-end'}}>
               <label title="Datei anhängen" style={{display:'flex',alignItems:'center',justifyContent:'center',width:42,height:44,flexShrink:0,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:11,cursor:botBusy?'default':'pointer',opacity:botBusy?0.5:1}}><Ic p={P.clip} sz={17} col={C.sub}/><input id="botFileTrigger" type="file" accept="image/*,.pdf,.xml,.csv,.txt" disabled={botBusy} onChange={e=>{const f=e.target.files[0];e.target.value='';if(f)setBotFile(f);}} style={{display:'none'}}/></label>
               <button onClick={toggleBotRec} title={botRecOn?'Aufnahme stoppen':'Sprache aufnehmen'} disabled={botBusy} style={{display:'flex',alignItems:'center',justifyContent:'center',width:42,height:44,flexShrink:0,background:botRecOn?C.red:C.surf2,border:'1px solid '+(botRecOn?C.red:C.bdr),borderRadius:11,cursor:botBusy?'default':'pointer',opacity:botBusy?0.5:1,position:'relative'}}><Ic p={P.mic} sz={17} col={botRecOn?'#fff':C.sub}/>{botRecOn&&<span style={{position:'absolute',top:5,right:5,width:7,height:7,borderRadius:'50%',background:'#fff'}}/>}</button>
-              <textarea id="botInputArea" value={botInput} rows={1} onChange={e=>setBotInput(e.target.value)} onInput={e=>{ e.target.style.height='auto'; e.target.style.height=Math.min(150,e.target.scrollHeight)+'px'; }} onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey&&!botBusy){ e.preventDefault(); botSend(); e.target.style.height='auto'; } }} placeholder={botRecOn?'Sprich jetzt…':botFile?'Optional: Hinweis dazu…':'Frag, befiehl, sprich oder häng eine Datei an…'} style={{flex:1,background:C.surf2,border:'1px solid '+(botRecOn?C.red:C.bdr),borderRadius:11,color:C.txt,padding:'11px 13px',fontSize:14,lineHeight:1.4,outline:'none',fontFamily:'inherit',resize:'none',minHeight:44,maxHeight:150,boxSizing:'border-box',overflowY:'auto'}}/>
+              <textarea id="botInputArea" value={botInput} rows={1} onChange={e=>setBotInput(e.target.value)} onInput={e=>{ e.target.style.height='auto'; e.target.style.height=Math.min(150,e.target.scrollHeight)+'px'; }} onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey&&!botBusy){ e.preventDefault(); botSend(); e.target.style.height='auto'; } }} placeholder={botRecOn?'Sprich jetzt…':botFile?'Was soll ich mit der Datei machen? (optional)':'Sag mir, was ich tun soll – oder häng eine Datei an…'} style={{flex:1,background:C.surf2,border:'1px solid '+(botRecOn?C.red:C.bdr),borderRadius:11,color:C.txt,padding:'11px 13px',fontSize:14,lineHeight:1.4,outline:'none',fontFamily:'inherit',resize:'none',minHeight:44,maxHeight:150,boxSizing:'border-box',overflowY:'auto'}}/>
               <button onClick={()=>!botBusy&&botSend()} disabled={botBusy} style={{background:AI_GRADIENT,color:'#FFFFFF',border:'none',borderRadius:11,height:44,padding:'0 16px',fontSize:18,fontWeight:700,cursor:botBusy?'default':'pointer',fontFamily:'inherit',opacity:botBusy?0.5:1,flexShrink:0}}>›</button>
             </div>
           </div>
