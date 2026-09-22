@@ -47,17 +47,17 @@ const THEME_DARK = {
   sep:'rgba(255,255,255,0.07)',
 };
 const THEME_LIGHT = {
-  bg:'#F6F6F7', surf:'#FFFFFF', surf2:'#F2F3F5', surf3:'#E8EAEE',
-  bdr:'rgba(15,18,24,0.08)', bdrM:'rgba(15,18,24,0.16)',
+  bg:'#F5F5F7', surf:'#FFFFFF', surf2:'#F2F2F4', surf3:'#E8E8EC',
+  bdr:'rgba(0,0,0,0.06)', bdrM:'rgba(0,0,0,0.12)',
   pri:'#007AFF', priL:'rgba(0,122,255,0.14)', priTxt:'#FFFFFF',
   act:'#007AFF', actL:'rgba(0,122,255,0.14)', actTxt:'#FFFFFF',
   accent:'#BBF451', accentL:'rgba(187,244,81,0.18)', accentTxt:'#0A0A0A',
   grn:'#34C759', grnL:'rgba(52,199,89,0.12)',
-  red:'#E55934', redL:'rgba(229,89,52,0.11)',
+  red:'#FF3B30', redL:'rgba(255,59,48,0.10)',
   amb:'#FF9F0A', ambL:'rgba(255,159,10,0.12)',
-  exp:'#E55934',
-  txt:'#15171C', sub:'rgba(21,23,28,0.62)', mut:'rgba(21,23,28,0.42)',
-  sep:'rgba(15,18,24,0.08)',
+  exp:'#FF3B30',
+  txt:'#1D1D1F', sub:'#6E6E73', mut:'#A1A1A6',
+  sep:'rgba(0,0,0,0.06)',
 };
 let C = {...THEME_DARK};
 // hex → rgba mit Alpha
@@ -405,7 +405,7 @@ function DateField({value, onChange, style, accent, placeholder='Datum wählen'}
     </button>
     {open && ReactDOM.createPortal(
       <div onClick={()=>setOpen(false)} style={{position:'fixed',inset:0,zIndex:200,fontFamily:FONT,fontStyle:'normal'}}>
-        <div onClick={e=>e.stopPropagation()} style={{position:'fixed',top:pos.top,left:pos.left,width:288,background:C.surf,border:'1px solid '+C.bdr,borderRadius:16,padding:14,boxShadow:'0 18px 48px rgba(0,0,0,0.55)',fontFamily:FONT,fontStyle:'normal'}}>
+        <div onClick={e=>e.stopPropagation()} style={{position:'fixed',top:pos.top,left:pos.left,width:288,background:C.surf,border:'1px solid '+C.bdr,borderRadius:16,padding:14,boxShadow:'0 18px 48px rgba(0,0,0,0.14)',fontFamily:FONT,fontStyle:'normal'}}>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
             <button type="button" onClick={()=>setView(v=>({y:v.m===0?v.y-1:v.y,m:v.m===0?11:v.m-1}))} style={navBtn}>‹</button>
             <div style={{fontSize:14,fontWeight:700,color:C.txt}}>{MONTHS[view.m]} {view.y}</div>
@@ -432,7 +432,7 @@ function DateField({value, onChange, style, accent, placeholder='Datum wählen'}
 function Sheet({title, onClose, children, maxWidth=380}) {
   return (
     <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:120,padding:18}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'18px 20px',maxWidth,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'18px 20px',maxWidth,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.14)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
           <div style={{fontSize:16,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{title}</div>
           <button onClick={onClose} title="Schließen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:22,lineHeight:1,padding:'0 2px'}}>×</button>
@@ -735,7 +735,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
       {/* Kategorie-Dropdown (kompakt, gleicher Stil wie das ⋮-Menü) */}
       {catMenu && (
         <div onClick={()=>setCatMenu(null)} style={{position:'fixed',inset:0,zIndex:110}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:catMenu.left,top:catMenu.top!=null?catMenu.top:undefined,bottom:catMenu.bottom!=null?catMenu.bottom:undefined,width:200,maxHeight:300,overflowY:'auto',background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:catMenu.left,top:catMenu.top!=null?catMenu.top:undefined,bottom:catMenu.bottom!=null?catMenu.bottom:undefined,width:200,maxHeight:300,overflowY:'auto',background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 12px 32px rgba(0,0,0,0.12)'}}>
             {CATS.map(cat=>(
               <button key={cat} onClick={()=>{onUpdate(item.id,'category',cat);setCatMenu(null);}} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:item.category===cat?C.surf2:'none',border:'none',borderRadius:8,padding:'10px 12px',fontSize:14,color:item.category===cat?C.txt:C.sub,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
                 <span style={{width:6,height:6,borderRadius:'50%',background:item.category===cat?C.sub:'transparent',flexShrink:0}}/> {cat}
@@ -748,7 +748,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
       {/* Kompaktes Dropdown */}
       {menu && (
         <div onClick={()=>{setMenu(null);setMoveFly(false);}} style={{position:'fixed',inset:0,zIndex:110}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',right:menu.right,top:menu.top!=null?menu.top:undefined,bottom:menu.bottom!=null?menu.bottom:undefined,width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',right:menu.right,top:menu.top!=null?menu.top:undefined,bottom:menu.bottom!=null?menu.bottom:undefined,width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 12px 32px rgba(0,0,0,0.12)'}}>
             {onEditDetails && mItem(P.brief,'Kundendetails…',()=>{setMenu(null);onEditDetails(item.id);},acc)}
             {mItem(P.doc,'Öffnen / Bearbeiten',()=>{setMenu(null);setDrawer(true);})}
             {item.status==='offen' && mItem(P.check,(kind==='ein'?'Als bezahlt markieren':'Als abgebucht markieren'),()=>{ setMenu(null); onUpdate(item.id,'__merge__',{status:(kind==='ein'?'bezahlt':'abgebucht'),bankConfirmed:true}); },C.grn)}
@@ -758,7 +758,7 @@ function ItemRow({item, accent, kind, onExtract, custList, recurInvFn, onMakeInv
               <div onMouseEnter={()=>setMoveFly(true)} onMouseLeave={()=>setMoveFly(false)} style={{position:'relative'}}>
                 <button onClick={()=>{setMoveFly(m=>!m);}} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:moveFly?C.surf2:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.out} sz={16} col={C.sub}/> <span style={{flex:1}}>Verschieben</span><span style={{color:C.mut,fontSize:15}}>›</span></button>
                 {moveFly && (
-                  <div style={{position:'absolute',top:-5,right:'100%',marginRight:6,width:204,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:5}}>
+                  <div style={{position:'absolute',top:-5,right:'100%',marginRight:6,width:204,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 12px 32px rgba(0,0,0,0.12)',zIndex:5}}>
                     {(moveTargets||[]).map(t=>{ const isImmo=t.key==='p1'||t.key==='p2'||t.key==='p3'; const col=acctColor(t.key); const icon=isImmo?P.house:t.key==='privat'?P.prson:P.brief; return (
                       <button key={t.key} onClick={()=>{ onMoveItem(t.key, curY, curM); setMenu(null); setMoveFly(false); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'9px 11px',fontSize:13.5,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
                         <span style={{width:24,height:24,flexShrink:0,borderRadius:7,background:hexA(col,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={icon} sz={14} col={col}/></span>
@@ -964,7 +964,7 @@ function BulkAddButton({onAdd}) {
       <button onClick={()=>setOpen(true)} style={{background:'none',border:'1px dashed '+C.surf3,color:C.mut,borderRadius:8,padding:'7px 14px',fontSize:13,cursor:'pointer',fontFamily:'inherit',marginTop:6,width:'100%'}}>⚡ Mehrere auf einmal einfügen</button>
       {open && (
         <div onClick={()=>setOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'22px 24px',maxWidth:480,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'22px 24px',maxWidth:480,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.14)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
               <div style={{fontSize:16,fontWeight:700}}>Mehrere Ausgaben einfügen</div>
               <button onClick={()=>setOpen(false)} style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:22,lineHeight:1}}>×</button>
@@ -1278,7 +1278,7 @@ function CustomerSelect({customers, value, onPick, onCreate}) {
       </button>
       {open && (<>
         <div onClick={()=>{setOpen(false);setQ('');}} style={{position:'fixed',inset:0,zIndex:140}}/>
-        <div style={{position:'absolute',top:'calc(100% + 6px)',left:0,right:0,zIndex:141,background:C.surf,border:'1px solid '+C.bdr,borderRadius:13,padding:6,boxShadow:'0 16px 40px rgba(0,0,0,0.55)'}}>
+        <div style={{position:'absolute',top:'calc(100% + 6px)',left:0,right:0,zIndex:141,background:C.surf,border:'1px solid '+C.bdr,borderRadius:13,padding:6,boxShadow:'0 16px 40px rgba(0,0,0,0.14)'}}>
           <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Kunde suchen…" style={{width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:9,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit',marginBottom:6,boxSizing:'border-box'}} />
           <div style={{maxHeight:240,overflowY:'auto'}}>
             <button onClick={()=>{ setOpen(false); setQ(''); if(onCreate) onCreate(); else onPick(null); }} style={{...row,color:C.pri,fontWeight:600}}><Ic p={P.upload} sz={15} col={C.pri}/> Neuer Kunde</button>
@@ -1311,7 +1311,7 @@ function BookingSelect({bookings, value, onPick, placeholder}) {
       </button>
       {open && (<>
         <div onClick={()=>{setOpen(false);setQ('');}} style={{position:'fixed',inset:0,zIndex:140}}/>
-        <div style={{position:'absolute',top:'calc(100% + 6px)',left:0,right:0,zIndex:141,background:C.surf,border:'1px solid '+C.bdr,borderRadius:13,padding:6,boxShadow:'0 16px 40px rgba(0,0,0,0.55)'}}>
+        <div style={{position:'absolute',top:'calc(100% + 6px)',left:0,right:0,zIndex:141,background:C.surf,border:'1px solid '+C.bdr,borderRadius:13,padding:6,boxShadow:'0 16px 40px rgba(0,0,0,0.14)'}}>
           <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Buchung suchen…" style={{width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:9,color:C.txt,padding:'10px 12px',fontSize:13.5,outline:'none',fontFamily:'inherit',marginBottom:6,boxSizing:'border-box'}} />
           <div style={{maxHeight:260,overflowY:'auto'}}>
             {sel && <button onClick={()=>{onPick(null);setOpen(false);setQ('');}} style={{...row,color:C.red}}><Ic p={P.trash} sz={14} col={C.red}/> Verknüpfung entfernen</button>}
@@ -1425,7 +1425,7 @@ function App({session}) {
     Object.assign(SI,{background:C.surf3,color:C.txt});
     Object.assign(SS,{background:C.surf2,color:C.txt});
     Object.assign(SHd,{background:C.surf2,color:C.txt,border:'1px solid '+C.bdr});
-    Object.assign(SC,{background:C.surf,border:'1px solid '+C.bdr});
+    Object.assign(SC,{background:C.surf,border:'1px solid '+C.bdr,boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03), 0 6px 20px rgba(0,0,0,0.035)'});
     Object.assign(BVm,{background:C.priL,color:C.pri});
     Object.assign(BPrs,{background:C.priL,color:C.pri});
   }
@@ -3629,9 +3629,9 @@ function App({session}) {
   ];
   // Einheitlicher Tab-/Toggle-Stil (wie Import „Beleg/Bankkontoauszug")
   const PillTabs = ({tabs, value, onChange, style})=>(
-    <div style={{display:'inline-flex',gap:4,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:4,...(style||{})}}>
+    <div style={{display:'inline-flex',gap:2,background:C.surf2,borderRadius:12,padding:3,...(style||{})}}>
       {tabs.map(([k,label])=>(
-        <button key={k} onClick={()=>onChange(k)} style={{background:value===k?C.pri:'transparent',color:value===k?C.priTxt:C.sub,border:'none',borderRadius:9,padding:'8px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{label}</button>
+        <button key={k} onClick={()=>onChange(k)} style={{background:value===k?C.surf:'transparent',color:value===k?C.txt:C.sub,border:'none',borderRadius:10,padding:'8px 16px',fontSize:13.5,fontWeight:value===k?700:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',boxShadow:value===k?'0 1px 3px rgba(0,0,0,0.10)':'none'}}>{label}</button>
       ))}
     </div>
   );
@@ -3699,7 +3699,7 @@ function App({session}) {
               </div>
             )}
             {konFilterOpen && (
-              <div style={{position:'absolute',right:0,top:'100%',marginTop:8,width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:85}}>
+              <div style={{position:'absolute',right:0,top:'100%',marginTop:8,width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 12px 32px rgba(0,0,0,0.12)',zIndex:85}}>
                 <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:7,letterSpacing:'0.03em'}}>TYP</div>
                 <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
                   {[['alle','Alle'],['einmalig','Einmalig'],['wied','Wiederkehrend']].map(([k,l])=>{ const on=konTyp===k; return <button key={k} onClick={()=>setKonTyp(k)} style={{background:on?secAccent:C.surf2,color:on?'#0A0A0A':C.sub,border:'1px solid '+(on?secAccent:C.bdr),borderRadius:8,padding:'6px 11px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>; })}
@@ -3756,16 +3756,16 @@ function App({session}) {
     const positive = value >= 0;
     return (
       <div style={{
-        background:positive?C.grnL:C.surf2,
-        border:'1px solid '+(positive?'rgba(62,207,142,0.30)':C.bdr),
-        borderRadius:16,padding:'16px 22px',
+        background:C.surf,
+        border:'1px solid '+C.bdr,
+        borderRadius:20,padding:'16px 22px',boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03), 0 6px 20px rgba(0,0,0,0.035)',
         display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:14,
       }}>
         <div>
           <div style={{fontWeight:600,fontSize:15,marginBottom:4}}>{label}</div>
           <div style={{fontSize:12,color:C.sub}}>{sublabel}</div>
         </div>
-        <div style={{fontSize:32,fontWeight:800,color:positive?C.grn:C.exp,...NUM}}>
+        <div style={{fontSize:32,fontWeight:800,color:positive?C.txt:C.red,letterSpacing:'-0.02em',...NUM}}>
           {positive?'+':''}{fmt(value)}
         </div>
       </div>
@@ -3773,7 +3773,7 @@ function App({session}) {
   };
 
   /* Linke Sidebar (Desktop, ein-/ausklappbar) + Top-Leiste + Bottom-Tabbar (Mobile) */
-  const railW = isMobile?0:(sideOpen?256:76);
+  const railW = isMobile?0:(sideOpen?266:86);
   const secW  = 0;
   const sideKonten = (()=>{
     const ICONS2={house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc};
@@ -3817,7 +3817,7 @@ function App({session}) {
   ];
   const navBtn=(item)=>{ const active=item.active!=null?item.active:(tab===item.id); const badge=item.badge||0; return (
     <button key={item.key||item.id} className="railBtn" onClick={item.onClick||(()=>setTab(item.id))} style={{display:'flex',alignItems:'center',gap:11,width:'100%',height:42,borderRadius:12,padding:sideOpen?'0 12px':0,justifyContent:sideOpen?'flex-start':'center',background:active?C.surf2:'transparent',color:active?C.txt:C.sub,fontFamily:'inherit',fontSize:14.5,fontWeight:active?700:500,position:'relative',flexShrink:0}}>
-      {item.color ? <span style={{width:22,height:22,borderRadius:7,background:item.color,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={item.icon} sz={13} col="#0A0A0A"/></span> : <Ic p={item.icon} sz={19} col={active?C.pri:C.sub}/>}
+      <span style={{position:'relative',display:'inline-flex',flexShrink:0}}><Ic p={item.icon} sz={19} col={active?C.txt:C.sub}/>{item.color && <span style={{position:'absolute',right:-4,bottom:-3,width:8,height:8,borderRadius:'50%',background:item.color,border:'1.5px solid '+C.surf}}/>}</span>
       {sideOpen && <span style={{flex:1,textAlign:'left',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>}
       {sideOpen && badge>0 && <span style={{minWidth:22,height:22,borderRadius:99,background:C.txt,color:C.bg,fontSize:11.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 6px',...NUM}}>{badge}</span>}
       {!sideOpen && badge>0 && <span style={{position:'absolute',top:7,right:9,width:8,height:8,borderRadius:'50%',background:C.pri,border:'2px solid '+C.surf}}/>}
@@ -3832,7 +3832,7 @@ function App({session}) {
 
       {/* ═══ SIDEBAR (Desktop) ═══ */}
       {!isMobile && (
-        <aside style={{position:'fixed',left:0,top:0,bottom:0,width:railW,zIndex:50,display:'flex',flexDirection:'column',background:C.surf,borderRight:'1px solid '+C.bdr,transition:'width .18s ease'}}>
+        <aside style={{position:'fixed',left:10,top:10,bottom:10,width:railW-10,zIndex:50,display:'flex',flexDirection:'column',background:C.surf,border:'1px solid '+C.bdr,borderRadius:22,boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03), 0 8px 24px rgba(0,0,0,0.04)',transition:'width .18s ease'}}>
           <button onClick={()=>setTab('home')} title="Übersicht" style={{display:'flex',alignItems:'center',gap:10,background:'none',border:'none',cursor:'pointer',padding:sideOpen?'20px 22px 14px':'20px 0 14px',justifyContent:sideOpen?'flex-start':'center',fontFamily:'inherit',flexShrink:0}}>
             <BuqoMark sz={30}/>{sideOpen && <span style={{fontSize:21,fontWeight:800,letterSpacing:'-0.03em',color:C.txt}}>Buqo</span>}
           </button>
@@ -3850,7 +3850,7 @@ function App({session}) {
             {navBtn({id:'settings',label:'Einstellungen',icon:P.gear})}
             {sideOpen && (SOLO_MODE ? (
               <button onClick={()=>{ setTab('import'); setImportTab('sevdesk'); }} style={{display:'flex',alignItems:'center',gap:12,width:'100%',marginTop:10,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 12px',cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
-                <span style={{width:40,height:40,borderRadius:12,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.swap} sz={18} col="#fff"/></span>
+                <span style={{width:40,height:40,borderRadius:12,background:C.txt,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.swap} sz={18} col={C.bg}/></span>
                 <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:700,color:C.txt}}>Umzug aus sevDesk</span><span style={{display:'block',fontSize:12,color:C.sub,marginTop:2}}>Belege & Rechnungen</span><span style={{display:'block',fontSize:12,fontWeight:700,color:C.pri,marginTop:3}}>Importieren</span></span>
                 <span style={{color:C.mut,fontSize:16}}>›</span>
               </button>
@@ -3881,16 +3881,18 @@ function App({session}) {
       }}>
         {!isMobile && (<>
           <button onClick={()=>setSideOpen(o=>!o)} title={sideOpen?'Menü einklappen':'Menü ausklappen'} style={{...topIconBtn,background:'none',border:'none'}}><Ic p={P.panel} sz={19} col={C.sub}/></button>
-          <div style={{display:'flex',alignItems:'center',gap:2,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:3}}>
+          <div style={{display:'flex',alignItems:'center',gap:2,background:C.surf,border:'1px solid '+C.bdr,borderRadius:999,padding:3,boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03)'}}>
             <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>‹</button>
             <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
             <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>›</button>
           </div>
           <div style={{flex:1}}/>
-          <button onClick={()=>setBelegOpen(true)} style={{display:'flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'10px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',boxShadow:'0 6px 16px '+hexA(C.act,0.28),whiteSpace:'nowrap'}}><Ic p={P.camera} sz={16} col={C.actTxt}/> Beleg hochladen</button>
-          <button onClick={()=>setTab('aufgaben')} title="To-do" style={topIconBtn}><Ic p={P.bell} sz={18} col={C.sub}/>{openTodoCount>0 && <span style={{position:'absolute',top:-5,right:-5,minWidth:18,height:18,borderRadius:99,background:C.red,color:'#fff',fontSize:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg}}>{openTodoCount}</span>}</button>
-          <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} title="Assistent" style={{...topIconBtn,background:botOpen?hexA(C.pri,0.12):C.surf}}><Ic p={P.spark} sz={18} col={botOpen?C.pri:C.sub}/>{!botOpen && botUnread>0 && <span style={{position:'absolute',top:-5,right:-5,minWidth:18,height:18,borderRadius:99,background:C.pri,color:'#fff',fontSize:10.5,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 5px',border:'2px solid '+C.bg}}>{botUnread}</span>}</button>
-          <button onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{width:38,height:38,borderRadius:'50%',background:C.act,color:C.actTxt,border:'none',fontFamily:'inherit',fontSize:15,fontWeight:700,cursor:'pointer',flexShrink:0}}>{initial}</button>
+          <div style={{display:'flex',alignItems:'center',gap:2,background:C.surf,border:'1px solid '+C.bdr,borderRadius:999,padding:4,boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03)'}}>
+            <button onClick={()=>setBelegOpen(true)} style={{display:'flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:999,padding:'9px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',marginRight:4}}><Ic p={P.camera} sz={16} col={C.actTxt}/> Beleg hochladen</button>
+            <button onClick={()=>setTab('aufgaben')} title="To-do" style={{...topIconBtn,border:'none',background:'transparent',borderRadius:999}}><Ic p={P.bell} sz={18} col={C.sub}/>{openTodoCount>0 && <span style={{position:'absolute',top:2,right:2,minWidth:17,height:17,borderRadius:99,background:C.red,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',border:'2px solid '+C.surf}}>{openTodoCount}</span>}</button>
+            <button onClick={()=>{ setTodoDetail(null); setBotOpen(o=>!o); }} title="Assistent" style={{...topIconBtn,border:'none',background:botOpen?C.surf2:'transparent',borderRadius:999}}><Ic p={P.spark} sz={18} col={botOpen?C.txt:C.sub}/>{!botOpen && botUnread>0 && <span style={{position:'absolute',top:2,right:2,minWidth:17,height:17,borderRadius:99,background:C.pri,color:'#fff',fontSize:10,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 4px',border:'2px solid '+C.surf}}>{botUnread}</span>}</button>
+            <button onClick={()=>setProfOpen(o=>!o)} title="Profil" style={{width:34,height:34,borderRadius:'50%',background:C.txt,color:C.bg,border:'none',fontFamily:'inherit',fontSize:14,fontWeight:700,cursor:'pointer',flexShrink:0,marginLeft:2}}>{initial}</button>
+          </div>
         </>)}
         {isMobile && (<>
           <button onClick={()=>setTab('home')} style={{display:'flex',alignItems:'center',gap:9,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:18,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',flexShrink:0,padding:0}}><BuqoMark sz={24}/> Buqo</button>
@@ -3918,7 +3920,7 @@ function App({session}) {
       {/* Kalender-Popover — Desktop: verankert am Kalender-Icon in der Rail; Mobile: oben rechts */}
       {calOpen && (
         <div onClick={()=>setCalOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+80,top:62}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{left:railW+80,top:62}),width:260,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 12px 32px rgba(0,0,0,0.12)'}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
               <button onClick={()=>setCalYr(y=>y-1)} style={{background:C.surf2,border:'none',color:C.txt,borderRadius:8,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>‹</button>
               <div style={{fontSize:15,fontWeight:700}}>{calYr}</div>
@@ -3939,7 +3941,7 @@ function App({session}) {
       {/* Profil-Menü — Desktop: verankert an der Rail unten links; Mobile: oben rechts */}
       {profOpen && (
         <div onClick={()=>setProfOpen(false)} style={{position:'fixed',inset:0,zIndex:200}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{right:rightGap+32,top:62}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',...(isMobile?{top:54,right:12}:{right:rightGap+32,top:62}),width:240,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:10,boxShadow:'0 12px 32px rgba(0,0,0,0.12)'}}>
             <div style={{fontSize:12,color:C.sub,padding:'6px 10px 6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(session&&session.user&&session.user.email)||'Angemeldet'}</div>
             <div style={{fontSize:12,color:saved?C.mut:C.amb,fontWeight:500,padding:'2px 10px 8px',display:'flex',alignItems:'center',gap:6,borderBottom:'1px solid '+C.sep,marginBottom:4}}>
               <span style={{width:6,height:6,borderRadius:'50%',background:saved?C.mut:C.amb,display:'inline-block'}}/>{saved?'Gespeichert':'Speichern…'}
@@ -3990,7 +3992,7 @@ function App({session}) {
               tax=berechneSteuer({year:yr,zusammen:pr.veranlagung==='zusammen',kirche:num(pr.kirche),hebesatz:num(pr.hebesatz)||400,einkuenfte:{gewerbe:pr.firmaArt==='freiberuf'?0:gewinnFirma,freiberuf:pr.firmaArt==='freiberuf'?gewinnFirma:0,vv},vorsorge:{kvpv:num(pr.kvpv),altersvorsorge:num(pr.altersvorsorge),sonstige:num(pr.sonstigeVorsorge)},sonderausgaben:num(pr.sonderausgaben),kinder:num(pr.kinder),vorauszahlungen:{est:num(pr.vzEst),gewst:num(pr.vzGewst)}}); }catch(e){ tax=null; }
             const tile=(label,val,col,sub,onClick)=>(<div key={label} onClick={onClick} style={{...SC,padding:'18px 20px',flex:1,minWidth:170,cursor:onClick?'pointer':'default'}}><div style={{fontSize:12.5,color:C.sub,fontWeight:600,marginBottom:8}}>{label}</div><div style={{fontSize:26,fontWeight:800,color:col||C.txt,letterSpacing:'-0.02em',...NUM}}>{val}</div>{sub&&<div style={{fontSize:12,color:onClick?C.pri:C.mut,fontWeight:onClick?700:500,marginTop:6}}>{sub}</div>}</div>);
             const onDrop=(e)=>{ e.preventDefault(); const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]; if(f){ setBelegOpen(true); extractBeleg(f); } };
-            const ghost={display:'flex',alignItems:'center',gap:8,background:C.surf,color:C.txt,border:'1px solid '+C.bdr,borderRadius:12,padding:'11px 14px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'};
+            const ghost={display:'flex',alignItems:'center',gap:8,background:C.surf2,color:C.txt,border:'none',borderRadius:999,padding:'10px 16px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'};
             return (<>
               <div style={{marginBottom:20}}>
                 <div style={{fontSize:14,color:C.sub,marginBottom:2}}>{greet}{who?', '+who:''}</div>
@@ -3998,15 +4000,15 @@ function App({session}) {
                 <div style={{fontSize:13.5,color:C.sub,marginTop:4}}>{MONTHS[mo]} {yr} · {openList.length?openList.length+' offene Aufgabe'+(openList.length===1?'':'n'):'nichts offen'} · {saved?'alles gespeichert':'speichert…'}</div>
               </div>
               <div style={{display:'flex',gap:14,flexWrap:'wrap',marginBottom:14}}>
-                {tile('Einnahmen · '+MONTHS[mo],fmt(tot.totalInc),C.grn)}
-                {tile('Ausgaben · '+MONTHS[mo],fmt(tot.totalExp),C.exp)}
-                {tile('Ergebnis · '+MONTHS[mo],(tot.net>=0?'+':'')+fmt(tot.net),tot.net>=0?C.txt:C.exp)}
+                {tile('Einnahmen · '+MONTHS[mo],fmt(tot.totalInc),C.txt)}
+                {tile('Ausgaben · '+MONTHS[mo],'−'+fmt(tot.totalExp),C.txt)}
+                {tile('Ergebnis · '+MONTHS[mo],(tot.net>=0?'+':'')+fmt(tot.net),tot.net>=0?C.txt:C.red)}
                 {tile('Steuer-Rücklage '+yr, tax?fmt(tax.ruecklageMonat)+' / Monat':'—', C.txt, tax?('Bis heute geschätzt '+fmt(tax.gesamt)+' · Steuerprognose ›'):'Steuerprognose öffnen ›', ()=>{ setTxY(yr); setTab('steuer'); })}
               </div>
               <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr':'minmax(0,1.15fr) minmax(0,0.85fr)',gap:14,marginBottom:18,alignItems:'stretch'}}>
-                <div onDragOver={e=>e.preventDefault()} onDrop={onDrop} style={{...SC,padding:'22px 24px',border:'1.5px dashed '+hexA(C.pri,0.45),background:hexA(C.pri,0.04),display:'flex',flexDirection:'column',justifyContent:'center'}}>
+                <div onDragOver={e=>e.preventDefault()} onDrop={onDrop} style={{...SC,padding:'22px 24px',border:'1.5px dashed '+C.bdrM,display:'flex',flexDirection:'column',justifyContent:'center'}}>
                   <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
-                    <span style={{width:52,height:52,borderRadius:15,background:AI_GRADIENT,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.camera} sz={23} col="#fff"/></span>
+                    <span style={{width:52,height:52,borderRadius:'50%',background:C.txt,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.camera} sz={22} col={C.bg}/></span>
                     <div style={{flex:1,minWidth:200}}>
                       <div style={{fontSize:16.5,fontWeight:800,letterSpacing:'-0.01em'}}>Beleg hochladen – Buqo verbucht ihn</div>
                       <div style={{fontSize:13,color:C.sub,marginTop:3,lineHeight:1.5}}>Foto oder PDF hierher ziehen. Buqo liest Betrag, Datum, MwSt und Nummer, wählt Konto und Kategorie und legt den Beleg im richtigen Monat ab. Du bestätigst nur noch.</div>
@@ -4034,8 +4036,8 @@ function App({session}) {
               <div style={{display:'grid',gridTemplateColumns:isMobile?'1fr 1fr':'repeat(auto-fill, minmax(220px, 1fr))',gap:14,marginBottom:14}}>
                 {konten.map(k=>{ const erg=k.inc-k.exp; const c=acol(k.key); return (
                   <button key={k.key} onClick={k.go} style={{...SC,padding:'18px 18px',cursor:'pointer',textAlign:'left',fontFamily:'inherit',display:'flex',flexDirection:'column',gap:14,color:C.txt}}>
-                    <span style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}><span style={{width:36,height:36,borderRadius:11,background:c,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={k.icon} sz={17} col="#0A0A0A"/></span><span style={{fontSize:15,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.name}</span></span>
-                    <span><span style={{display:'block',fontSize:22,fontWeight:800,color:erg>=0?C.txt:C.exp,letterSpacing:'-0.02em',...NUM}}>{erg>=0?'+':''}{fmt(erg)}</span><span style={{display:'block',fontSize:12,color:C.mut,marginTop:3,...NUM}}>{fmt(k.inc)} ein · {fmt(k.exp)} aus</span></span>
+                    <span style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}><span style={{width:36,height:36,borderRadius:11,background:C.surf2,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={k.icon} sz={17} col={C.txt}/></span><span style={{fontSize:15,fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k.name}</span><span style={{width:8,height:8,borderRadius:'50%',background:c,flexShrink:0}}/></span>
+                    <span><span style={{display:'block',fontSize:22,fontWeight:800,color:erg>=0?C.txt:C.red,letterSpacing:'-0.02em',...NUM}}>{erg>=0?'+':''}{fmt(erg)}</span><span style={{display:'block',fontSize:12,color:C.mut,marginTop:3,...NUM}}>{fmt(k.inc)} ein · {fmt(k.exp)} aus</span></span>
                   </button>
                 ); })}
               </div>
@@ -4066,7 +4068,7 @@ function App({session}) {
                     <div style={{fontSize:isMobile?40:50,fontWeight:800,color:tot.net>=0?C.txt:C.exp,...NUM,lineHeight:1}}>{tot.net>=0?'+':''}{fmt(tot.net)}</div>
                     {gesamtOpen && (<>
                       <div onClick={()=>setGesamtOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
-                      <div style={{position:'absolute',left:0,top:'100%',marginTop:10,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px 20px',boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:85,minWidth:240}}>
+                      <div style={{position:'absolute',left:0,top:'100%',marginTop:10,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'16px 20px',boxShadow:'0 12px 32px rgba(0,0,0,0.12)',zIndex:85,minWidth:240}}>
                         <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
                           <span style={{width:10,height:10,borderRadius:'50%',background:C.grn,display:'inline-block'}}/>
                           <span style={{fontSize:14,color:C.sub,flex:1}}>Einnahmen</span>
@@ -4117,7 +4119,7 @@ function App({session}) {
             return (
             <>
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Einstellungen</div>
+                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:3}}>Einstellungen</div>
                 <div style={{fontSize:13,color:C.sub}}>{(session&&session.user&&session.user.email)||''}</div>
               </div>
               <div style={{display:'flex',gap:2,marginBottom:20,flexWrap:'wrap',borderBottom:'1px solid '+C.sep}}>
@@ -4404,7 +4406,7 @@ function App({session}) {
           {tab==='mehr' && (
             <>
               <div style={{marginBottom:18}}>
-                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Sonstiges</div>
+                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:3}}>Sonstiges</div>
                 <div style={{fontSize:13,color:C.sub}}>Weitere Bereiche</div>
               </div>
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
@@ -4730,7 +4732,7 @@ function App({session}) {
             return (
               <>
                 <div style={{marginBottom:18}}>
-                  <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>{importTab==='bank'?'Kontoauszug':importTab==='sevdesk'?'Umzug aus sevDesk':'Beleg'}</div>
+                  <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>{importTab==='bank'?'Kontoauszug':importTab==='sevdesk'?'Umzug aus sevDesk':'Beleg'}</div>
                   {importTab==='sevdesk' && <div style={{fontSize:13,color:C.sub,marginTop:3}}>Belege, Rechnungen, Kunden und PDFs in einem Rutsch übernehmen – Jahr für Jahr, beginnend mit 2025.</div>}
                 </div>
 
@@ -4841,7 +4843,7 @@ function App({session}) {
                       <div style={{flex:isMobile?'none':1,height:isMobile?240:'auto',background:C.surf2,borderRight:isMobile?'none':'1px solid '+C.bdr,borderBottom:isMobile?'1px solid '+C.bdr:'none',display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?14:24}}>
                         {sel ? ((/pdf/i.test(sel.fileName||'')||/^data:application\/pdf/i.test(sel.fileData||''))
                           ? <iframe src={(sel.fileData||'')+'#toolbar=0&navpanes=0&scrollbar=0'} title="Beleg" style={{width:'100%',height:'100%',border:'none',borderRadius:12,background:'#fff'}}/>
-                          : (sel.fileData? <img src={sel.fileData} alt="Beleg" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:12,boxShadow:'0 10px 40px rgba(0,0,0,0.4)'}}/>
+                          : (sel.fileData? <img src={sel.fileData} alt="Beleg" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:12,boxShadow:'0 10px 32px rgba(0,0,0,0.12)'}}/>
                              : (sel.filePath? <button onClick={()=>openFile(sel.filePath,sel.fileName)} style={{display:'inline-flex',alignItems:'center',gap:8,background:hexA(C.pri,0.16),border:'none',color:C.pri,borderRadius:11,padding:'12px 18px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.doc} sz={16} col={C.pri}/> Beleg ansehen</button>
                                 : <div style={{color:C.mut,fontSize:13}}>Kein Vorschaubild</div>)))
                           : <div style={{display:'flex',flexDirection:'column',alignItems:'center',textAlign:'center',color:C.mut,maxWidth:280}}><Ic p={P.clip} sz={30} col={C.mut}/><div style={{marginTop:12,fontSize:13.5,lineHeight:1.5}}>Wähle rechts einen offenen Beleg – die Vorschau erscheint hier.</div></div>}
@@ -4930,7 +4932,7 @@ function App({session}) {
                       <div style={{flex:isMobile?'none':1,height:isMobile?260:'auto',background:C.surf2,borderRight:isMobile?'none':'1px solid '+C.bdr,borderBottom:isMobile?'1px solid '+C.bdr:'none',display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?14:26,position:'relative'}}>
                         {isPdfFile
                           ? <iframe src={d.fileData+'#toolbar=0&navpanes=0&scrollbar=0'} title="Beleg" style={{width:'100%',height:'100%',border:'none',borderRadius:12,background:'#fff'}}/>
-                          : <img src={d.fileData} alt="Beleg" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:12,boxShadow:'0 10px 40px rgba(0,0,0,0.4)'}}/>}
+                          : <img src={d.fileData} alt="Beleg" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:12,boxShadow:'0 10px 32px rgba(0,0,0,0.12)'}}/>}
                         <label style={{position:'absolute',bottom:isMobile?10:20,right:isMobile?10:20,display:'inline-flex',alignItems:'center',gap:7,background:hexA(C.bg,0.85),border:'1px solid '+C.bdr,color:C.txt,borderRadius:10,padding:'8px 13px',fontSize:13,fontWeight:600,cursor:'pointer',backdropFilter:'blur(4px)'}}><Ic p={P.upload} sz={14} col={C.txt}/> Beleg ersetzen<input type="file" accept="image/*,.pdf" onChange={e=>{const f=e.target.files[0];e.target.value='';draftFile(d.id,f);}} style={{display:'none'}}/></label>
                       </div>
                       <div style={{width:isMobile?'auto':'min(480px,46%)',flexShrink:0,overflowY:'auto',padding:'26px 28px 56px'}}>
@@ -4985,7 +4987,7 @@ function App({session}) {
           {tab==='berater' && (
             <>
               <div style={{marginBottom:14}}>
-                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3,display:'flex',alignItems:'center',gap:8}}><Ic p={P.spark} sz={24} col={C.pri}/> KI-Berater</div>
+                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:3,display:'flex',alignItems:'center',gap:8}}><Ic p={P.spark} sz={24} col={C.pri}/> KI-Berater</div>
                 <div style={{fontSize:13,color:C.sub}}>Fragt deine Zahlen (Jahr {yr}) – gibt Hinweise & Spar-Tipps. Kein Ersatz für einen Steuerberater.</div>
               </div>
 
@@ -5215,7 +5217,7 @@ function App({session}) {
                       {/* RECHTS: Live-Vorschau */}
                       {!isMobile && (
                       <div style={{flex:1,minWidth:0,position:'sticky',top:0,alignSelf:'flex-start',height:'calc(100vh - 134px)',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,display:'flex',alignItems:'center',justifyContent:'center',padding:18}}>
-                        <div style={{position:'relative',width:'100%',maxWidth:620,height:'100%',borderRadius:8,overflow:'hidden',boxShadow:'0 14px 50px rgba(0,0,0,0.55)',background:'#fff'}}>
+                        <div style={{position:'relative',width:'100%',maxWidth:620,height:'100%',borderRadius:8,overflow:'hidden',boxShadow:'0 14px 44px rgba(0,0,0,0.14)',background:'#fff'}}>
                           <iframe title="Rechnungsvorschau" srcDoc={invoiceHTML(invEdit)} style={{width:'100%',height:'100%',border:'none',background:'#fff',display:'block'}} />
                         </div>
                         <button onClick={()=>setInvPreview(true)} title="Groß anzeigen" style={{position:'absolute',top:14,right:14,display:'inline-flex',alignItems:'center',gap:6,background:'rgba(20,20,22,0.82)',border:'1px solid rgba(255,255,255,0.14)',color:'#fff',borderRadius:9,padding:'7px 12px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit',backdropFilter:'blur(4px)'}}><Ic p={P.eye} sz={13} col={'#fff'}/> Vergrößern</button>
@@ -5227,7 +5229,7 @@ function App({session}) {
                   {/* Große Vorschau (Popup) */}
                   {invPreview && (
                     <div onClick={()=>setInvPreview(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:140,display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?12:32}}>
-                      <div onClick={e=>e.stopPropagation()} style={{width:'min(900px,100%)',maxHeight:'94vh',display:'flex',flexDirection:'column',background:C.surf,borderRadius:16,overflow:'hidden',boxShadow:'0 24px 70px rgba(0,0,0,0.6)'}}>
+                      <div onClick={e=>e.stopPropagation()} style={{width:'min(900px,100%)',maxHeight:'94vh',display:'flex',flexDirection:'column',background:C.surf,borderRadius:16,overflow:'hidden',boxShadow:'0 24px 64px rgba(0,0,0,0.18)'}}>
                         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 18px',borderBottom:'1px solid '+C.bdr}}>
                           <div style={{fontSize:15,fontWeight:700,color:C.txt}}>Vorschau · Rechnung {invEdit.number}</div>
                           <div style={{display:'flex',gap:8}}>
@@ -5245,7 +5247,7 @@ function App({session}) {
 
             return (
               <>
-                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:16}}>Rechnungen</div>
+                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:16}}>Rechnungen</div>
                 {showAcctSel && (
                   <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
                     {[{k:'alle',label:'Alle'},...bizAccts.map(k=>({k,label:acctNameOf(k)}))].map(o=>{const on=invDomain===o.k; const col=o.k==='alle'?C.pri:acol(o.k); const ic=o.k==='alle'?P.grid:acctIconOf(o.k); return (
@@ -5266,7 +5268,7 @@ function App({session}) {
                     ); })()}
                     {invFilterOpen && (<>
                       <div onClick={()=>setInvFilterOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
-                      <div style={{position:'absolute',right:0,top:'100%',marginTop:8,width:250,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:85}}>
+                      <div style={{position:'absolute',right:0,top:'100%',marginTop:8,width:250,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 12px 32px rgba(0,0,0,0.12)',zIndex:85}}>
                         <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:7,letterSpacing:'0.03em'}}>ART</div>
                         <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
                           {[['einzel','Einmalig'],['wied','Wiederkehrend']].map(([k,l])=>{const on=invKind===k;return <button key={k} onClick={()=>{setInvKind(k);setInvSearch('');}} style={{background:on?C.pri:C.surf2,color:on?C.priTxt:C.sub,border:'1px solid '+(on?C.pri:C.bdr),borderRadius:8,padding:'6px 11px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>;})}
@@ -5475,7 +5477,7 @@ function App({session}) {
             }
             return (
               <>
-                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:16}}>Kunden</div>
+                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:16}}>Kunden</div>
                 {showAcctSel && (
                   <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
                     {[{k:'alle',label:'Alle'},...bizAccts.map(k=>({k,label:acctNameOf(k)}))].map(o=>{const on=invDomain===o.k; const col=o.k==='alle'?C.pri:acol(o.k); const ic=o.k==='alle'?P.grid:acctIconOf(o.k); return (
@@ -5513,7 +5515,7 @@ function App({session}) {
               <>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
                   <div>
-                    <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>To-do</div>
+                    <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>To-do</div>
                     <div style={{fontSize:13,color:C.sub,marginTop:4}}>Eigene Aufgaben und automatische Hinweise der KI an einem Ort – nur sichtbar, wenn wirklich etwas ansteht.</div>
                   </div>
                   <button onClick={openNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> To-do erstellen</button>
@@ -5626,7 +5628,7 @@ function App({session}) {
               <>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
                   <div>
-                    <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Raten & Kredite</div>
+                    <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>Raten & Kredite</div>
                     <div style={{fontSize:13,color:C.sub,marginTop:4}}>Laufende Finanzierungen mit den verknüpften Buchungen – bezahlt und offen auf einen Blick.</div>
                   </div>
                   <button onClick={startNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Rate / Kredit anlegen</button>
@@ -5763,7 +5765,7 @@ function App({session}) {
             return (
               <>
                 <div style={{marginBottom:16}}>
-                  <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Download</div>
+                  <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>Download</div>
                   <div style={{fontSize:13,color:C.sub,marginTop:3}}>Belege nach Bereich, Jahr und Monat – als ZIP herunterladen.</div>
                 </div>
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:16}}>
@@ -5833,7 +5835,7 @@ function App({session}) {
             return (
               <>
                 <div style={{marginBottom:16}}>
-                  <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Belege</div>
+                  <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>Belege</div>
                 </div>
                 {showAcctSel && (
                   <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
@@ -5855,7 +5857,7 @@ function App({session}) {
                     ); })()}
                     {belFilterOpen && (<>
                       <div onClick={()=>setBelFilterOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
-                      <div style={{position:'absolute',right:0,top:'100%',marginTop:8,width:250,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:85}}>
+                      <div style={{position:'absolute',right:0,top:'100%',marginTop:8,width:250,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 12px 32px rgba(0,0,0,0.12)',zIndex:85}}>
                         <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:7,letterSpacing:'0.03em'}}>ART</div>
                         <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
                           {[['alle','Alle'],['einmalig','Einmalig'],['wied','Wiederkehrend']].map(([k,l])=>{const on=belKindF===k;return <button key={k} onClick={()=>setBelKindF(k)} style={{background:on?C.pri:C.surf2,color:on?C.priTxt:C.sub,border:'1px solid '+(on?C.pri:C.bdr),borderRadius:8,padding:'6px 11px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>;})}
@@ -5908,7 +5910,7 @@ function App({session}) {
             return (
               <>
                 <div style={{marginBottom:16}}>
-                  <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',display:'flex',alignItems:'center',gap:10}}><Ic p={P.spark} sz={24} col={C.pri}/> Betriebskosten</div>
+                  <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',display:'flex',alignItems:'center',gap:10}}><Ic p={P.spark} sz={24} col={C.pri}/> Betriebskosten</div>
                   <div style={{fontSize:13,color:C.sub,marginTop:3}}>Was die App pro Monat kostet (KI automatisch erfasst · Fixkosten manuell).</div>
                 </div>
                 <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap'}}>
@@ -5986,7 +5988,7 @@ function App({session}) {
           {/* ══ JAHRESÜBERSICHT / MONATSÜBERSICHT ══ */}
           {tab==='yr' && <>
             <div style={{marginBottom:16}}>
-              <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em'}}>Analyse {yr}</div>
+              <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>Analyse {yr}</div>
             </div>
             <div style={{marginBottom:18}}><PillTabs tabs={[['monat','Monatsübersicht'],['jahr','Jahresübersicht']]} value={yrView} onChange={setYrView} /></div>
 
@@ -6109,7 +6111,7 @@ function App({session}) {
             const expBtn=(label,onClick,primary)=>(<button key={label} onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:7,background:primary?C.act:C.surf2,color:primary?C.actTxt:C.txt,border:primary?'none':'1px solid '+C.bdr,borderRadius:11,padding:'11px 16px',fontSize:13.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.dload} sz={14} col={primary?C.actTxt:C.txt}/> {label}</button>);
             return (<>
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Steuern</div>
+                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:3}}>Steuern</div>
                 <div style={{fontSize:13,color:C.sub}}>Automatisch aus deinen Buchungen berechnet (Firma + Immobilien, ohne Privat) · aktualisiert sich bei jeder Änderung · keine verbindliche Steuerberatung</div>
               </div>
               <div style={{display:'flex',gap:2,marginBottom:20,flexWrap:'wrap',borderBottom:'1px solid '+C.sep}}>
@@ -6311,7 +6313,7 @@ function App({session}) {
           {tab==='kal' && <>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20,flexWrap:'wrap',gap:12}}>
               <div>
-                <div style={{fontSize:30,fontWeight:800,letterSpacing:'-0.03em',marginBottom:3}}>Events {yr}</div>
+                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:3}}>Events {yr}</div>
                 <div style={{fontSize:13,color:C.sub}}>Mönchengladbach · Nachfrage-Treiber fürs ganze Jahr</div>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
@@ -6365,7 +6367,7 @@ function App({session}) {
         });
         return (
           <div onClick={()=>setEditIncome(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}}>
-            <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'22px 24px',maxWidth:580,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
+            <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'22px 24px',maxWidth:580,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,0.14)'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
                 <div style={{fontSize:17,fontWeight:700,letterSpacing:'-0.02em'}}>Inserate · alle Standorte</div>
                 <button onClick={()=>setEditIncome(null)} title="Schließen" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',fontSize:22,lineHeight:1,padding:'0 2px'}}>×</button>
@@ -6429,7 +6431,7 @@ function App({session}) {
             {cell('home','Übersicht',P.home,['home'])}
             {cell('quellen','Konten',P.grid,['quellen','immo','unter','privat'])}
             <div style={{flex:1,display:'flex',justifyContent:'center'}}>
-              <button onClick={()=>setBelegOpen(true)} title="Beleg erfassen" style={{width:56,height:56,borderRadius:'50%',background:C.act,border:'4px solid '+C.bg,color:C.actTxt,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',marginTop:-22,boxShadow:'0 6px 18px rgba(0,0,0,0.45)'}}>
+              <button onClick={()=>setBelegOpen(true)} title="Beleg erfassen" style={{width:56,height:56,borderRadius:'50%',background:C.act,border:'4px solid '+C.bg,color:C.actTxt,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',marginTop:-22,boxShadow:'0 6px 18px rgba(0,0,0,0.14)'}}>
                 <Ic p={P.camera} sz={24} col={C.actTxt}/>
               </button>
             </div>
@@ -6640,15 +6642,15 @@ function App({session}) {
           </div>
           <div onClick={()=>setFilePreview(null)} style={{flex:1,minHeight:0,display:'flex',alignItems:'center',justifyContent:'center',padding:'0 22px 26px'}}>
             {fp.isPdf
-              ? <iframe onClick={e=>e.stopPropagation()} src={fp.src} title={fp.name} style={{width:'min(900px,100%)',height:'100%',border:'none',borderRadius:14,background:'#525659',boxShadow:'0 20px 70px rgba(0,0,0,0.6)'}}/>
-              : <img onClick={e=>e.stopPropagation()} src={fp.src} alt={fp.name} style={{maxWidth:'min(900px,100%)',maxHeight:'100%',objectFit:'contain',borderRadius:14,boxShadow:'0 20px 70px rgba(0,0,0,0.6)'}}/>}
+              ? <iframe onClick={e=>e.stopPropagation()} src={fp.src} title={fp.name} style={{width:'min(900px,100%)',height:'100%',border:'none',borderRadius:14,background:'#525659',boxShadow:'0 20px 60px rgba(0,0,0,0.18)'}}/>
+              : <img onClick={e=>e.stopPropagation()} src={fp.src} alt={fp.name} style={{maxWidth:'min(900px,100%)',maxHeight:'100%',objectFit:'contain',borderRadius:14,boxShadow:'0 20px 60px rgba(0,0,0,0.18)'}}/>}
           </div>
         </div>
       ); })()}
 
       {importSummary && (()=>{ const s=importSummary; const row=(col,lbl,n)=>(<div style={{display:'flex',alignItems:'center',gap:11,padding:'10px 0',borderBottom:'1px solid '+C.sep}}><span style={{width:10,height:10,borderRadius:'50%',background:col,flexShrink:0}}/><span style={{flex:1,fontSize:14,color:C.txt}}>{lbl}</span><span style={{fontSize:16,fontWeight:800,color:C.txt,...NUM}}>{n}</span></div>); return (
         <div onClick={()=>setImportSummary(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:162,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{width:'min(420px,100%)',background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'24px',boxShadow:'0 24px 70px rgba(0,0,0,0.6)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{width:'min(420px,100%)',background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'24px',boxShadow:'0 24px 64px rgba(0,0,0,0.18)'}}>
             <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:14}}><div style={{width:34,height:34,borderRadius:10,background:hexA(C.pri,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.bank} sz={17} col={C.pri}/></div><div style={{fontSize:17,fontWeight:800,color:C.txt}}>Kontoauszug eingelesen</div></div>
             {s.switchedTo && <div style={{fontSize:13,color:C.sub,background:hexA(C.pri,0.08),border:'1px solid '+hexA(C.pri,0.25),borderRadius:10,padding:'10px 12px',marginBottom:12,lineHeight:1.5}}>Auszug gehört zu <b style={{color:C.txt}}>{s.switchedTo}</b> – es wurde automatisch dorthin gewechselt.</div>}
             <div style={{marginBottom:16}}>
@@ -6663,7 +6665,7 @@ function App({session}) {
 
       {confirmMatch && (()=>{ const m=confirmMatch.match; const d=(data.drafts||[]).find(x=>x.id===confirmMatch.draftId)||{}; const mItem=fullBelegItem({_ber:m.account,_y:m.ty,_m:m.tm,_kind:m.kind,id:m.itemId})||{}; const mFile=mItem.filePath||mItem.fileData; const diff=Math.abs(num(d.amount)-num(m.amount)); const deviates=diff>0.01; const reason=confirmMatch.reason||''; const blocked=deviates && !reason; return (
         <div onClick={()=>setConfirmMatch(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:160,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{width:'min(440px,100%)',background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'24px 24px 22px',boxShadow:'0 24px 70px rgba(0,0,0,0.6)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{width:'min(440px,100%)',background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'24px 24px 22px',boxShadow:'0 24px 64px rgba(0,0,0,0.18)'}}>
             <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:6}}><div style={{width:34,height:34,borderRadius:10,background:hexA(C.pri,0.16),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={17} col={C.pri}/></div><div style={{fontSize:17,fontWeight:800,color:C.txt}}>Passender Beleg gefunden</div></div>
             <div style={{fontSize:13.5,color:C.sub,lineHeight:1.55,marginBottom:16}}>Diese Bankbewegung passt zu einem offenen Beleg. Soll die Buchung bestätigt und auf <b style={{color:C.grn}}>{m.kind==='ein'?'Bezahlt':'Abgebucht'}</b> gesetzt werden?</div>
             <div style={{display:'flex',gap:12,marginBottom:18}}>
@@ -6768,7 +6770,7 @@ function App({session}) {
               <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,flexShrink:0}}><Ic p={P.spark} sz={17} col={C.pri}/><span style={{fontSize:15,fontWeight:800,color:C.txt,letterSpacing:'-0.01em'}}>Mit AI erfassen</span></div>
               <div style={{flex:1,minHeight:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
               {hasFile ? (<div style={{position:'relative',width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center'}}>
-                {isPdf ? <iframe src={f.fileData+'#toolbar=0&navpanes=0&scrollbar=0'} title="Beleg" style={{width:'100%',height:'100%',border:'none',borderRadius:12,background:'#fff'}}/> : <img src={f.fileData} alt="Beleg" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:12,boxShadow:'0 10px 40px rgba(0,0,0,0.4)'}}/>}
+                {isPdf ? <iframe src={f.fileData+'#toolbar=0&navpanes=0&scrollbar=0'} title="Beleg" style={{width:'100%',height:'100%',border:'none',borderRadius:12,background:'#fff'}}/> : <img src={f.fileData} alt="Beleg" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:12,boxShadow:'0 10px 32px rgba(0,0,0,0.12)'}}/>}
                 {c.scanning && <div style={{position:'absolute',top:isMobile?10:18,left:'50%',transform:'translateX(-50%)',display:'flex',alignItems:'center',gap:8,background:hexA(C.pri,0.92),color:C.priTxt,borderRadius:99,padding:'7px 14px',fontSize:12.5,fontWeight:700}}><Ic p={P.spark} sz={13} col={C.priTxt}/> Beleg wird ausgelesen…</div>}
                 <label style={{position:'absolute',bottom:isMobile?10:18,right:isMobile?10:18,display:'inline-flex',alignItems:'center',gap:7,background:hexA(C.bg,0.85),border:'1px solid '+C.bdr,color:C.txt,borderRadius:10,padding:'8px 13px',fontSize:13,fontWeight:600,cursor:'pointer',backdropFilter:'blur(4px)'}}><Ic p={P.upload} sz={14} col={C.txt}/> Beleg ersetzen<input type="file" accept="image/*,.pdf" onChange={e=>{const file=e.target.files[0];e.target.value='';scanCaptureFile(file);}} style={{display:'none'}}/></label>
               </div>) : (
@@ -6808,7 +6810,7 @@ function App({session}) {
 
       {invTaxAsk && invEdit && (
         <div onClick={()=>setInvTaxAsk(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:165,padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'22px',maxWidth:480,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)',maxHeight:'88vh',overflowY:'auto'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'22px',maxWidth:480,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.14)',maxHeight:'88vh',overflowY:'auto'}}>
             <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:6}}><Ic p={P.spark} sz={18} col={C.pri}/><div style={{fontSize:17,fontWeight:800,color:C.txt}}>Steuerberater-KI</div></div>
             <div style={{fontSize:12.5,color:C.sub,lineHeight:1.5,marginBottom:14}}>Frag zur aktuellen Rechnung – z. B. „Welcher MwSt-Satz gilt hier?", „Reverse-Charge nötig?", „Wie buche ich das korrekt?". Die KI nutzt Kunde, Positionen &amp; Bereich der Rechnung.</div>
             <textarea value={invTaxAsk.q} onChange={e=>setInvTaxAsk(a=>({...a,q:e.target.value}))} rows={3} placeholder="Deine Frage…" style={{width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,color:C.txt,padding:'10px 12px',fontSize:14,outline:'none',fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',marginBottom:10}}/>
@@ -6821,7 +6823,7 @@ function App({session}) {
 
       {newCust && (()=>{ const n=newCust; const set=patch=>setNewCust(x=>({...x,...patch})); const acc=normAcct(n.domain); const badgeCol=acol(acc); const fld2={width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,color:C.txt,padding:'11px 13px',fontSize:14,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}; const lbl2={fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}; return (
         <div onClick={()=>setNewCust(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:170,padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'22px',maxWidth:480,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)',maxHeight:'88vh',overflowY:'auto'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'22px',maxWidth:480,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.14)',maxHeight:'88vh',overflowY:'auto'}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}><Ic p={P.prson} sz={18} col={C.txt}/><div style={{fontSize:17,fontWeight:800,color:C.txt}}>Neuer Kunde</div><span style={{fontSize:11,fontWeight:700,color:badgeCol,background:hexA(badgeCol,0.14),border:'1px solid '+hexA(badgeCol,0.3),borderRadius:7,padding:'2px 8px'}}>{acctNameOf(acc)}</span></div>
             <div style={{fontSize:12.5,color:C.sub,lineHeight:1.5,marginBottom:16}}>Schnell anlegen – der Kunde wird gespeichert und direkt in die Rechnung übernommen.</div>
             {showAcctSel && (
@@ -6853,7 +6855,7 @@ function App({session}) {
 
       {invRecurDlg && invEdit && (()=>{ const rc=invEdit.recur||{interval:'monatlich',start:invEdit.date||'',end:''}; const setRc=patch=>setI({recur:{...rc,...patch}}); const fld2={width:'100%',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,color:C.txt,padding:'11px 13px',fontSize:14,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}; const lbl2={fontSize:11,fontWeight:600,color:C.sub,marginBottom:6}; return (
         <div onClick={()=>setInvRecurDlg(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:175,padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'22px',maxWidth:440,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)',maxHeight:'88vh',overflowY:'auto'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'22px',maxWidth:440,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.14)',maxHeight:'88vh',overflowY:'auto'}}>
             <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:4}}><Ic p={P.repeat} sz={18} col={C.pri}/><div style={{fontSize:17,fontWeight:800,color:C.txt}}>Wiederkehrend</div></div>
             <div style={{fontSize:12.5,color:C.sub,lineHeight:1.5,marginBottom:16}}>Lege fest, in welchem Rhythmus und Zeitraum diese Rechnung automatisch erzeugt werden soll.</div>
             <div style={{marginBottom:12}}><div style={lbl2}>Intervall</div><select value={rc.interval||'monatlich'} onChange={e=>setRc({interval:e.target.value})} style={{...fld2,cursor:'pointer'}}><option value="woechentlich">Wöchentlich</option><option value="monatlich">Monatlich</option><option value="vierteljaehrlich">Vierteljährlich</option><option value="halbjaehrlich">Halbjährlich</option><option value="jaehrlich">Jährlich</option></select></div>
@@ -6875,7 +6877,7 @@ function App({session}) {
 
       {aiCap && (()=>{ const p=aiCap.parsed; const busy=aiCap.busy; const A=KONTO_COLORS.unter; return (
         <div onClick={()=>setAiCap(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:160,padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'24px',maxWidth:460,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)',maxHeight:'88vh',overflowY:'auto'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:20,padding:'24px',maxWidth:460,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.14)',maxHeight:'88vh',overflowY:'auto'}}>
             <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:6}}><span style={{fontSize:20}}>✨</span><div style={{fontSize:18,fontWeight:800}}>Mit KI erfassen</div>{recOn && <span style={{marginLeft:'auto',fontSize:11,color:C.red,display:'flex',alignItems:'center',gap:5}}><span style={{width:8,height:8,borderRadius:'50%',background:C.red,display:'inline-block'}}/>Aufnahme…</span>}</div>
             <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:16}}>Beschreibe die ganze Rechnung frei – z. B. „Stell Herrn Müller 1.500 € für die Website-Erstellung und 200 € Wartung in Rechnung, Konto Firma". Die KI füllt Kunde, Positionen, Konto und passt Kopf- &amp; Footertext an. Du prüfst und bestätigst.</div>
             <textarea value={recText} onChange={e=>setRecText(e.target.value)} rows={3} placeholder="Transkript erscheint hier… (oder selbst tippen)" style={{...SS,textAlign:'left',resize:'vertical',marginBottom:10}}/>
@@ -6904,7 +6906,7 @@ function App({session}) {
 
       {dupPopup && (()=>{ const m=dupPopup.match; const inv=m&&m.invoice; const it=m&&m.it; const betrag=inv?(inv.total!=null?inv.total:0):num(it&&it.amount); const datum=inv?inv.date:(it&&it.datum); const konto=inv?(names.unternehmen):(m&&m.acct); const fp=it&&(it.filePath||it.fileData); return (
         <div onClick={()=>setDupPopup(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:150,padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'24px',maxWidth:420,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'24px',maxWidth:420,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.14)'}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}><span style={{width:32,height:32,borderRadius:9,background:hexA(C.exp,0.18),display:'flex',alignItems:'center',justifyContent:'center',fontSize:17}}>⚠</span><div style={{fontSize:17,fontWeight:800,color:C.txt}}>Beleg vermutlich vorhanden</div></div>
             <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:14}}>Dieser Beleg scheint bereits in deinen Daten zu existieren:</div>
             <div style={{background:C.surf2,borderRadius:12,padding:'14px 16px',display:'flex',flexDirection:'column',gap:9,marginBottom:16}}>
@@ -6926,7 +6928,7 @@ function App({session}) {
       ); })()}
       {confirmState && (
         <div onClick={()=>setConfirmState(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'22px 24px',maxWidth:380,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.5)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'22px 24px',maxWidth:380,width:'100%',boxShadow:'0 16px 48px rgba(0,0,0,0.14)'}}>
             <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>{confirmState.title}</div>
             <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:22}}>{confirmState.message}</div>
             {confirmState.choices ? (
@@ -6949,13 +6951,13 @@ function App({session}) {
       {/* ── Rechts-Klick-Menü auf einem Import-Entwurf ── */}
       {draftCtx && (()=>{ const d=(data.drafts||[]).find(x=>x.id===draftCtx.id); if(!d) return null; const isSel=draftSel.includes(d.id); return (
         <div onClick={()=>setDraftCtx(null)} onContextMenu={e=>{e.preventDefault();setDraftCtx(null);}} style={{position:'fixed',inset:0,zIndex:155}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:Math.min(draftCtx.x,window.innerWidth-222),top:Math.min(draftCtx.y,window.innerHeight-260),width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:Math.min(draftCtx.x,window.innerWidth-222),top:Math.min(draftCtx.y,window.innerHeight-260),width:212,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 12px 32px rgba(0,0,0,0.12)'}}>
             {(()=>{ const acc=[{k:'unter',l:names.unternehmen||'Firma'},{k:'p1',l:names.p1||'Immobilie 1'},{k:'p2',l:names.p2||'Immobilie 2'},{k:'p3',l:names.p3||'Immobilie 3'}]; const aicon=k=>(k==='p1'||k==='p2'||k==='p3'?P.house:k==='privat'?P.prson:P.brief); const onLeft=draftCtx.x>window.innerWidth-440; return (<>
             <button onClick={()=>{ setDraftSel(s=>s.includes(d.id)?s.filter(x=>x!==d.id):[...s,d.id]); setDraftCtx(null); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.check} sz={15} col={isSel?C.pri:C.sub}/> {isSel?'Abwählen':'Auswählen'}</button>
             <div onMouseEnter={()=>setDraftCtx(c=>c?{...c,sub:true}:c)} onMouseLeave={()=>setDraftCtx(c=>c?{...c,sub:false}:c)} style={{position:'relative'}}>
               <button onClick={()=>setDraftCtx(c=>c?{...c,sub:!c.sub}:c)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:draftCtx.sub?C.surf2:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.out} sz={15} col={C.sub}/> <span style={{flex:1}}>Zuordnen</span><span style={{fontSize:15,color:C.mut}}>{onLeft?'‹':'›'}</span></button>
               {draftCtx.sub && (
-                <div style={{position:'absolute',top:-5,[onLeft?'right':'left']:'100%',[onLeft?'marginRight':'marginLeft']:6,width:204,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)',zIndex:5}}>
+                <div style={{position:'absolute',top:-5,[onLeft?'right':'left']:'100%',[onLeft?'marginRight':'marginLeft']:6,width:204,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 12px 32px rgba(0,0,0,0.12)',zIndex:5}}>
                   {acc.map(a=>{ const col=acctColor(a.k); return (<button key={a.k} onClick={()=>{ const id=d.id; setDraftCtx(null); quickAssignDraft(id,a.k); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'10px 12px',fontSize:13.5,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><span style={{width:24,height:24,flexShrink:0,borderRadius:7,background:hexA(col,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={aicon(a.k)} sz={14} col={col}/></span> {a.l}</button>); })}
                 </div>
               )}
@@ -6975,7 +6977,7 @@ function App({session}) {
       {/* ── Rechts-Klick-Menü auf einer gestellten Rechnung ── */}
       {invCtx && (
         <div onClick={()=>setInvCtx(null)} onContextMenu={e=>{e.preventDefault();setInvCtx(null);}} style={{position:'fixed',inset:0,zIndex:155}}>
-          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:Math.min(invCtx.x,window.innerWidth-210),top:Math.min(invCtx.y,window.innerHeight-150),width:200,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 14px 36px rgba(0,0,0,0.55)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{position:'fixed',left:Math.min(invCtx.x,window.innerWidth-210),top:Math.min(invCtx.y,window.innerHeight-150),width:200,background:C.surf,border:'1px solid '+C.bdr,borderRadius:12,padding:5,boxShadow:'0 12px 32px rgba(0,0,0,0.12)'}}>
             <button onClick={()=>{ setInvPaid(invCtx.inv.id, !invCtx.inv.paid); setInvCtx(null); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:invCtx.inv.paid?C.txt:C.grn,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.check} sz={15} col={invCtx.inv.paid?C.sub:C.grn}/> {invCtx.inv.paid?'Als offen markieren':'Als bezahlt markieren'}</button>
             <button onClick={()=>useInvoiceAsTemplate(invCtx.inv)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.txt,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.copy||P.doc} sz={15} col={C.sub}/> Als Vorlage nutzen</button>
             <button onClick={()=>{ const inv=invCtx.inv; setInvCtx(null); askConfirm('Rechnung '+inv.number+' wirklich löschen? Die zugehörige Buchung wird ebenfalls entfernt.',()=>delInvoice(inv)); }} style={{display:'flex',alignItems:'center',gap:10,width:'100%',background:'none',border:'none',borderRadius:8,padding:'11px 12px',fontSize:14,color:C.red,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}><Ic p={P.trash} sz={15} col={C.red}/> Löschen</button>
@@ -6985,7 +6987,7 @@ function App({session}) {
       {/* ── Gestellte Rechnung ansehen (read-only PDF) ── */}
       {botInvPreview && (
         <div onClick={()=>setBotInvPreview(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:180,display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?12:32}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,width:'min(680px,100%)',maxHeight:'92vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 24px 60px rgba(0,0,0,0.6)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,width:'min(680px,100%)',maxHeight:'92vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 24px 60px rgba(0,0,0,0.18)'}}>
             <div style={{display:'flex',alignItems:'center',gap:10,padding:'14px 18px',borderBottom:'1px solid '+C.sep,flexShrink:0}}>
               <div style={{fontSize:16,fontWeight:800,color:C.txt}}>Vorschau · Rechnung {botInvPreview.number}</div>
               <span style={{fontSize:11,fontWeight:700,color:C.amb,background:C.ambL,borderRadius:6,padding:'3px 9px'}}>Noch nicht erstellt</span>
@@ -7003,7 +7005,7 @@ function App({session}) {
       )}
       {invView && (
         <div onClick={()=>setInvView(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:150,display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?10:32}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,width:'min(820px,100%)',maxHeight:'92vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 24px 60px rgba(0,0,0,0.6)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,width:'min(820px,100%)',maxHeight:'92vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 24px 60px rgba(0,0,0,0.18)'}}>
             <div style={{display:'flex',alignItems:'center',gap:10,padding:'14px 18px',borderBottom:'1px solid '+C.sep,flexWrap:'wrap'}}>
               <div style={{fontSize:16,fontWeight:800,color:C.txt}}>Rechnung {invView.number}</div>
               <span style={{fontSize:11,fontWeight:700,color:invView.paid?C.grn:C.exp,background:hexA(invView.paid?C.grn:C.exp,0.14),borderRadius:6,padding:'3px 9px'}}>{invView.paid?'Bezahlt':'Offen'}</span>
@@ -7096,7 +7098,7 @@ function App({session}) {
       {/* ── Rechnung per E-Mail senden (Compose) ── */}
       {mailCompose && (()=>{ const mc=mailCompose; const co=companyFor(mc.inv.domain||'unter')||{}; const noSender=!String(co.senderEmail||'').trim(); const fromName=String(co.senderName||co.name||'').trim(); return (
         <div onClick={()=>{ if(!mc.sending) setMailCompose(null); }} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:170,display:'flex',alignItems:'center',justifyContent:'center',padding:isMobile?12:24}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,width:'min(560px,100%)',maxHeight:'92vh',overflowY:'auto',padding:'20px 22px',boxShadow:'0 24px 60px rgba(0,0,0,0.6)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,width:'min(560px,100%)',maxHeight:'92vh',overflowY:'auto',padding:'20px 22px',boxShadow:'0 24px 60px rgba(0,0,0,0.18)'}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
               <div style={{fontSize:17,fontWeight:800,color:C.txt}}>{mc.isMahnung?'Mahnung zu Rechnung':'Rechnung'} {mc.inv.number} senden</div>
               <button onClick={()=>!mc.sending&&setMailCompose(null)} style={{marginLeft:'auto',background:C.surf2,border:'none',color:C.sub,width:32,height:32,borderRadius:9,cursor:'pointer',fontSize:19,lineHeight:1,fontFamily:'inherit'}}>×</button>
@@ -7121,7 +7123,7 @@ function App({session}) {
         <div style={{position:'fixed',bottom:20,right:20,maxWidth:340,zIndex:130,
           background:C.surf2,border:'1px solid '+C.bdrM,color:C.txt,
           padding:'11px 16px',borderRadius:10,fontSize:13,lineHeight:1.4,
-          boxShadow:'0 8px 28px rgba(0,0,0,0.45)'}}>{toast}</div>
+          boxShadow:'0 8px 24px rgba(0,0,0,0.12)'}}>{toast}</div>
       )}
     </div>
   );

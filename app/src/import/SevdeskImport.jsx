@@ -75,7 +75,7 @@ export default function SevdeskImport(props) {
   /* ── UI-Bausteine ── */
   const card = { ...SC, padding: isMobile ? '16px' : '20px 22px' };
   const lbl = { fontSize: 12, color: C.sub, fontWeight: 600, marginBottom: 6 };
-  const btnP = { display: 'inline-flex', alignItems: 'center', gap: 8, background: C.act, color: C.actTxt, border: 'none', borderRadius: 12, padding: '11px 16px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' };
+  const btnP = { display: 'inline-flex', alignItems: 'center', gap: 8, background: C.act, color: C.actTxt, border: 'none', borderRadius: 999, padding: '11px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' };
   const slot = (title, hint, accept, cur, onFile, done) => (
     <label style={{ display: 'flex', alignItems: 'center', gap: 12, background: cur ? hexA(C.grn, 0.08) : C.surf2, border: '1.5px ' + (cur ? 'solid ' + hexA(C.grn, 0.5) : 'dashed ' + C.bdrM), borderRadius: 14, padding: '13px 14px', cursor: 'pointer', minWidth: 0 }}>
       <span style={{ width: 38, height: 38, borderRadius: 11, background: cur ? C.grn : C.surf3, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={cur ? P.check : P.upload} sz={17} col={cur ? '#fff' : C.sub} /></span>
@@ -89,9 +89,9 @@ export default function SevdeskImport(props) {
   const Stat = ({ l, v, c }) => <div style={{ flex: 1, minWidth: 120 }}><div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600 }}>{l}</div><div style={{ fontSize: 18, fontWeight: 800, color: c || C.txt, ...NUM }}>{v}</div></div>;
 
   return (<>
-    <div style={{ ...card, marginBottom: 14, background: hexA(C.pri, 0.05), border: '1px solid ' + hexA(C.pri, 0.22) }}>
+    <div style={{ ...card, marginBottom: 14 }}>
       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <span style={{ width: 44, height: 44, borderRadius: 13, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.swap} sz={20} col="#fff" /></span>
+        <span style={{ width: 44, height: 44, borderRadius: '50%', background: C.txt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.swap} sz={20} col={C.bg} /></span>
         <div style={{ flex: 1, minWidth: 240, fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
           <b>So holst du alles aus sevDesk:</b> Dort unter <b>Belege → Exportieren</b> die <b>CSV</b> und das <b>ZIP mit den Belegdateien</b> laden, unter <b>Rechnungen → Exportieren</b> ebenfalls CSV + ZIP. Alternativ reicht der <b>DATEV-Export</b> (Buchungsstapel) im Belege-Feld. Buqo erkennt Spalten, Beträge, MwSt, Kategorien und ordnet die PDFs anhand der Belegnummer zu. Nichts wird geschrieben, bevor du unten auf „Jetzt importieren" drückst. Doppelte Einträge werden übersprungen, du kannst den Import also gefahrlos wiederholen.
         </div>
