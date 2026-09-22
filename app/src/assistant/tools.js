@@ -209,7 +209,19 @@ export const ASSISTANT_TOOLS = [
   {
     name: 'update_booking',
     description: 'Bestehende Buchung ändern (id aus list_bookings). Nur angegebene Felder werden geändert.',
-    input_schema: obj({ id: str('Buchungs-id.'), kind: str('Art ändern.', { enum: ['ein', 'aus'] }), ...BOOKING_FIELDS }, ['id']),
+    input_schema: obj({ id: str('Buchungs-id.'), kind: str('Art ändern.', { enum: ['ein', 'aus'] }), account: str('Auf dieses Konto verschieben. ' + ACCOUNT_DESC), ...BOOKING_FIELDS }, ['id']),
+  },
+  {
+    name: 'move_to_account',
+    description: 'Rechnungen und/oder Buchungen auf ein anderes Konto legen (z. B. Mietrechnungen von der Firma zur Immobilie). Mehrere auf einmal möglich – für „sortier alles richtig" erst list_invoices/list_bookings lesen, dann hier in Blöcken zuordnen. Bei Rechnungen wird die verknüpfte Einnahme-Buchung mitverschoben.',
+    input_schema: obj({
+      items: { type: 'array', description: 'Zuordnungen.', items: obj({
+        type: str('"rechnung" oder "buchung".', { enum: ['rechnung', 'buchung'] }),
+        id: str('Rechnungsnummer/-id bzw. Buchungs-id.'),
+        account: str(ACCOUNT_DESC),
+      }, ['type', 'id', 'account']) },
+      customer_too: boolT('Bei Rechnungen auch den Kunden diesem Konto zuordnen (Standard true).'),
+    }, ['items']),
   },
   {
     name: 'delete_booking',
@@ -290,7 +302,7 @@ export function stepLabel(step) {
     create_customer: 'Kunde angelegt' + (r.name ? ': ' + r.name : ''), update_customer: 'Kunde geändert' + (r.name ? ': ' + r.name : ''), delete_customer: 'Kunde gelöscht',
     create_invoice: r.booked ? ('Rechnung ' + (r.number || '') + ' gebucht') : ('Rechnungsentwurf ' + (r.number || '') + ' vorbereitet'),
     confirm_invoice: 'Rechnung ' + (r.number || '') + ' gebucht', mark_invoice_paid: 'Rechnung ' + (r.number || '') + (inp.paid === false ? ' auf offen gesetzt' : ' als bezahlt markiert'),
-    delete_invoice: 'Rechnung gelöscht', send_invoice_email: 'E-Mail-Versand geöffnet', prepare_payment_reminder: 'Mahnung vorbereitet', create_recurring_invoice: 'Wiederkehrende Rechnung angelegt',
+    delete_invoice: 'Rechnung gelöscht', move_to_account: (r.moved != null ? r.moved + ' ' : '') + 'Posten umsortiert', send_invoice_email: 'E-Mail-Versand geöffnet', prepare_payment_reminder: 'Mahnung vorbereitet', create_recurring_invoice: 'Wiederkehrende Rechnung angelegt',
     add_booking: (inp.kind === 'ein' ? 'Einnahme' : 'Ausgabe') + ' gebucht' + (inp.name ? ': ' + inp.name : ''), update_booking: 'Buchung geändert', delete_booking: 'Buchung gelöscht',
     add_import_drafts: (r.added != null ? r.added + ' ' : '') + 'Umsätze in den Bank-Import gelegt', extract_attachment_items: 'Datei ausgelesen' + (r.count != null ? ' (' + r.count + ' Posten)' : ''),
     create_todo: 'To-do angelegt', update_todo: 'To-do geändert', delete_todo: 'To-do gelöscht',
@@ -315,6 +327,7 @@ export function buildSystemPrompt(ctx) {
   lines.push('- Angehängte Dateien liest du selbst: Beleg/Quittung → add_booking (Konto erfragen, wenn unklar); Kontoauszug oder Plattform-Abrechnung → add_import_drafts (bei sehr vielen Umsätzen extract_attachment_items); Auftrags-/Leistungsdaten → create_invoice; Kundenliste → create_customer je Kunde. Fasse kurz zusammen, was du aus der Datei gelesen hast.');
   lines.push('- Nach Aktionen: in einem Satz sagen, was erledigt ist (mit Nummern/Beträgen). Keine Wiederholung der Frage, keine Einleitungen.');
   lines.push('- Einstellungen: erst get_settings lesen, dann update_settings mit nur den geänderten Feldern.');
+  lines.push('- Sortieren (z. B. „ordne alle Rechnungen richtig zu", Immobilie vs. Firma): Rechnungen mit list_invoices (limit hoch, z. B. 500) und Buchungen mit list_bookings lesen, anhand von Kunde, Leistung und Kontonamen entscheiden (Miete, Ferienwohnung, Airbnb, Nebenkosten → Immobilien-Konto; Dienstleistungen, Projekte → Firma), dann nur die falsch liegenden mit move_to_account verschieben. Unklare Fälle nicht raten, sondern am Ende kurz auflisten und nachfragen.');
   lines.push('- Werkzeug-Ergebnisse mit ok=false sind Fehler: erkläre kurz und schlage den nächsten Schritt vor.');
   lines.push('');
   lines.push('STIL');

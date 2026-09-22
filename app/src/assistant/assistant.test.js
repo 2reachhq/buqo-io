@@ -6,7 +6,7 @@ import {
   resolveAccount, addCustomer, updateCustomer, deleteCustomer, findCustomer, listCustomers,
   buildInvoiceDraft, listInvoices, setInvoicePaid, deleteInvoice, invTotals,
   addBooking, updateBooking, deleteBooking, listBookings, addTodo, updateTodo, listTodos,
-  getSettings, updateSettings, emptyMonth,
+  getSettings, updateSettings, emptyMonth, moveInvoiceAccount,
 } from './actions.js';
 
 const names = { unternehmen: 'Designpeak', p1: 'Ferienwohnung Sylt', p2: 'Immobilie 2', p3: 'Immobilie 3', privatLabel: 'Privat' };
@@ -150,4 +150,20 @@ test('runAssistantTurn: Tools werden ausgeführt, Ergebnisse zurückgegeben, Sch
   assert.match(stepLabel(r.steps[0]), /Kunde angelegt: Neu/); assert.match(stepLabel(r.steps[1]), /⚠️/);
   const plain = await runAssistantTurn({ invoke: async () => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Hi' }] }), model: 'claude-haiku-4-5', adaptive: false, system: '', tools: [], messages: [], executeTool });
   assert.equal(plain.text, 'Hi'); assert.equal(plain.steps.length, 0);
+});
+
+test('Rechnung samt Einnahme-Buchung auf ein Immobilien-Konto verschieben', () => {
+  const data = baseData();
+  data.invoices = [{ id: 'i1', number: '2025-007', customerId: 'c1', date: '2025-03-01', items: [{ desc: 'Miete März', qty: 1, price: 850, mwst: 0 }], paid: true, account: 'unter', domain: 'unter' }];
+  data[2025] = { 2: { ...emptyMonth(), unternehmen: { clients: [{ id: 'b1', name: 'Rechnung 2025-007', amount: 850, invId: 'i1' }, { id: 'b2', name: 'Webdesign', amount: 500 }], items: [] } } };
+  const r = moveInvoiceAccount(data, names, '2025-007', 'Sylt', { customerToo: true });
+  assert.equal(r.from, 'unter'); assert.equal(r.to, 'p1'); assert.equal(r.movedBookings, 1);
+  assert.equal(r.data.invoices[0].account, 'p1'); assert.equal(r.data.invoices[0].domain, 'p1');
+  assert.deepEqual(r.data[2025][2].unternehmen.clients.map(x => x.id), ['b2']);
+  assert.equal(r.data[2025][2].props.p1.einnahmen[0].id, 'b1');
+  assert.equal(r.data.customers[0].domain, 'p1');
+  assert.equal(listInvoices(r.data, {}).rechnungen[0].leistung, 'Miete März');
+  assert.throws(() => moveInvoiceAccount(data, names, '2025-007', 'Mond'), /Konto/);
+  const b = updateBooking(r.data, names, 'b2', { account: 'privat' });
+  assert.equal(b.account, 'privat'); assert.equal(b.data[2025][2].privat.einnahmen[0].id, 'b2');
 });
