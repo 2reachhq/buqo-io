@@ -11,7 +11,8 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
-    body { background: #F6F6F7; overflow: hidden; }
+    body { background: #F5F5F7; overflow: hidden; }
+    input:focus-visible, select:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 3px rgba(0,122,255,0.22); }
     * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
     input[type=number]::-webkit-inner-spin-button,
     input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
@@ -51,7 +52,7 @@
   </style>
 </head>
 <body>
-<script>try{var _t=(localStorage.getItem('sp_theme_v2')?localStorage.getItem('sp_theme'):'light')||'light';var _d=_t==='dark'||(_t==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var _bg=_d?'#181818':'#F6F6F7';document.documentElement.style.background=_bg;document.body.style.background=_bg;document.documentElement.style.colorScheme=_d?'dark':'light';}catch(e){}</script>
+<script>try{var _t=(localStorage.getItem('sp_theme_v2')?localStorage.getItem('sp_theme'):'light')||'light';var _d=_t==='dark'||(_t==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var _bg=_d?'#181818':'#F5F5F7';document.documentElement.style.background=_bg;document.body.style.background=_bg;document.documentElement.style.colorScheme=_d?'dark':'light';}catch(e){}</script>
 <div id="root"></div>
 <script type="module" src="/src/main.jsx"></script>
 </body>

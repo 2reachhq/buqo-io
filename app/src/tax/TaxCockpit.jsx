@@ -114,7 +114,7 @@ export default function TaxCockpit(props) {
   const lbl = { fontSize: 12, color: C.sub, marginBottom: 5, fontWeight: 600 };
   const fld = { ...SS, textAlign: 'left', border: '1px solid ' + C.bdr, borderRadius: 10, padding: '9px 11px', fontSize: 13.5 };
   const ctx = { C, NUM, fld, lbl, pr, setProfile };
-  const btn = (primary) => ({ display: 'inline-flex', alignItems: 'center', gap: 7, background: primary ? C.act : C.surf2, color: primary ? C.actTxt : C.txt, border: primary ? 'none' : '1px solid ' + C.bdr, borderRadius: 11, padding: '10px 15px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' });
+  const btn = (primary) => ({ display: 'inline-flex', alignItems: 'center', gap: 7, background: primary ? C.act : C.surf2, color: primary ? C.actTxt : C.txt, border: 'none', borderRadius: 999, padding: '10px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' });
   const TYP = { achtung: { c: C.exp, l: 'Achtung' }, sparen: { c: C.grn, l: 'Sparen' }, tipp: { c: C.pri, l: 'Tipp' }, info: { c: C.amb, l: 'Info' } };
   const nach = res.nachzahlung;
   const artBadge = (art) => <span style={{ fontSize: 10.5, fontWeight: 700, color: C.sub, background: C.surf3, borderRadius: 6, padding: '2px 7px', marginLeft: 8, whiteSpace: 'nowrap' }}>{art === 'vv' ? 'V+V §21' : art === 'freiberuf' ? 'Freiberuf §18' : 'Gewerbe §15'}</span>;
@@ -133,7 +133,7 @@ export default function TaxCockpit(props) {
     </div>
 
     {/* Hero */}
-    <div style={{ ...card, background: 'linear-gradient(135deg, ' + hexA(C.pri, 0.16) + ', ' + hexA(C.accent, 0.10) + ')', border: '1px solid ' + hexA(C.pri, 0.25), marginBottom: 14 }}>
+    <div style={{ ...card, marginBottom: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.2fr 1fr 1fr', gap: isMobile ? 16 : 24, alignItems: 'start' }}>
         <div>
           <div style={{ fontSize: 12.5, fontWeight: 600, color: C.sub, marginBottom: 6 }}>Voraussichtliche Steuerlast {year}</div>
@@ -370,8 +370,8 @@ function Field({ ctx, label, k, suffix = '€', hint, placeholder = '0' }) {
 }
 function Seg({ C, options, value, onChange }) {
   return (
-    <div style={{ display: 'inline-flex', gap: 3, background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 10, padding: 3 }}>
-      {options.map(([k, label]) => <button key={String(k)} onClick={() => onChange(k)} style={{ background: String(value) === String(k) ? C.pri : 'transparent', color: String(value) === String(k) ? C.priTxt : C.sub, border: 'none', borderRadius: 8, padding: '7px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>{label}</button>)}
+    <div style={{ display: 'inline-flex', gap: 2, background: C.surf2, borderRadius: 10, padding: 3 }}>
+      {options.map(([k, label]) => { const on = String(value) === String(k); return <button key={String(k)} onClick={() => onChange(k)} style={{ background: on ? C.surf : 'transparent', color: on ? C.txt : C.sub, border: 'none', borderRadius: 8, padding: '7px 12px', fontSize: 12.5, fontWeight: on ? 700 : 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', boxShadow: on ? '0 1px 3px rgba(0,0,0,0.10)' : 'none' }}>{label}</button>; })}
     </div>
   );
 }
