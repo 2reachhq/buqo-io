@@ -1,0 +1,18 @@
+{
+  "name": "hellora-ads",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Hochformat-Ads (1080x1920) für Hellora – minimaler Apple-Look, gerendert aus HTML/CSS.",
+  "type": "module",
+  "scripts": {
+    "preview": "npx --yes serve -l 5173 .",
+    "render": "node render.mjs",
+    "stills": "node render.mjs --stills"
+  },
+  "dependencies": {
+    "playwright": "1.56.1"
+  },
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.2.0"
+  }
+}
