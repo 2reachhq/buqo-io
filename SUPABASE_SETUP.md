@@ -57,7 +57,9 @@ einem Rutsch und ist idempotent (kann auch auf dem bestehenden Projekt laufen).
 
    Ohne diese Funktion laufen Beleg-Scan, Assistent, BWA-Erklärung und die Erklärungen im
    Steuer-Cockpit nicht; alle deterministischen Berechnungen (UStVA, EÜR, BWA, Steuerprognose)
-   funktionieren auch ohne KI.
+   funktionieren auch ohne KI. Nach jeder Änderung an `supabase/functions/ai/index.ts` (z. B.
+   neue Modelle) muss die Funktion erneut deployt werden – der Assistent nutzt standardmäßig
+   `claude-opus-5`; eine alte Proxy-Version fällt still auf `claude-sonnet-4-6` zurück.
 5. **Optional** – Gmail-Import (`GMAIL_SETUP.md`), Rechnungen per Mail (`RESEND_INBOUND_SETUP.md`),
    Stripe (`stripe-checkout`, `stripe-webhook` mit `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`).
 6. **Ersten Nutzer anlegen** – in der App „Registrieren" (Rolle „Unternehmer / Selbstständig").
@@ -103,9 +105,24 @@ supabase functions deploy ai
 
 Alternative ohne Redeploy: Guthaben per SQL gutschreiben (`credit_topup`, siehe oben).
 
+## Der Assistent (oben rechts neben dem Profilbild)
+
+Der Chat-Assistent ist ein KI-Agent mit Werkzeugen über die ganze App: Er liest und ändert
+Kunden, Rechnungen (Vorschau → Bestätigung → Buchung + PDF), Buchungen/Belege, den Bank-Import,
+To-dos, jede Einstellung (Profil, Firmendaten, Kontonamen/Farben, Darstellung, Steuerprofil),
+den angezeigten Zeitraum und die Navigation. Angehängte Dateien (PDF, Bild, CSV/XML) gehen
+direkt an das Modell – ein Beleg wird gebucht und im Bucket `belege` abgelegt, ein Kontoauszug
+landet im Bank-Import. Alles passiert in `app_state` des eingeloggten Kontos; der Verlauf liegt
+in `data.assistantChat`, das gewählte Modell in `data.assistant.model`.
+
+Code: `app/src/assistant/` (`tools.js` Werkzeug-Schemas + Systemprompt, `actions.js` reine
+Datenfunktionen mit Tests, `agent.js` Tool-Calling-Schleife) und die Ausführung in `main.jsx`
+(`runTool`). Der frühere Reiter „KI-Berater" ist entfallen; `#/berater` öffnet den Assistenten,
+`#/home` führt auf die Kundenliste (Startseite).
+
 ## Umzug aus sevDesk
 
-In der App unter *Übersicht → „Aus sevDesk umziehen"* (oder Sidebar → Mehr): CSV-Export der Belege
+In der App unter *Sidebar → „Umzug aus sevDesk"* (oder Mehr): CSV-Export der Belege
 und Rechnungen plus die ZIP-Dateien mit den PDFs hochladen, Vorschau prüfen, importieren. Erkannt
 werden sevDesk-CSV (deutsche und englische Zahlen, UTF-8 oder Windows-1252), DATEV-Buchungsstapel
 (EXTF) und beliebige CSVs über die Spalten-Zuordnung. Doppelte Einträge werden übersprungen, PDFs

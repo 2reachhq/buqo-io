@@ -10,7 +10,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 // Erlaubte Modelle (verhindert teure Überraschungen)
-const ALLOWED = new Set(["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"]);
+const ALLOWED = new Set(["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8", "claude-sonnet-5", "claude-opus-5"]);
 
 // Anthropic-Rohpreise in EUR-Cent pro 1 Mio. Tokens (Stand 2026-07), input/output
 // getrennt. Diese Werte sind die REALEN Kosten; die Marge kommt über MARGIN_MULT dazu.
@@ -19,6 +19,8 @@ const PRICE_CENTS_PER_MTOK: Record<string, { in: number; out: number }> = {
   "claude-haiku-4-5":  { in: 100, out: 500 },   // $1 / $5
   "claude-sonnet-4-6": { in: 300, out: 1500 },  // $3 / $15
   "claude-opus-4-8":   { in: 500, out: 2500 },  // $5 / $25
+  "claude-sonnet-5":   { in: 200, out: 1000 },  // $2 / $10
+  "claude-opus-5":     { in: 500, out: 2500 },  // $5 / $25 (Standard-Modell des Assistenten)
 };
 // Marge-Multiplikator auf die Rohkosten. Jederzeit hier anpassbar, keine Migration nötig.
 const MARGIN_MULT = 3;
@@ -64,12 +66,15 @@ Deno.serve(async (req) => {
     // 3) Anfrage an Claude weiterreichen
     const body = await req.json();
     const model = ALLOWED.has(body.model) ? body.model : "claude-sonnet-4-6";
-    const max_tokens = Math.min(body.max_tokens || 2000, 8000);
+    const max_tokens = Math.min(body.max_tokens || 2000, 16000);
 
     const payload: Record<string, unknown> = { model, max_tokens, messages: body.messages };
     if (body.system) payload.system = body.system;
     if (body.tools) payload.tools = body.tools;
     if (body.tool_choice) payload.tool_choice = body.tool_choice;
+    // Assistent (Claude 5 / 4.6+): adaptives Denken + Aufwand ("effort") durchreichen.
+    if (body.thinking) payload.thinking = body.thinking;
+    if (body.output_config) payload.output_config = body.output_config;
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
