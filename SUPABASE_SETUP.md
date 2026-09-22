@@ -128,6 +128,13 @@ werden sevDesk-CSV (deutsche und englische Zahlen, UTF-8 oder Windows-1252), DAT
 (EXTF) und beliebige CSVs über die Spalten-Zuordnung. Doppelte Einträge werden übersprungen, PDFs
 landen im Bucket `belege` in der gewohnten Ordnerstruktur.
 
+**Mit KI sortieren:** Wer in sevDesk Rechnungen für Immobilien und für Dienstleistungen gemischt hat,
+klickt in der Vorschau auf „Jetzt mit KI sortieren". Die KI legt jede Rechnung und jeden Beleg auf
+das passende Konto (Firma, Immobilie, Privat) und markiert unsichere Fälle gelb; ein optionaler
+Hinweis (z. B. „Mieter Müller = Sylt") hat Vorrang. Rechnungen, ihre Einnahme-Buchungen und neu
+angelegte Kunden landen auf dem gewählten Konto. Schon importierte Daten sortiert der Assistent
+nachträglich um („Ordne alle Mietrechnungen der Ferienwohnung zu" → Werkzeug `move_to_account`).
+
 ## Datenmodell heute und der nächste Schritt
 
 Der komplette Buchhaltungs-Zustand liegt als ein JSON-Dokument in `app_state` (Zeile 1). Das ist

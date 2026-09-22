@@ -10,7 +10,7 @@ const MAP_FIELDS = [['datum','Datum'],['nummer','Nummer'],['name','Name / Kontak
 const isDoc = (n) => /\.(pdf|jpe?g|png|webp|heic)$/i.test(n);
 
 export default function SevdeskImport(props) {
-  const { ui, accounts, existing, defaultYear, onImport, isMobile } = props;
+  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify } = props;
   const { C, SC, SS, NUM, fmt, Ic, P, hexA, AI_GRADIENT, MONTHS } = ui;
   const [belege, setBelege] = useState(null);      // {fileName, parsed, format, mapping, kind}
   const [rech, setRech] = useState(null);
@@ -26,6 +26,11 @@ export default function SevdeskImport(props) {
   const [progress, setProgress] = useState('');
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
+  const [ai, setAi] = useState({});             // KI-Sortierung: {b12|r3: {acct, sure, why}}
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiProg, setAiProg] = useState('');
+  const [hint, setHint] = useState('');         // Hinweise für die KI, z. B. „Mieter Müller = Sylt"
+  const [onlyUnsure, setOnlyUnsure] = useState(false);
 
   const readCsv = async (file, kind, setter) => {
     try { const buf = await file.arrayBuffer(); const parsed = parseCSV(decodeText(new Uint8Array(buf))); if (!parsed.header.length || !parsed.rows.length) throw new Error('Die Datei enthält keine Tabelle.'); const format = detectFormat(parsed); setter({ fileName: file.name, parsed, format, mapping: autoMap(parsed.header), kind: format === 'datev' ? 'auto' : kind }); setResult(null); setErr(''); }
@@ -55,6 +60,24 @@ export default function SevdeskImport(props) {
   const propKeys = accounts.filter(a => /^p\d$/.test(a.key)).map(a => a.key);
   const RE_PROP = /ferienwohnung|airbnb|booking|apartment|wohnung|immobil|mieter|vermiet|reinigung|putz|hausgeld|hausverwalt|stadtwerke|nebenkosten/i;
   const defaultAcctFor = (r) => (propKeys.length && RE_PROP.test([r.kategorie, r.beschreibung, r.name].join(' '))) ? propKeys[0] : acct;
+  const defaultInvAcct = (r) => (propKeys.length && RE_PROP.test([r.beschreibung, r.name].join(' '))) ? propKeys[0] : 'unter';
+  // Reihenfolge: manuelle Wahl in der Tabelle > KI-Vorschlag > Stichwort-Regel
+  const acctOf = (k, r) => rowAcct[k + r.idx] || (ai[k + r.idx] && ai[k + r.idx].acct) || (k === 'r' ? defaultInvAcct(r) : defaultAcctFor(r));
+  const allGo = [...belegeGo.map(r => ({ r, k: 'b' })), ...rechGo.map(r => ({ r, k: 'r' }))];
+  const aiDone = allGo.filter(x => ai[x.k + x.r.idx]).length;
+  const aiUnsure = allGo.filter(x => ai[x.k + x.r.idx] && !ai[x.k + x.r.idx].sure && !rowAcct[x.k + x.r.idx]).length;
+  const perAcct = accounts.map(a => ({ ...a, n: allGo.filter(x => acctOf(x.k, x.r) === a.key).length, sum: allGo.filter(x => acctOf(x.k, x.r) === a.key).reduce((s, x) => s + (x.r.kind === 'ein' ? x.r.brutto : 0), 0) })).filter(a => a.n);
+  const runAi = async () => {
+    if (aiBusy || !aiClassify || !allGo.length) return;
+    setAiBusy(true); setErr(''); setAiProg('KI liest ' + allGo.length + ' Posten …');
+    try {
+      const rows = allGo.map(({ r, k }) => ({ key: k + r.idx, kind: k === 'r' ? 'ein' : r.kind, datum: r.datum, name: r.name, beschreibung: r.beschreibung, kategorie: r.kategorie, brutto: r.brutto }));
+      const { results, missing } = await aiClassify(rows, hint, (d, t) => setAiProg('KI sortiert … ' + d + ' / ' + t));
+      setAi(prev => ({ ...prev, ...results }));
+      setAiProg(Object.keys(results).length + ' Posten sortiert' + (missing.length ? ', ' + missing.length + ' ohne Vorschlag (bitte selbst wählen)' : '') + '.');
+    } catch (e) { setErr('KI-Sortierung fehlgeschlagen: ' + (e.message || e)); setAiProg(''); }
+    setAiBusy(false);
+  };
   const fileFor = (zip, name) => { if (!zip || !name) return null; const e = zip.entries.find(x => x.name === name); return e ? { name: baseName(e.name), data: e.data } : null; };
 
   const run = async () => {
@@ -63,8 +86,8 @@ export default function SevdeskImport(props) {
     try {
       const payload = {
         confirmed,
-        belege: belegeGo.map(r => ({ ...r, dest: rowAcct['b' + r.idx] || defaultAcctFor(r), file: fileFor(zipB, r.file) })),
-        rechnungen: rechGo.map(r => ({ ...r, dest: 'unter', file: fileFor(zipR, r.file) })),
+        belege: belegeGo.map(r => ({ ...r, dest: acctOf('b', r), file: fileFor(zipB, r.file) })),
+        rechnungen: rechGo.map(r => ({ ...r, dest: acctOf('r', r), file: fileFor(zipR, r.file) })),
       };
       const res = await onImport(payload, setProgress);
       setResult(res);
@@ -113,8 +136,28 @@ export default function SevdeskImport(props) {
           {B && <div><div style={lbl}>Belege standardmäßig auf Konto</div><select value={acct} onChange={e => setAcct(e.target.value)} style={{ ...SS, width: 220 }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></div>}
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.txt, cursor: 'pointer', paddingBottom: 8 }}><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> Als abgeschlossen importieren (kein „wartet auf Kontoauszug")</label>
         </div>
-        <div style={{ fontSize: 12, color: C.mut, marginTop: 10, lineHeight: 1.5 }}>Rechnungen landen immer bei „{(accounts.find(a => a.key === 'unter') || {}).label || 'Firma'}" als Einnahmen und werden mit Kunden angelegt. Einzelne Belege kannst du in der Tabelle einem anderen Konto zuweisen, z. B. der Ferienwohnung.</div>
+        <div style={{ fontSize: 12, color: C.mut, marginTop: 10, lineHeight: 1.5 }}>Jede Rechnung und jeder Beleg landet auf dem Konto, das in der Tabelle steht. Lass die KI unten alles vorsortieren und korrigiere nur, was gelb markiert ist.</div>
       </div>
+
+      {aiClassify && allGo.length > 0 && (
+        <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.35) }}>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <span style={{ width: 44, height: 44, borderRadius: 13, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.spark} sz={20} col="#fff" /></span>
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>Mit KI sortieren: Immobilien oder Firma?</div>
+              <div style={{ fontSize: 13, color: C.sub, marginTop: 3, lineHeight: 1.55 }}>Die KI geht alle {allGo.length} Rechnungen und Belege durch und legt jede auf das passende Konto – Miete und Ferienwohnung zur Immobilie, Dienstleistungen zur Firma. Unsichere Fälle werden gelb markiert.</div>
+              <textarea value={hint} onChange={e => setHint(e.target.value)} rows={2} placeholder={'Optional: Hinweise, z. B. „Mieter Müller und alles mit Sylt gehört zu ' + ((accounts.find(a => /^p\d$/.test(a.key)) || {}).label || 'Immobilie 1') + '"'} style={{ ...SS, marginTop: 10, width: '100%', resize: 'vertical', fontSize: 13, lineHeight: 1.45, boxSizing: 'border-box' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
+                <button onClick={runAi} disabled={aiBusy} style={{ ...btnP, background: AI_GRADIENT, color: '#fff', opacity: aiBusy ? 0.6 : 1 }}><Ic p={P.spark} sz={15} col="#fff" /> {aiBusy ? 'Sortiert…' : aiDone ? 'Nochmal sortieren' : 'Jetzt mit KI sortieren'}</button>
+                {aiProg && <span style={{ fontSize: 12.5, color: C.sub }}>{aiProg}</span>}
+                {aiUnsure > 0 && <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: C.amb, fontWeight: 700, cursor: 'pointer' }}><input type="checkbox" checked={onlyUnsure} onChange={e => setOnlyUnsure(e.target.checked)} /> nur {aiUnsure} unsichere zeigen</label>}
+              </div>
+              {aiBusy && <div className="prog" style={{ marginTop: 10 }} />}
+              {aiDone > 0 && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>{perAcct.map(a => <span key={a.key} style={{ fontSize: 12.5, fontWeight: 600, color: C.txt, background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 99, padding: '5px 11px' }}>{a.label}: {a.n}{a.sum ? ' · ' + fmt(a.sum) + ' Einnahmen' : ''}</span>)}</div>}
+            </div>
+          </div>
+        </div>
+      )}
 
       {B && (
         <div style={{ ...card, marginBottom: 14 }}>
@@ -124,7 +167,7 @@ export default function SevdeskImport(props) {
           </div>
           {!zipB && <div style={{ fontSize: 12, color: C.amb, marginTop: 8 }}>Ohne ZIP werden die Belege ohne Datei angelegt – du kannst die PDFs später einzeln nachladen. Besser: jetzt das ZIP dazulegen.</div>}
           <Mapping ui={ui} src={belege} setSrc={setBelege} k="b" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
-          <Table ui={ui} X={B} k="b" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} acct={acct} accounts={accounts} defaultAcctFor={defaultAcctFor} />
+          <Table ui={ui} X={B} k="b" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
         </div>
       )}
       {R && (
@@ -134,7 +177,7 @@ export default function SevdeskImport(props) {
             <Stat l="Importierbar" v={rechGo.length} c={C.grn} /><Stat l="Schon vorhanden" v={R.sum.dup} c={C.amb} /><Stat l="Davon offen" v={rechGo.filter(r => r.status === 'offen').length} /><Stat l="Summe brutto" v={fmt(rechGo.reduce((s, r) => s + r.brutto, 0))} /><Stat l="PDF zugeordnet" v={(R.filesMatched) + (zipR ? ' / ' + zipR.entries.length : '')} c={zipR ? C.txt : C.mut} />
           </div>
           <Mapping ui={ui} src={rech} setSrc={setRech} k="r" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
-          <Table ui={ui} X={R} k="r" skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} acct={acct} accounts={accounts} />
+          <Table ui={ui} X={R} k="r" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
         </div>
       )}
 
@@ -149,7 +192,7 @@ export default function SevdeskImport(props) {
       {result && (
         <div style={{ ...card, marginBottom: 14, background: hexA(C.grn, 0.07), border: '1px solid ' + hexA(C.grn, 0.35) }}>
           <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>Fertig – {result.belege} Belege, {result.rechnungen} Rechnungen, {result.kunden} neue Kunden, {result.dateien} Dateien abgelegt</div>
-          <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.6 }}>{result.fehler ? result.fehler + ' Datei(en) konnten nicht hochgeladen werden, die Buchungen sind trotzdem da. ' : ''}Schau jetzt in die Übersicht oder direkt in die Steuerprognose {year !== 'alle' ? year : ''} – dort sind die Zahlen sofort drin. Einen erneuten Import mit denselben Dateien erkennt Buqo als Dubletten.</div>
+          <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.6 }}>{result.fehler ? result.fehler + ' Datei(en) konnten nicht hochgeladen werden, die Buchungen sind trotzdem da. ' : ''}Schau jetzt in die Konten oder direkt in die Steuerprognose {year !== 'alle' ? year : ''} – dort sind die Zahlen sofort drin. Einen erneuten Import mit denselben Dateien erkennt Buqo als Dubletten.</div>
         </div>
       )}
     </>)}
@@ -172,10 +215,11 @@ function Mapping({ ui, src, setSrc, k, mapOpen, setMapOpen, isMobile }) {
     </div>
   );
 }
-function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, acct, accounts, defaultAcctFor }) {
+function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, accounts, acctOf, ai, onlyUnsure }) {
   const { C, SS, NUM, fmt, hexA } = ui;
     if (!X) return null;
-    const rows = X.rows.filter(r => r.inYear).slice(0, 300);
+    const aiOf = (r) => (ai && ai[k + r.idx]) || null;
+    const rows = X.rows.filter(r => r.inYear && (!onlyUnsure || (aiOf(r) && !aiOf(r).sure && !rowAcct[k + r.idx]))).slice(0, 300);
     const th = { textAlign: 'left', fontSize: 11, fontWeight: 700, color: C.mut, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '8px 8px', borderBottom: '1px solid ' + C.bdr, whiteSpace: 'nowrap' };
     const td = { fontSize: 13, padding: '7px 8px', borderBottom: '1px solid ' + C.sep, verticalAlign: 'top' };
     return (
@@ -192,7 +236,7 @@ function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, acct, a
                 <td style={td}>{r.kategorie || <span style={{ color: C.mut }}>—</span>}</td>
                 <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', color: r.kind === 'ein' ? C.grn : C.txt, fontWeight: 600 }}>{r.kind === 'ein' ? '+' : '−'}{fmt(r.brutto)}</td>
                 <td style={{ ...td, ...NUM }}>{r.mwst} %</td>
-                {withAcct && <td style={td}><select value={rowAcct[k + r.idx] || (defaultAcctFor ? defaultAcctFor(r) : acct)} onChange={e => setRowAcct(a => ({ ...a, [k + r.idx]: e.target.value }))} style={{ ...SS, fontSize: 12, padding: '4px 6px', width: 150 }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></td>}
+                {withAcct && (() => { const s = aiOf(r); const manual = !!rowAcct[k + r.idx]; const unsure = s && !s.sure && !manual; return <td style={td}><select value={acctOf(k, r)} onChange={e => setRowAcct(a => ({ ...a, [k + r.idx]: e.target.value }))} style={{ ...SS, fontSize: 12, padding: '4px 6px', width: 150, border: '1px solid ' + (unsure ? C.amb : 'transparent') }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>{s && <div title={s.why} style={{ fontSize: 11, marginTop: 3, color: manual ? C.mut : unsure ? C.amb : C.sub, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{manual ? 'von dir gewählt' : (unsure ? '? ' : 'KI: ') + (s.why || '')}</div>}</td>; })()}
                 <td style={td}>{r.file ? <span title={r.file} style={{ color: C.grn, fontWeight: 700 }}>✓</span> : <span style={{ color: C.mut }}>—</span>}</td>
                 <td style={{ ...td, fontSize: 12, color: r.dup ? C.amb : (r.cancelled ? C.mut : C.exp) }}>{r.dup ? 'schon vorhanden' : r.cancelled ? 'storniert/Entwurf' : r.warn.join(', ')}</td>
               </tr>

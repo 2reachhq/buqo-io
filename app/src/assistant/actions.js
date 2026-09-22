@@ -118,7 +118,7 @@ export function listInvoices(data, { status = 'alle', customer, year, limit = 50
   else if (status === 'bezahlt') views = views.filter(v => v.bezahlt);
   else if (status === 'ueberfaellig') views = views.filter(v => v.ueberfaellig);
   views.sort((a, b) => String(b.datum || '').localeCompare(String(a.datum || '')));
-  const total = views.length; views = views.slice(0, Math.max(1, limit || 50)).map(v => { const { positionen, ...rest } = v; return rest; });
+  const total = views.length; views = views.slice(0, Math.max(1, limit || 50)).map(v => { const { positionen, ...rest } = v; return { ...rest, leistung: (positionen || []).map(p => p.desc).filter(Boolean).join(', ').slice(0, 120) }; });
   return { anzahl: total, offeneSumme: r2(list.filter(iv => !iv.paid).reduce((sum, iv) => sum + invTotals(iv.items).gross, 0)), rechnungen: views };
 }
 export function nextInvNo(data, year) {
@@ -166,6 +166,29 @@ export function deleteInvoice(data, ref) {
   forEachMonth(nd, (M) => { const strip = arr => (arr || []).filter(it => it.invId !== iv.id); if (M.unternehmen) { M.unternehmen.clients = strip(M.unternehmen.clients); M.unternehmen.items = strip(M.unternehmen.items); } if (M.privat) { M.privat.einnahmen = strip(M.privat.einnahmen); M.privat.items = strip(M.privat.items); } if (M.props) Object.keys(M.props).forEach(p => { M.props[p].einnahmen = strip(M.props[p].einnahmen); M.props[p].expenses = strip(M.props[p].expenses); }); });
   return { data: nd, invoice: iv };
 }
+// Rechnung (und ihre Einnahme-Buchung) auf ein anderes Konto legen; optional den Kunden mitnehmen.
+export function moveInvoiceAccount(data, names, ref, account, { customerToo = false } = {}) {
+  const iv = findInvoice(data, ref); if (!iv) throw new Error('Rechnung „' + s(ref) + '" nicht gefunden.');
+  const to = resolveAccount(account, names); if (!to) throw new Error('Konto „' + s(account) + '" nicht gefunden.');
+  const from = iv.account || iv.domain || 'unter';
+  const nd = clone(data);
+  nd.invoices = (nd.invoices || []).map(x => x.id === iv.id ? { ...x, account: to, domain: to } : x);
+  let moved = 0;
+  forEachMonth(nd, (M) => {
+    ['unter', 'privat', ...PROPS].forEach(acc => ['ein', 'aus'].forEach(kind => {
+      if (acc === to) return;
+      const list = listsOf(M, acc, kind); if (!list || !list.length) return;
+      const keep = []; const take = [];
+      list.forEach(it => (it.invId === iv.id ? take : keep).push(it));
+      if (!take.length) return;
+      list.splice(0, list.length, ...keep);
+      take.forEach(it => { bookInto(M, to, kind, it); moved++; });
+    }));
+  });
+  if (customerToo && iv.customerId) nd.customers = (nd.customers || []).map(c => c.id === iv.customerId ? { ...c, domain: to } : c);
+  return { data: nd, invoice: { ...iv, account: to, domain: to }, from, to, movedBookings: moved };
+}
+
 export function recurringInvoiceView(data, r) {
   const c = (data.customers || []).find(x => x.id === r.customerId); const tot = invTotals(r.items);
   return { id: r.id, kunde: (c && c.name) || r.custName || '', konto: r.account, von: MONTHS[r.fromM] + ' ' + r.fromY, bis: MONTHS[r.toM] + ' ' + r.toY, tag: r.genDay || 1, brutto: tot.gross, aktiv: r.active !== false, positionen: (r.items || []).map(i => i.desc + ' ' + fmtEur(num(i.price) * num(i.qty || 1))).join(', ') };
