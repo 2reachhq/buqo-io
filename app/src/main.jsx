@@ -43,7 +43,7 @@ const THEME_DARK = {
   bdr:'rgba(255,255,255,0.08)', bdrM:'rgba(255,255,255,0.14)',
   pri:'#007AFF', priL:'rgba(0,122,255,0.20)', priTxt:'#FFFFFF',
   act:'#007AFF', actL:'rgba(0,122,255,0.18)', actTxt:'#FFFFFF',
-  accent:'#BBF451', accentL:'rgba(187,244,81,0.16)', accentTxt:'#0A0A0A',
+  accent:'#007AFF', accentL:'rgba(0,122,255,0.16)', accentTxt:'#FFFFFF',
   grn:'#34C759', grnL:'rgba(52,199,89,0.14)',
   red:'#E55934', redL:'rgba(229,89,52,0.11)',
   amb:'#FF9F0A', ambL:'rgba(255,159,10,0.12)',
@@ -56,7 +56,7 @@ const THEME_LIGHT = {
   bdr:'rgba(0,0,0,0.06)', bdrM:'rgba(0,0,0,0.12)',
   pri:'#007AFF', priL:'rgba(0,122,255,0.14)', priTxt:'#FFFFFF',
   act:'#007AFF', actL:'rgba(0,122,255,0.14)', actTxt:'#FFFFFF',
-  accent:'#BBF451', accentL:'rgba(187,244,81,0.18)', accentTxt:'#0A0A0A',
+  accent:'#007AFF', accentL:'rgba(0,122,255,0.18)', accentTxt:'#FFFFFF',
   grn:'#34C759', grnL:'rgba(52,199,89,0.12)',
   red:'#FF3B30', redL:'rgba(255,59,48,0.10)',
   amb:'#FF9F0A', ambL:'rgba(255,159,10,0.12)',
@@ -212,9 +212,9 @@ const belegFileName = (name, belegnr, origName)=>{ const ext=((String(origName||
 
 /* ══ Konten-Farben (zur neuen Palette) ══ */
 const KONTO_COLORS = {
-  immo:   { c:'#BBF451', tint:'rgba(187,244,81,0.13)', bd:'rgba(187,244,81,0.35)' },
-  unter:  { c:'#30D5C8', tint:'rgba(48,213,200,0.13)', bd:'rgba(48,213,200,0.35)' },
-  privat: { c:'#FF2D55', tint:'rgba(255,45,85,0.13)', bd:'rgba(255,45,85,0.35)' },
+  immo:   { c:'#007AFF', tint:'rgba(0,122,255,0.13)', bd:'rgba(0,122,255,0.35)' },
+  unter:  { c:'#007AFF', tint:'rgba(0,122,255,0.13)', bd:'rgba(0,122,255,0.35)' },
+  privat: { c:'#007AFF', tint:'rgba(0,122,255,0.13)', bd:'rgba(0,122,255,0.35)' },
 };
 const KONTO_ICONS = { immo:'M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z M9 22V12h6v10', unter:'M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2m-8-3a2 2 0 00-2 2h4a2 2 0 00-2-2z', privat:'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2 M12 11a4 4 0 100-8 4 4 0 000 8z' };
 
@@ -1348,7 +1348,9 @@ function App({session}) {
   const [tab,  setTab]  = useState('quellen');          // Startseite = Übersicht (Konten)
   const [sideOpen,setSideOpen]= useState(()=>{ try{ return localStorage.getItem('buqo_side')!=='0'; }catch(_){ return true; } }); // Sidebar aus-/eingeklappt
   useEffect(()=>{ try{ localStorage.setItem('buqo_side',sideOpen?'1':'0'); }catch(_){} },[sideOpen]);
+  const [resetBusy,setResetBusy]= useState(false);
   const [resetTxt,setResetTxt]= useState('');          // Zurücksetzen: Bestätigungstext
+  const [taxDocY,setTaxDocY]= useState(null);        // Steuerunterlagen: gewähltes Jahr
   const [wiedF,setWiedF]= useState('alle');          // Wiederkehrend: Filter
   const [flyout,setFlyout]= useState(null);           // Overlay neben der Navigation {kind:'konten'|'mehr', top}
   const [belegDetails,setBelegDetails]= useState(false); // Beleg-Erfassung: Detailfelder sichtbar
@@ -1416,7 +1418,7 @@ function App({session}) {
   // ══ Palette anwenden: Basis + Nutzer-Overrides (data.themeColors[mode]) → transluzente/Text-Varianten ableiten ══
   {
     const base = isDark?THEME_DARK:THEME_LIGHT;
-    const ov = ((data.themeColors||{})[isDark?'dark':'light'])||{};
+    const ov = {}; // eine feste Akzentfarbe (Blau) in der ganzen App
     const pal = {...base};
     ['pri','act','accent','grn','exp','red','amb'].forEach(k=>{ if(ov[k]&&/^#[0-9a-fA-F]{6}$/.test(ov[k])) pal[k]=ov[k]; });
     pal.priL=hexA(pal.pri,isDark?0.20:0.14); pal.priTxt=idealText(pal.pri);
@@ -1543,7 +1545,7 @@ function App({session}) {
   const subSlug = (v)=> v==='wied' ? 'wiederkehrend' : v;
   const parseSub = (s)=> s==='wiederkehrend' ? 'wied' : s;
   useEffect(()=>{
-    const valid=new Set(['wied','quellen','immo','unter','privat','import','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
+    const valid=new Set(['steuerdocs','wied','quellen','immo','unter','privat','import','kal','yr','steuer','steuern','mehr','settings','rechnung','kunden','belege','download','kosten','aufgaben','raten']);
     const apply=()=>{ const raw=(window.location.hash||'').replace(/^#\/?/,''); if(!raw) return; const parts=raw.split('/'); const head=parts[0];
       if(head!=='erfassen') setCapture(null);
       if(head!=='rechnung-erstellen') setInvEdit(null);
@@ -2042,6 +2044,14 @@ function App({session}) {
     try{ const hist=existingBookings().filter(b=>b.kind==='aus').map(b=>({name:b.it.name, amount:num(b.it.amount), datum:toISO(b.it.datum)||(b.y+'-'+String(b.m+1).padStart(2,'0')+'-01')})); (drafts||[]).forEach(d=>{ if(d.kind==='aus') hist.push({name:d.name, amount:num(d.amount), datum:toISO(d.datum)}); });
       const found=ACT.detectBankAnomalies(fresh.map(d=>({...d,datum:toISO(d.datum)})), hist);
       if(found.length){ setData(prev=>{ const have=new Set((prev.todos||[]).map(t=>t.key).filter(Boolean)); const add=found.filter(f=>!have.has(f.key)).map(f=>({id:uid(), done:false, source:'bank', key:f.key, createdAt:new Date().toISOString(), ref:null, title:f.title, note:f.note, comments:[]})); return add.length?{...prev, todos:[...add, ...(prev.todos||[])]}:prev; }); setToast(found.length+' Auffälligkeit'+(found.length>1?'en':'')+' im Kontoauszug – als To-do angelegt'); }
+    }catch(e){}
+    // Offene Zahlungen abgleichen: bezahlt → abhaken; Frist im Auszug verstrichen, aber kein Umsatz → nachfragen
+    try{ const cur=dataRef.current||data; const {paid,missing}=ACT.matchPayables(cur.payables||[], fresh.map(d=>({...d,datum:toISO(d.datum)})));
+      if(paid.length||missing.length){ const today0=new Date().toISOString().slice(0,10);
+        setData(prev=>{ const pids=new Set(paid.map(x=>x.payable.id)); const have=new Set((prev.todos||[]).map(t=>t.key).filter(Boolean));
+          const add=missing.filter(p=>!have.has('payable-missing:'+p.id)).map(p=>({id:uid(), done:false, source:'bank', key:'payable-missing:'+p.id, createdAt:new Date().toISOString(), ref:null, account:p.account, title:'Nicht abgebucht? '+p.payee+' – '+fmt(p.amount), note:'Im Kontoauszug finde ich keine Zahlung an „'+p.payee+'" über '+fmt(p.amount)+(p.due?' (fällig '+p.due.split('-').reverse().join('.')+')':'')+'. Hast du sie überwiesen oder vergessen?', comments:[], dueDate:undefined}));
+          return {...prev, payables:(prev.payables||[]).map(p=>pids.has(p.id)?{...p,status:'bezahlt',paidAt:today0}:p), todos:[...add,...(prev.todos||[]).map(t=>(t.payableId&&pids.has(t.payableId))?{...t,done:true,doneAt:new Date().toISOString()}:t)]}; });
+        setToast((paid.length?paid.length+' offene Zahlung'+(paid.length>1?'en':'')+' im Kontoauszug gefunden – abgehakt. ':'')+(missing.length?missing.length+' Zahlung'+(missing.length>1?'en':'')+' nicht gefunden – To-do angelegt.':'')); }
     }catch(e){}
     return {total:flagged.length, added, skipped, dupBook}; };
   const draftStatus = (d)=>{ if(d.ignored) return {key:'ignoriert',label:'Ignoriert',col:C.mut}; if(d.privat) return {key:'privat',label:'Privat',col:'#ABC4FF'}; if(d.confirmed) return {key:'zugeordnet',label:'Zugeordnet',col:C.grn}; if(d.openMatch) return {key:'beleg',label:'Beleg gefunden',col:C.pri}; if(d.isNew) return {key:'neu',label:'Neu',col:isDark?'#FFD27A':'#B8860B'}; return {key:'offen',label:'Offen',col:C.exp}; };
@@ -2656,7 +2666,7 @@ function App({session}) {
   const nextInvNo = ()=>{ const y=new Date().getFullYear(); const n=(data.invoices||[]).filter(i=>String(i.number||'').startsWith(String(y))).length+1; return y+'-'+String(n).padStart(3,'0'); };
   const nextCustNo = (dom)=>{ const dd=normAcct(dom); const nums=(data.customers||[]).filter(c=>normAcct(c.domain)===dd).map(c=>parseInt(c.custNo,10)).filter(n=>!isNaN(n)); return String(nums.length?Math.max(...nums)+1:1001); };
   const defMwstFor = (dom)=>{ const co=companyFor(dom||'unter'); return co&&co.defMwst!=null&&co.defMwst!=='' ? num(co.defMwst) : 19; };
-  const newInvoice = (dom)=>{ const acc=(dom&&dom!=='alle')?normAcct(dom):'unter'; return { id:uid(), number:nextInvNo(), domain:acc, customerId:'', custName:'', custAddress:'', custEmail:'', saveCust:true, account:'', date:new Date().toISOString().slice(0,10), due:'', items:[{desc:'',qty:1,price:0,mwst:defMwstFor(acc)}], note:'' }; };
+  const newInvoice = (dom)=>{ const acc=(dom&&dom!=='alle')?normAcct(dom):'unter'; return { id:uid(), number:nextInvNo(), domain:acc, customerId:'', custName:'', custAddress:'', custEmail:'', saveCust:true, account:(dom&&dom!=='alle')?acc:'', date:new Date().toISOString().slice(0,10), due:'', items:[{desc:'',qty:1,price:0,mwst:defMwstFor(acc)}], note:'' }; };
   const invCustomer = (inv)=>{ const c=customers.find(x=>x.id===inv.customerId); if(c) return c; return {name:inv.custName||'', address:inv.custAddress||'', email:inv.custEmail||'', firstName:inv.firstName||'', lastName:inv.lastName||'', company:inv.company||'', anrede:inv.anrede||''}; };
 
   /* ── Aufgaben (To-Dos): manuell + automatisch aus überfälligen Rechnungen/offenen Belegen/Dubletten ── */
@@ -3069,6 +3079,44 @@ function App({session}) {
   };
   const applyAiCapture = ()=>{ if(!aiCap||!aiCap.parsed) return; const {_custLabel,_acctLabel,...clean}=aiCap.parsed; setInvEdit(e=>({...e, ...clean})); setAiCap(null); setRecText(''); setToast('Aus KI-Erfassung übernommen'); };
 
+  /* Konto vollständig löschen: Buchungen, Rechnungen (samt PDFs), wiederkehrende Rechnungen, Kunden, Raten, offene Zahlungen,
+     verknüpfte To-dos, Inserate, Firmenprofil und alle zugehörigen Dateien im Speicher */
+  const deleteAccountFully = async (key)=>{
+    if(!PROPS.includes(key)) return;
+    const d0=dataRef.current||data; const paths=new Set(); const itemIds=new Set();
+    Object.keys(d0).forEach(y=>{ if(!/^\d+$/.test(y)) return; Object.keys(d0[y]||{}).forEach(m=>{ const p0=d0[y][m]&&d0[y][m].props&&d0[y][m].props[key]; if(!p0) return; [...(p0.expenses||[]),...(p0.einnahmen||[])].forEach(it=>{ itemIds.add(it.id); if(it.filePath) paths.add(it.filePath); }); }); });
+    const isAcc=(o)=>normAcct(o.account||o.domain)===key||o.account===key||o.domain===key;
+    (d0.invoices||[]).filter(isAcc).forEach(iv=>{ if(iv.pdfPath) paths.add(iv.pdfPath); });
+    (d0.taxDocs||[]).filter(t=>t.account===key).forEach(t=>{ if(t.filePath) paths.add(t.filePath); });
+    (d0.letters||[]).filter(l=>l.account===key).forEach(l=>{ if(l.filePath) paths.add(l.filePath); });
+    try{ if(paths.size) await sb.storage.from('belege').remove([...paths]); }catch(e){}
+    setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev));
+      Object.keys(nd).forEach(y=>{ if(!/^\d+$/.test(y)) return; Object.keys(nd[y]||{}).forEach(m=>{ const md0=nd[y][m]; if(md0&&md0.props&&md0.props[key]) md0.props[key]=emptyProp(); }); });
+      const goneInv=new Set((nd.invoices||[]).filter(isAcc).map(i=>i.id));
+      nd.invoices=(nd.invoices||[]).filter(i=>!goneInv.has(i.id));
+      nd.recurInvoices=(nd.recurInvoices||[]).filter(r=>!isAcc(r));
+      nd.customers=(nd.customers||[]).filter(c=>!isAcc(c));
+      nd.installments=(nd.installments||[]).filter(x=>x.account!==key);
+      nd.payables=(nd.payables||[]).filter(x=>x.account!==key);
+      nd.taxDocs=(nd.taxDocs||[]).filter(x=>x.account!==key);
+      nd.letters=(nd.letters||[]).filter(x=>x.account!==key);
+      nd.drafts=(nd.drafts||[]).filter(x=>x.account!==key);
+      nd.todos=(nd.todos||[]).filter(t=>!(t.account===key || (t.ref&&itemIds.has(t.ref.id)) || (t.payableId&&!(nd.payables||[]).some(p=>p.id===t.payableId))));
+      delete nd['company_'+key];
+      return nd; });
+    setNames(n=>{ const nn={...n}; nn[key]=PROP_DEFS[key]; ['acctKind','acctColors','propIcon','inserate'].forEach(f=>{ if(nn[f]&&nn[f][key]!==undefined){ nn[f]={...nn[f]}; delete nn[f][key]; } }); return nn; });
+    setIconPick(null); setOpenAcct(null); setTab('quellen'); setYrFilter(f=>({...f,[key]:true})); setToast('Konto gelöscht – inkl. Buchungen, Rechnungen und '+paths.size+' Dateien');
+  };
+  /* Alles zurücksetzen: Sicherung laden, Beleg-Dateien im Speicher löschen, Inhalte leeren (Stammdaten bleiben) */
+  const wipeStorage = async (prefix='')=>{ const {data:rows}=await sb.storage.from('belege').list(prefix,{limit:1000}); if(!rows) return 0; let n=0; const files=[]; for(const it of rows){ const path=prefix?prefix+'/'+it.name:it.name; if(it.id===null){ n+=await wipeStorage(path); } else files.push(path); } if(files.length){ await sb.storage.from('belege').remove(files); n+=files.length; } return n; };
+  const resetEverything = async ()=>{ if(resetBusy) return; setResetBusy(true);
+    try{ try{ exportData(); }catch(e){} let files=0; try{ files=await wipeStorage(''); }catch(e){}
+      const keep=['profile','company','companyImmo','companyPrivat','assistant','taxProfile',...PROPS.map(k=>'company_'+k)];
+      setData(prev=>{ const nd={}; keep.forEach(k=>{ if(prev[k]!==undefined) nd[k]=prev[k]; }); return nd; });
+      setNames(n=>({...PROP_DEFS, unternehmen:n.unternehmen||'Firma', privatLabel:n.privatLabel, cleanedDefaults:true}));
+      setResetTxt(''); setOpenAcct(null); setTab('quellen'); setToast('Alles gelöscht ('+files+' Dateien) – Sicherung wurde heruntergeladen.');
+    }catch(e){ setToast('Zurücksetzen fehlgeschlagen: '+(e.message||e)); }
+    setResetBusy(false); };
   /* Alle Daten als Datei exportieren (zur Auswertung) */
   const exportData = () => {
     try{
@@ -3113,7 +3161,7 @@ function App({session}) {
     ctx.finance=buildFinanceContext();
     ctx.counts=(d.customers||[]).length+' Kunden, '+(d.invoices||[]).length+' Rechnungen, '+(d.recurInvoices||[]).length+' wiederkehrende Rechnungen, '+(d.todos||[]).filter(t=>!t.done).length+' offene To-dos';
     const p=botPendingRef.current; if(p&&p.inv){ ctx.pendingInvoice=p.inv.number+' an '+(p.inv.custName||'?')+' über '+fmt(invTotals(p.inv.items).gross); }
-    try{ ctx.letters=ACT.letterMemoryLines(d, 8); }catch(e){}
+    try{ ctx.letters=ACT.letterMemoryLines(d, 8); const op=(d.payables||[]).filter(x=>x.status==='offen').slice(0,8); if(op.length) ctx.letters=[...(ctx.letters||[]), ...op.map(x=>'• Offene Zahlung · '+accLabel(x.account)+' · '+x.payee+' '+fmt(x.amount)+(x.due?' · fällig '+x.due:''))]; }catch(e){}
     if(attachment) ctx.attachment=attachment.name+' ('+attachment.kind+')';
     return ctx; };
   // Kunde zu einer Rechnung – aus dem aktuellsten Datenstand
@@ -3135,6 +3183,8 @@ function App({session}) {
     const folder = account==='unter' ? [N().unternehmen||'Firma', kind==='ein'?'Einnahmen':'Ausgaben'] : PROPS.includes(account) ? ['Immobilien', N()[account]||account] : ['Privat'];
     const fname=belegFileName(name, belegnr, f.name||file.name); const path=[...folder, String(y), String(m+1).padStart(2,'0')+' '+MONTHS[m], fname].map(safeName).join('/');
     const {error}=await sb.storage.from('belege').upload(path, f, {upsert:true, contentType:f.type||'application/octet-stream'}); if(error) throw new Error('Beleg-Upload fehlgeschlagen: '+error.message); return {path, fname}; };
+  // Chat-Anhang in den Speicher legen (Bilder werden zu PDF) → {path,fname}
+  const storeAttachment = async (file, folder, base)=>{ let f=file; try{ f=await imageToPdfFile(file); }catch(e){ f=file; } const nm=f.name||file.name||'datei.pdf'; const ext=(nm.match(/\.[a-z0-9]+$/i)||['.pdf'])[0]; const fname=safeName(base+ext); const path=[...folder,fname].map(safeName).join('/'); const {error}=await sb.storage.from('belege').upload(path, f, {upsert:true, contentType:f.type||'application/octet-stream'}); if(error) throw new Error(error.message); return {path,fname}; };
   const openTabFor = (tab, sub)=>{ const t=String(tab||'').toLowerCase().replace(/[^a-z-]/g,''); const s=String(sub||'').toLowerCase();
     const map={ kunden:'kunden', kunde:'kunden', rechnung:'rechnung', rechnungen:'rechnung', belege:'belege', beleg:'belege', bank:'import', import:'import', kontoauszug:'import', aufgaben:'aufgaben', todo:'aufgaben', todos:'aufgaben', konten:'quellen', konto:'quellen', quellen:'quellen', steuer:'steuer', steuerprognose:'steuer', steuern:'steuern', auswertungen:'steuern', analyse:'yr', yr:'yr', raten:'raten', kredite:'raten', events:'kal', kalender:'kal', kal:'kal', download:'download', kosten:'kosten', sevdesk:'import', settings:'settings', einstellungen:'settings' };
     const id=map[t]; if(!id) return false;
@@ -3198,6 +3248,15 @@ function App({session}) {
         const id=uid(), todoId=uid(); const res=mutate(d=>ACT.addLetter(d, { ...input, filePath:(fileInfo&&fileInfo.path)||'', fileName:(fileInfo&&fileInfo.fname)||'' }, { id, todoId, today }));
         turnActionRef.current={ type:'letterTodo', todoId, hasReply:!!res.todo.replyDraft, deadline:res.letter.deadline||'' };
         return { ok:true, todoId, titel:res.todo.title, frist:res.letter.deadline||null, antwortEntwurf:!!res.todo.replyDraft, brief:fileInfo&&!fileInfo.error?'Datei gespeichert':(fileInfo&&fileInfo.error?('Datei nicht gespeichert: '+fileInfo.error):'ohne Datei') }; }
+      case 'save_payable': { const acct=ACT.resolveAccount(input.account, N()); need(acct,'Konto „'+(input.account||'')+'" nicht gefunden.'); const file=botAttachmentRef.current; let fi=null;
+        if(file){ try{ fi=await storeAttachment(file, ['Zahlungen', accLabel(acct)], [input.payee, today].filter(Boolean).join('_')); }catch(e){ fi={error:String(e.message||e)}; } }
+        const id=uid(), todoId=uid(); const res=mutate(d=>ACT.addPayable(d, { ...input, filePath:(fi&&fi.path)||'', fileName:(fi&&fi.fname)||'' }, { id, todoId, today, account:acct }));
+        turnActionRef.current={ type:'letterTodo', todoId, hasReply:false, deadline:res.payable.due||'' };
+        return { ok:true, konto:accLabel(acct), titel:res.todo.title, faellig:res.payable.due||null, hinweis:'Wird beim nächsten Kontoauszug automatisch abgehakt bzw. nachgefragt.', datei:fi&&!fi.error?'gespeichert':(fi&&fi.error?('nicht gespeichert: '+fi.error):'ohne Datei') }; }
+      case 'file_tax_document': { const acct=input.account?ACT.resolveAccount(input.account, N()):'unter'; const file=botAttachmentRef.current; const yr0=Number(input.year)||new Date().getFullYear(); const cat=ACT.TAX_CATS.includes(input.category)?input.category:'Sonstiges'; let fi=null;
+        if(file){ try{ fi=await storeAttachment(file, ['Steuer', String(yr0), cat], [input.title, today].filter(Boolean).join('_')); }catch(e){ fi={error:String(e.message||e)}; } }
+        const id=uid(); const res=mutate(d=>ACT.addTaxDoc(d, { ...input, year:yr0, category:cat, filePath:(fi&&fi.path)||'', fileName:(fi&&fi.fname)||'' }, { id, today, account:acct||'unter' }));
+        return { ok:true, jahr:res.doc.year, kategorie:res.doc.category, ordner:'Steuer/'+res.doc.year+'/'+res.doc.category, datei:fi&&!fi.error?'gespeichert':(fi&&fi.error?('nicht gespeichert: '+fi.error):'ohne Datei') }; }
       case 'search_letters': { const list=ACT.listLetters(D(), { query:input.query, limit:input.limit||10 }); return { anzahl:list.length, briefe:list }; }
       case 'draft_email': { const td=input.todo_id?ACT.findTodo(D(), input.todo_id):null; const rd=(td&&td.replyDraft)||{}; setMailCompose({ inv:null, to:input.to||rd.to||'', subject:input.subject||rd.subject||'', body:input.body||rd.body||'', sending:false, todoId:td?td.id:null }); return { ok:true, hinweis:'E-Mail-Entwurf geöffnet – der Nutzer prüft und klickt selbst auf „Senden".' }; }
       case 'create_todo': { const res=mutate(d=>ACT.addTodo(d, input, uid())); return { ok:true, id:res.todo.id, titel:res.todo.title }; }
@@ -3782,11 +3841,12 @@ function App({session}) {
   const openBelegCount = (()=>{ try{ return openBelegeList().length; }catch(e){ return 0; } })();
   const overdueCount = (()=>{ try{ return overdueInvoices().length; }catch(e){ return 0; } })();
   const rightGap = isMobile?0:(botOpen?botWidth:(todoDetail?420:0));
-  const MORE_TABS=['raten','yr','kal','download','kosten'];
+  const MORE_TABS=['steuerdocs','raten','yr','kal','download','kosten'];
   const moreActive = MORE_TABS.includes(tab) || (tab==='import'&&importTab==='sevdesk');
   const acctTabActive = (tab==='quellen'&&!!openAcct)||tab==='immo'||tab==='unter'||tab==='privat';
   const MORE_ITEMS=[
     {id:'sevdesk',label:'Umzug aus sevDesk',icon:P.swap,active:(tab==='import'&&importTab==='sevdesk'),onClick:()=>{setTab('import');setImportTab('sevdesk');}},
+    {id:'steuerdocs',label:'Steuerunterlagen',icon:P.doc},
     {id:'raten',label:'Raten & Kredite',icon:P.wallet},
     {id:'yr',label:'Analyse',icon:P.chart},
     {id:'kal',label:'Events',icon:P.cal},
@@ -3796,11 +3856,10 @@ function App({session}) {
   const openFlyout=(kind)=>(e)=>{ const r=e.currentTarget.getBoundingClientRect(); setFlyout(f=>f&&f.kind===kind?null:{kind,top:Math.max(10,Math.min(r.top,window.innerHeight-360))}); };
   const goAcct=(k)=>{ if(PROPS.includes(k)) setSp(k); setOpenAcct(k); setTab('quellen'); setFlyout(null); };
   const SIDE_NAV=[
-    {key:'home',id:'quellen',label:'Übersicht',icon:P.grid,active:(tab==='quellen'&&!openAcct),onClick:()=>{ setOpenAcct(null); setTab('quellen'); }},
-    {key:'konten',id:'konten',label:'Konten',icon:P.wallet,active:acctTabActive||flyout?.kind==='konten',flyout:'konten'},
-    {id:'rechnung',label:'Rechnungen',icon:P.receipt,badge:overdueCount},
+    {key:'konten',id:'quellen',label:'Konten',icon:P.grid,active:(tab==='quellen')||acctTabActive,onClick:()=>{ setOpenAcct(null); setTab('quellen'); }},
     {id:'aufgaben',label:'To-do',icon:P.check,badge:openTodoCount},
     {section:'Verwalten'},
+    {id:'rechnung',label:'Rechnungen',icon:P.receipt,badge:overdueCount},
     {id:'belege',label:'Belege',icon:P.clip,badge:openBelegCount},
     {key:'bank',id:'import',label:'Bank',icon:P.bank,badge:drafts.length,active:(tab==='import'&&importTab!=='sevdesk'),onClick:()=>{setTab('import');setImportTab('bank');}},
     {id:'wied',label:'Wiederkehrend',icon:P.swap},
@@ -3817,6 +3876,18 @@ function App({session}) {
       {list.map(k=>{ const on=cur===k.key; const c=acol(k.key); return (
         <button key={k.key} onClick={()=>goAcct(k.key)} style={{display:'flex',alignItems:'center',gap:8,background:on?hexA(c,0.28):C.surf,border:'1px solid '+(on?hexA(c,0.7):C.bdr),color:C.txt,borderRadius:999,padding:'8px 14px',fontSize:13.5,fontWeight:on?700:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',flexShrink:0}}><span style={{width:9,height:9,borderRadius:'50%',background:c}}/>{k.name}</button>); })}
       <button onClick={()=>setAddAcctOpen(true)} title="Neues Konto" style={{width:34,height:34,borderRadius:'50%',background:'none',border:'1.5px dashed '+C.bdrM,color:C.sub,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.plus} sz={15} col="currentColor"/></button>
+    </div>); };
+  // Offene Zahlungen des geöffneten Kontos (aus hochgeladenen Rechnungen/Bescheiden)
+  const payablesCard=()=>{ const list=(data.payables||[]).filter(p=>p.status==='offen'&&p.account===activeAcct); if(!list.length) return null; return (
+    <div style={{...SC,marginBottom:16,padding:'14px 16px'}}>
+      <div style={{fontSize:12,fontWeight:700,color:C.sub,letterSpacing:'0.03em',marginBottom:8}}>OFFENE ZAHLUNGEN · {fmt(list.reduce((t,p)=>t+p.amount,0))}</div>
+      {list.map((p,i)=>{ const late=p.due&&p.due<new Date().toISOString().slice(0,10); return (
+        <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderTop:i?'1px solid '+C.sep:'none'}}>
+          <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:600,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.payee}</div><div style={{fontSize:12,color:late?C.red:C.sub}}>{p.due?('fällig '+p.due.split('-').reverse().join('.')):'ohne Frist'}{p.reference?' · '+p.reference:''}</div></div>
+          <div style={{fontSize:14.5,fontWeight:700,...NUM}}>{fmt(p.amount)}</div>
+          {p.filePath && <button onClick={()=>openFile(p.filePath,p.fileName)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.sub,borderRadius:9,padding:'6px 10px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Beleg</button>}
+          <button onClick={()=>setData(prev=>({...prev,payables:(prev.payables||[]).map(x=>x.id===p.id?{...x,status:'bezahlt',paidAt:new Date().toISOString().slice(0,10)}:x),todos:(prev.todos||[]).map(t=>t.payableId===p.id?{...t,done:true,doneAt:new Date().toISOString()}:t)}))} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'7px 12px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Bezahlt</button>
+        </div>); })}
     </div>); };
   const navBtn=(item)=>{ const active=item.active!=null?item.active:(tab===item.id); const badge=item.badge||0; return (
     <button key={item.key||item.id} className="railBtn" onClick={item.flyout?openFlyout(item.flyout):(item.onClick||(()=>setTab(item.id)))} style={{display:'flex',alignItems:'center',gap:11,width:'100%',height:42,borderRadius:12,padding:sideOpen?'0 12px':0,justifyContent:sideOpen?'flex-start':'center',background:active?C.surf2:'transparent',color:active?C.txt:C.sub,fontFamily:'inherit',fontSize:14.5,fontWeight:active?700:500,position:'relative',flexShrink:0}}>
@@ -4065,7 +4136,7 @@ function App({session}) {
 
           {/* ══ EINSTELLUNGEN (Profil) ══ */}
           {tab==='settings' && (()=>{
-            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'abo',l:'Abo & Guthaben',ic:P.brief},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send},{k:'admin',l:'Admin',ic:P.gear}].filter(t=>!SOLO_MODE || !['abo','team','berater'].includes(t.k));
+            const STABS=[{k:'profil',l:'Profil',ic:P.prson},{k:'abo',l:'Abo & Guthaben',ic:P.brief},{k:'konten',l:'Konten & Rechnung',ic:P.brief},{k:'team',l:'Team',ic:P.prson},{k:'berater',l:'Steuerberater',ic:P.spark},{k:'gmail',l:'Gmail',ic:P.mail},{k:'email-import',l:'E-Mail-Weiterleitung',ic:P.send}].filter(t=>!SOLO_MODE || !['abo','team','berater'].includes(t.k));
             const eur = (c)=> (c==null?'—':((c/100).toFixed(2).replace('.',',')+' €'));
             const sAcct = bizAccts.includes(settingsAcct)?settingsAcct:(bizAccts[0]||'unter');
             const fldL={...SS,textAlign:'left'};
@@ -4084,6 +4155,16 @@ function App({session}) {
                 );})}
               </div>
 
+              {settingsTab==='profil' && (
+                <div style={{...SC,marginTop:16,border:'1px solid '+hexA(C.red,0.35)}}>
+                  <div style={{fontSize:15,fontWeight:700,color:C.txt,marginBottom:4}}>Alles löschen &amp; neu starten</div>
+                  <div style={{fontSize:12.5,color:C.sub,lineHeight:1.55,marginBottom:12}}>Löscht Buchungen, Rechnungen, Kunden, To-dos, Briefe, Bank-Entwürfe, Zusatz-Konten <b>und alle hochgeladenen Belege/PDFs</b>. Firmen-Stammdaten, Profil und Assistent-Einstellungen bleiben. Vorher wird automatisch eine Sicherung (JSON) heruntergeladen. Danach kannst du z. B. sevDesk neu importieren.</div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                    <input value={resetTxt} onChange={e=>setResetTxt(e.target.value)} placeholder="Zum Bestätigen LÖSCHEN tippen" style={{...SS,flex:1,minWidth:200,textAlign:'left'}}/>
+                    <button disabled={resetBusy||resetTxt.trim().toUpperCase()!=='LÖSCHEN'} onClick={resetEverything} style={{background:C.red,color:'#fff',border:'none',borderRadius:11,padding:'11px 18px',fontSize:13.5,fontWeight:700,cursor:resetTxt.trim().toUpperCase()==='LÖSCHEN'?'pointer':'not-allowed',opacity:resetTxt.trim().toUpperCase()==='LÖSCHEN'?1:0.45,fontFamily:'inherit'}}>{resetBusy?'Löscht…':'Alles löschen'}</button>
+                  </div>
+                </div>
+              )}
               {settingsTab==='profil' && (
                 <div style={{...SC,marginBottom:12,maxWidth:600}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:14}}>Persönliches Profil</div>
@@ -4291,78 +4372,6 @@ function App({session}) {
                 </div>
               </>)}
 
-              {settingsTab==='admin' && (<>
-                <div style={{fontSize:12,color:C.mut,marginBottom:14}}>Dieser Bereich ist nur für dich sichtbar.</div>
-                {/* Zurücksetzen */}
-                <div style={{...SC,marginBottom:12,border:'1px solid '+hexA(C.red,0.35)}}>
-                  <div style={{fontSize:15,fontWeight:700,color:C.txt,marginBottom:4}}>Alle Inhalte zurücksetzen</div>
-                  <div style={{fontSize:12.5,color:C.sub,lineHeight:1.55,marginBottom:12}}>Löscht Buchungen, Rechnungen, Kunden, To-dos, Briefe, Bank-Entwürfe und Zusatz-Konten – die App startet danach leer. Firmen-Stammdaten, Profil, Farben und Assistent-Einstellungen bleiben erhalten. Vorher wird automatisch eine Sicherung (JSON) heruntergeladen.</div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                    <input value={resetTxt} onChange={e=>setResetTxt(e.target.value)} placeholder="Zum Bestätigen ZURÜCKSETZEN tippen" style={{...SS,flex:1,minWidth:200,textAlign:'left'}}/>
-                    <button disabled={resetTxt.trim().toUpperCase()!=='ZURÜCKSETZEN'} onClick={()=>{ try{ exportData(); }catch(e){} const keep=['profile','company','companyImmo','companyPrivat','themeColors','assistant','taxProfile',...PROPS.map(k=>'company_'+k)]; setData(prev=>{ const nd={}; keep.forEach(k=>{ if(prev[k]!==undefined) nd[k]=prev[k]; }); return nd; }); setNames(n=>({...PROP_DEFS, unternehmen:n.unternehmen||'Firma', privatLabel:n.privatLabel, cleanedDefaults:true})); setResetTxt(''); setOpenAcct(null); setTab('quellen'); setToast('Alles zurückgesetzt – Sicherung wurde heruntergeladen.'); }} style={{background:C.red,color:'#fff',border:'none',borderRadius:11,padding:'11px 18px',fontSize:13.5,fontWeight:700,cursor:resetTxt.trim().toUpperCase()==='ZURÜCKSETZEN'?'pointer':'not-allowed',opacity:resetTxt.trim().toUpperCase()==='ZURÜCKSETZEN'?1:0.45,fontFamily:'inherit'}}>Zurücksetzen</button>
-                  </div>
-                </div>
-                {/* Farbpalette */}
-                {(()=>{ const colorField=(lbl,val,onCh)=>(<label style={{display:'flex',alignItems:'center',gap:10,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,padding:'8px 10px',cursor:'pointer',flex:1,minWidth:150}}><input type="color" value={(val&&/^#[0-9a-fA-F]{6}$/.test(val))?val:'#000000'} onChange={e=>onCh(e.target.value)} style={{width:30,height:30,border:'none',background:'none',padding:0,cursor:'pointer',flexShrink:0}}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:12.5,fontWeight:600,color:C.txt}}>{lbl}</div><div style={{fontSize:11,color:C.mut,...NUM}}>{val}</div></div></label>);
-                  const presets=[{n:'Lime',c:{pri:'#D8F878',act:'#D8F878',grn:'#B7E85C'}},{n:'Teal',c:{pri:'#5FC7C9',act:'#70B8BA',grn:'#5AD1B0'}},{n:'Peach',c:{pri:'#FFB59A',act:'#FFCCB6',grn:'#F2C14E'}},{n:'Violett',c:{pri:'#B8A9E8',act:'#B8A9E8',grn:'#9AD16A'}}];
-                  return (
-                <div style={{...SC,marginBottom:12}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}}>
-                    <div style={{fontSize:14,fontWeight:700,color:C.txt}}>Farbpalette</div>
-                    <div style={{fontSize:11,fontWeight:600,color:C.pri,background:C.priL,borderRadius:7,padding:'3px 9px'}}>bearbeitet: {isDark?'Dunkel-Modus':'Hell-Modus'}</div>
-                  </div>
-                  <div style={{fontSize:12,color:C.mut,lineHeight:1.5,marginBottom:14}}>Passt die Akzentfarben live an. Wird pro Modus (Hell/Dunkel) gespeichert. Über den Profil-Umschalter kannst du den Modus wechseln.</div>
-                  <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:8,letterSpacing:'0.03em'}}>SCHNELL-VORSCHLÄGE</div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
-                    {presets.map(p=>(<button key={p.n} onClick={()=>setThemeColorsBulk(p.c)} style={{display:'flex',alignItems:'center',gap:8,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,padding:'7px 11px',fontSize:12.5,fontWeight:600,color:C.txt,cursor:'pointer',fontFamily:'inherit'}}><span style={{display:'flex',gap:3}}><span style={{width:12,height:12,borderRadius:3,background:p.c.act}}/><span style={{width:12,height:12,borderRadius:3,background:p.c.grn}}/></span>{p.n}</button>))}
-                  </div>
-                  <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:8,letterSpacing:'0.03em'}}>AKZENTE</div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
-                    {colorField('Primär (Akzent)',C.pri,v=>setThemeColor('pri',v))}
-                    {colorField('Aktion (Buttons)',C.act,v=>setThemeColor('act',v))}
-                  </div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
-                    {colorField('Akzent (sparsam)',C.accent,v=>setThemeColor('accent',v))}
-                    {colorField('Positiv / Summe',C.grn,v=>setThemeColor('grn',v))}
-                    {colorField('Ausgaben',C.exp,v=>setThemeColor('exp',v))}
-                  </div>
-                  <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:8,letterSpacing:'0.03em'}}>KONTO-FARBEN</div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
-                    {[...bizAccts,'privat'].map(k=>colorField(acctNameOf(k),acol(k),v=>setAcctColorOverride(k,v)))}
-                  </div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                    <button onClick={()=>{ resetThemeColors(); setToast('Akzentfarben zurückgesetzt'); }} style={{...BVm}}>Akzente zurücksetzen</button>
-                    <button onClick={()=>{ resetAcctColors(); setToast('Konto-Farben zurückgesetzt'); }} style={{...BVm}}>Konto-Farben zurücksetzen</button>
-                  </div>
-                </div>
-                  ); })()}
-                <div style={{...SC,marginBottom:12}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-                    <div style={{fontSize:12,fontWeight:600,color:C.sub}}>Online-Speicher · Belege & Verträge</div>
-                    <button onClick={loadStorage} title="Neu berechnen" style={BVm}>↻</button>
-                  </div>
-                  {storageInfo ? (()=>{
-                    const mb=storageInfo.total/1048576, limit=1024, pct=Math.min(100,mb/limit*100);
-                    return (<>
-                      <div style={{height:8,background:C.surf3,borderRadius:99,overflow:'hidden',marginBottom:8}}>
-                        <div style={{height:'100%',width:pct+'%',background:pct>85?C.red:C.pri,borderRadius:99}} />
-                      </div>
-                      <div style={{fontSize:12,color:C.sub}}>{mb.toFixed(mb<10?2:1)} MB von 1.024 MB belegt · {storageInfo.files} {storageInfo.files===1?'Datei':'Dateien'}</div>
-                    </>);
-                  })() : (
-                    <div style={{fontSize:12,color:C.mut}}>{storageLoading?'Wird berechnet…':'—'}</div>
-                  )}
-                </div>
-                <div style={{...SC,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
-                  <div>
-                    <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:2}}>Daten exportieren</div>
-                    <div style={{fontSize:12,color:C.mut,lineHeight:1.5}}>Alle Zahlen als Datei (.json) – z. B. zur Auswertung oder als Sicherung.</div>
-                  </div>
-                  <button onClick={exportData} style={{display:'flex',alignItems:'center',gap:7,background:C.priL,border:'none',color:C.pri,borderRadius:10,padding:'9px 16px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>
-                    <Ic p={P.upload} sz={15} col={C.pri}/> Exportieren
-                  </button>
-                </div>
-              </>)}
             </>
             );
           })()}
@@ -4378,7 +4387,7 @@ function App({session}) {
                 {[
                   // Auf dem Desktop haben Rechnungen/Bank/Kunden/Aufgaben schon ein eigenes Icon in der Rail — hier nur auf Mobile zusätzlich zeigen (dort gibt's keine Rail).
                   ...(isMobile?[{id:'belege',label:'Belege',icon:P.clip},{id:'rechnung',label:'Rechnungen',icon:P.receipt},{id:'kunden',label:'Kunden',icon:P.prson},{id:'aufgaben',label:'To-do',icon:P.check},{id:'import',label:'Bank / Kontoauszug',icon:P.bank,onClick:()=>{setTab('import');setImportTab('bank');}}]:[]),
-                  {id:'wied',label:'Wiederkehrend',icon:P.swap},{id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.percent},{id:'sevdesk',label:'Umzug aus sevDesk',icon:P.swap,onClick:()=>{setTab('import');setImportTab('sevdesk');}},{id:'kosten',label:'KI-Kosten',icon:P.layers},{id:'settings',label:'Einstellungen',icon:P.gear},
+                  {id:'wied',label:'Wiederkehrend',icon:P.swap},{id:'steuerdocs',label:'Steuerunterlagen',icon:P.doc},{id:'raten',label:'Raten & Kredite',icon:P.bank},{id:'steuern',label:'Steuern (UStVA · EÜR · GuV · BWA · SuSa · DATEV)',icon:P.doc},{id:'download',label:'Download',icon:P.down},{id:'yr',label:'Analyse',icon:P.cal},{id:'steuer',label:'Steuerprognose & Optimierung',icon:P.percent},{id:'sevdesk',label:'Umzug aus sevDesk',icon:P.swap,onClick:()=>{setTab('import');setImportTab('sevdesk');}},{id:'kosten',label:'KI-Kosten',icon:P.layers},{id:'settings',label:'Einstellungen',icon:P.gear},
                 ].map(m=>(
                   <button key={m.id} onClick={m.onClick||(()=>setTab(m.id))} style={{display:'flex',alignItems:'center',gap:13,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'15px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:16,fontWeight:600,textAlign:'left'}}>
                     <Ic p={m.icon} sz={19} col={C.sub}/> <span style={{flex:1}}>{m.label}</span> <span style={{color:C.mut}}>›</span>
@@ -4396,7 +4405,7 @@ function App({session}) {
             const picon=(pid)=>ICONS[(names.propIcon&&names.propIcon[pid])||'house']||P.house;
             return (
             <>
-              {acctBar()}
+              {acctBar()}{payablesCard()}
               {tab!=='home' && (
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
                 <div style={{width:42,height:42,borderRadius:13,flexShrink:0,background:pcol(sp),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={picon(sp)} sz={20} col={'#0A0A0A'}/></div>
@@ -4508,7 +4517,7 @@ function App({session}) {
           {/* ══ UNTERNEHMEN ══ */}
           {(tab==='unter' || (tab==='quellen' && openAcct==='unter')) && <>
             {tab!=='home' && (<>
-              {acctBar()}
+              {acctBar()}{payablesCard()}
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
                 <div style={{width:42,height:42,borderRadius:13,flexShrink:0,background:acol('unter'),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={(({house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc})[(names.propIcon&&names.propIcon.unter)||'brief'])||P.brief} sz={20} col={'#0A0A0A'}/></div>
                 <div style={{fontSize:28,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{names.unternehmen}</div>
@@ -4580,7 +4589,7 @@ function App({session}) {
           {/* ══ PRIVAT ══ */}
           {(tab==='privat' || (tab==='quellen' && openAcct==='privat')) && <>
             {tab!=='home' && (<>
-              {acctBar()}
+              {acctBar()}{payablesCard()}
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
                 <div style={{width:42,height:42,borderRadius:13,flexShrink:0,background:acol('privat'),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={(({house:P.house,bed:P.bed,brief:P.brief,prson:P.prson,grid:P.grid,cal:P.cal,doc:P.doc})[(names.propIcon&&names.propIcon.privat)||'prson'])||P.prson} sz={20} col={'#0A0A0A'}/></div>
                 <div style={{fontSize:28,fontWeight:800,color:C.txt,letterSpacing:'-0.03em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{names.privatLabel||'Privat'}</div>
@@ -5042,6 +5051,18 @@ function App({session}) {
                     <div style={{display:'flex',flexDirection:isMobile?'column':'row-reverse',gap:28,alignItems:'flex-start'}}>
                       {/* RECHTS (Felder) – per row-reverse rechts, Vorschau links wie beim Beleg-Erfassen */}
                       <div style={{flex:1,minWidth:0,width:isMobile?'100%':'auto',display:'flex',flexDirection:'column',gap:6}}>
+                      <div style={{marginBottom:20,padding:'14px 16px',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14}}>
+                        <div style={{fontSize:12,fontWeight:700,color:C.sub,marginBottom:9,letterSpacing:'0.03em'}}>DIESE RECHNUNG GEHÖRT ZU KONTO <span style={{color:C.red}}>*</span></div>
+                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                          {acctOpts.map(o=>{ const on=invEdit.account===o.k; const col=acol(o.k); return (
+                            <button key={o.k} onClick={()=>setI({account:o.k, domain:o.k, items:(invEdit.items||[]).map(it=>({...it,mwst:(it.desc||num(it.price))?it.mwst:defMwstFor(o.k)}))})} style={{display:'flex',alignItems:'center',gap:8,background:on?hexA(col,0.22):C.surf2,border:'1.5px solid '+(on?col:C.bdr),color:C.txt,borderRadius:999,padding:'8px 14px',fontSize:13.5,fontWeight:on?700:600,cursor:'pointer',fontFamily:'inherit'}}><span style={{width:10,height:10,borderRadius:'50%',background:col,flexShrink:0}}/>{o.label}{on&&<Ic p={P.check} sz={13} col={C.txt}/>}</button>
+                          ); })}
+                        </div>
+                        {invEdit.account ? (()=>{ const co1=companyFor(invEdit.account)||{}; const ok=!!(co1.name&&co1.address); return (
+                          <div style={{marginTop:12,fontSize:12.5,lineHeight:1.55,color:ok?C.sub:C.amb,background:ok?C.surf2:C.ambL,borderRadius:10,padding:'10px 12px'}}>
+                            {ok ? <><b style={{color:C.txt}}>Absender auf der Rechnung:</b> {co1.name}, {String(co1.address).replace(/\n/g,', ')}</> : <>Für dieses Konto fehlen Firmenname/Adresse. <button onClick={()=>{ setInvEdit(null); setSettingsTab('konten'); setSettingsAcct(invEdit.account); setTab('settings'); }} style={{background:'none',border:'none',color:C.pri,fontWeight:700,cursor:'pointer',fontFamily:'inherit',fontSize:12.5,padding:0}}>In den Einstellungen eintragen →</button></>}
+                          </div>); })() : <div style={{marginTop:10,fontSize:12.5,color:C.mut}}>Wähle zuerst das Konto – Absender-Adresse, Bankdaten und Kundenliste kommen aus den Einstellungen dieses Kontos.</div>}
+                      </div>
                       <div style={{marginBottom:20,display:'flex',flexDirection:'column',gap:14}}>
                         <div>
                           <div style={{fontSize:12,color:C.sub,marginBottom:6}}>Kunde <span style={{color:C.mut}}>(optional – bestehenden wählen oder unten neu eingeben)</span></div>
@@ -5104,15 +5125,6 @@ function App({session}) {
                       <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Notiz (optional, erscheint auf der Rechnung)</div><textarea value={invEdit.note||''} onChange={e=>setI({note:e.target.value})} rows={2} style={{...fld,resize:'vertical'}}/></div>
                       {/* Footertext */}
                       <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Footertext (Abschluss)</div><textarea value={invFooter(invEdit)} onChange={e=>setI({footerText:e.target.value})} rows={3} style={{...fld,resize:'vertical'}}/></div>
-                      {/* Konto-Zuordnung – farbige Boxen, standardmäßig keine Auswahl */}
-                      <div style={{marginBottom:12}}>
-                        <div style={{fontSize:12,fontWeight:600,color:C.sub,marginBottom:8}}>Diese Rechnung gehört zu Konto <span style={{color:C.red}}>*</span></div>
-                        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                          {acctOpts.map(o=>{ const on=invEdit.account===o.k; const col=acctColor(o.k); return (
-                            <button key={o.k} onClick={()=>setI({account:on?'':o.k})} style={{display:'flex',alignItems:'center',gap:8,background:on?hexA(col,0.16):C.surf2,border:'1.5px solid '+(on?col:C.bdr),color:on?C.txt:C.sub,borderRadius:11,padding:'9px 14px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><span style={{width:11,height:11,borderRadius:'50%',background:col,flexShrink:0}}/>{o.label}{on&&<Ic p={P.check} sz={14} col={col}/>}</button>
-                          ); })}
-                        </div>
-                      </div>
                       {!invValid && <div style={{fontSize:12,color:C.amb,background:C.ambL,border:'1px solid rgba(255,180,0,0.25)',borderRadius:10,padding:'10px 12px',marginBottom:12}}>Pflichtfelder: Name (oder Firma), Adresse und Konto. Ein Kunde muss nicht ausgewählt werden.</div>}
                       <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
                         <button onClick={saveInvoice} disabled={!invValid} style={{...primBtn,flex:2,minWidth:180,opacity:invValid?1:0.5,cursor:invValid?'pointer':'default'}}>Buchen</button>
@@ -5153,14 +5165,14 @@ function App({session}) {
 
             return (
               <>
-                <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em',marginBottom:16}}>Rechnungen</div>
+                <div style={{fontSize:isMobile?28:34,fontWeight:800,letterSpacing:'-0.03em',marginBottom:14}}>Rechnungen</div>
                 {showAcctSel && (
-                  <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
-                    {[{k:'alle',label:'Alle'},...bizAccts.map(k=>({k,label:acctNameOf(k)}))].map(o=>{const on=invDomain===o.k; const col=o.k==='alle'?C.pri:acol(o.k); const ic=o.k==='alle'?P.grid:acctIconOf(o.k); return (
-                      <button key={o.k} onClick={()=>{setInvDomain(o.k);setInvSearch('');}} style={{display:'flex',alignItems:'center',gap:6,background:on?hexA(col,0.16):C.surf2,border:'1px solid '+(on?hexA(col,0.4):C.bdr),color:on?col:C.mut,borderRadius:10,padding:'7px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={ic} sz={13} col={on?col:C.surf3}/>{o.label}</button>
-                    ); })}
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:isMobile?'nowrap':'wrap',overflowX:isMobile?'auto':'visible',marginBottom:14}}>
+                    {[{k:'alle',label:'Alle'},...bizAccts.map(k=>({k,label:acctNameOf(k)}))].map(o=>{ const on=invDomain===o.k; const c=o.k==='alle'?C.pri:acol(o.k); return (
+                      <button key={o.k} onClick={()=>{setInvDomain(o.k);setInvSearch('');}} style={{display:'flex',alignItems:'center',gap:8,background:on?hexA(c,0.22):C.surf,border:'1px solid '+(on?hexA(c,0.6):C.bdr),color:C.txt,borderRadius:999,padding:'8px 14px',fontSize:13.5,fontWeight:on?700:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',flexShrink:0}}>{o.k==='alle'?<Ic p={P.grid} sz={14} col={C.sub}/>:<span style={{width:9,height:9,borderRadius:'50%',background:c}}/>}{o.label}</button>); })}
                   </div>
                 )}
+                <div style={{marginBottom:16}}><PillTabs tabs={[['einzel','Einmalig'],['wied','Wiederkehrend']]} value={invKind} onChange={(k)=>{setInvKind(k);setInvSearch('');}} /></div>
                 <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}>
                   <div style={{flex:1,minWidth:180,position:'relative'}}>
                     <span style={{position:'absolute',left:13,top:'50%',transform:'translateY(-50%)',pointerEvents:'none',display:'inline-flex'}}><Ic p={P.search} sz={15} col={C.mut}/></span>
@@ -5441,6 +5453,7 @@ function App({session}) {
                             {t.title}
                             {t.source==='ai' && <span style={{fontSize:10,fontWeight:800,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 7px'}}>KI</span>}
                             {t.source==='brief' && <span style={{fontSize:10,fontWeight:800,color:C.txt,background:C.surf3,borderRadius:6,padding:'2px 7px'}}>Brief</span>}
+                            {t.source==='payable' && <span style={{fontSize:10,fontWeight:800,color:C.txt,background:C.surf3,borderRadius:6,padding:'2px 7px'}}>Zahlung</span>}
                             {t.source==='bank' && <span style={{fontSize:10,fontWeight:800,color:C.txt,background:C.surf3,borderRadius:6,padding:'2px 7px'}}>Bank</span>}
                             {t.dueDate && !t.done && (()=>{ const days=Math.ceil((new Date(t.dueDate)-new Date(new Date().toISOString().slice(0,10)))/86400000); const col=days<0?C.red:days<=7?C.amb:C.sub; return <span style={{fontSize:10.5,fontWeight:800,color:col,background:hexA(col,0.14),borderRadius:6,padding:'2px 7px'}}>{days<0?('Frist überschritten · '+t.dueDate.split('-').reverse().join('.')):days===0?'Frist heute':('Frist '+t.dueDate.split('-').reverse().join('.')+(days<=14?' · '+days+' Tg.':''))}</span>; })()}
                             {t.flaggedByAdvisor && <span style={{fontSize:10,fontWeight:800,color:idealText(C.accent),background:C.accent,borderRadius:6,padding:'2px 7px'}}>Steuerberater</span>}
@@ -5520,6 +5533,24 @@ function App({session}) {
             );
           })()}
           {/* ══ RATEN & KREDITE (Sonstiges): laufende Ratenzahlungen/Kredite mit Buchungs-Verknüpfung + Fortschritt ══ */}
+          {/* ══ STEUERUNTERLAGEN ══ */}
+          {tab==='steuerdocs' && (()=>{ const docs=(data.taxDocs||[]).slice().sort((a,b)=>(b.year-a.year)||String(a.category).localeCompare(b.category)); const years=[...new Set(docs.map(d=>d.year))]; const yF=(taxDocY&&years.includes(taxDocY))?taxDocY:(years[0]||null); const shown=docs.filter(d=>d.year===yF); const cats=[...new Set(shown.map(d=>d.category))];
+            return (<>
+              <div style={{fontSize:isMobile?28:34,fontWeight:800,letterSpacing:'-0.03em'}}>Steuerunterlagen</div>
+              <div style={{fontSize:13,color:C.sub,marginTop:4,marginBottom:16}}>Alles, was du für die Steuererklärung brauchst – sortiert nach Jahr und Kategorie. Lade Belege im Assistenten hoch, er legt sie hier ab.</div>
+              {years.length>0 && <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>{years.map(y=>{ const on=y===yF; return <button key={y} onClick={()=>setTaxDocY(y)} style={{background:on?C.txt:C.surf,border:'1px solid '+(on?C.txt:C.bdr),color:on?C.bg:C.sub,borderRadius:999,padding:'7px 15px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{y}</button>; })}</div>}
+              {docs.length===0 ? <div style={{...SC,textAlign:'center',padding:'34px 20px',color:C.sub,fontSize:14,lineHeight:1.6}}>Noch keine Unterlagen. Häng im Assistenten z. B. eine Spendenquittung oder einen Steuerbescheid an – er erkennt, ob es steuerrelevant ist, und legt es hier ab.</div>
+              : cats.map(c=>(<div key={c} style={{...SC,marginBottom:12,padding:'8px 8px'}}>
+                <div style={{fontSize:12,fontWeight:700,color:C.sub,letterSpacing:'0.03em',padding:'8px 10px'}}>{c.toUpperCase()}</div>
+                {shown.filter(d=>d.category===c).map((d,i)=>(<div key={d.id} style={{display:'flex',alignItems:'center',gap:10,padding:'11px 10px',borderTop:'1px solid '+C.sep}}>
+                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:14.5,fontWeight:600,color:C.txt}}>{d.title}</div><div style={{fontSize:12,color:C.sub}}>{accLabel(d.account)}{d.note?' · '+d.note:''}</div></div>
+                  {d.amount!=null && <div style={{fontSize:14.5,fontWeight:700,...NUM}}>{fmt(d.amount)}</div>}
+                  {d.filePath && <button onClick={()=>openFile(d.filePath,d.fileName)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 12px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Ansehen</button>}
+                  <button onClick={()=>askConfirm('„'+d.title+'" löschen? Die Datei wird ebenfalls entfernt.',async()=>{ try{ if(d.filePath) await sb.storage.from('belege').remove([d.filePath]); }catch(e){} setData(prev=>({...prev,taxDocs:(prev.taxDocs||[]).filter(x=>x.id!==d.id)})); })} title="Löschen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:18,fontFamily:'inherit'}}>×</button>
+                </div>))}
+              </div>))}
+            </>); })()}
+
           {/* ══ WIEDERKEHREND (alle Fixposten an einem Ort) ══ */}
           {tab==='wied' && (()=>{
             const M3=(f)=>f&&f.y!=null?(MONTHS[f.m].slice(0,3)+' '+f.y):'';
@@ -6556,7 +6587,7 @@ function App({session}) {
           </div>
           <button onClick={()=>setIconPick(null)} style={{width:'100%',background:curCol,color:'#0A0A0A',border:'none',borderRadius:12,padding:'13px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginTop:18}}>Fertig</button>
           {ak!=='privat' && ak!=='unter' && (
-            <button onClick={()=>{ const key=ak; askConfirm('Konto "'+acctNameOf(key)+'" wirklich löschen? Alle Buchungen und Inserate dieses Kontos werden entfernt.', ()=>{ setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); Object.keys(nd).forEach(y=>{ if(!/^\d+$/.test(y)) return; Object.keys(nd[y]||{}).forEach(m=>{ const md0=nd[y][m]; if(md0&&md0.props&&md0.props[key]) md0.props[key]=emptyProp(); }); }); return nd; }); setNames(n=>{ const nn={...n}; nn[key]=PROP_DEFS[key]; ['acctKind','acctColors','propIcon','inserate'].forEach(f=>{ if(nn[f]&&nn[f][key]!==undefined){ nn[f]={...nn[f]}; delete nn[f][key]; } }); return nn; }); setIconPick(null); if(openAcct===key) setOpenAcct(null); if(tab!=='quellen') setTab('quellen'); setToast('Konto gelöscht'); }); }} style={{width:'100%',background:'none',border:'1px solid '+hexA(C.red,0.4),color:C.red,borderRadius:12,padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',marginTop:10}}>Konto löschen</button>
+            <button onClick={()=>{ const key=ak; askConfirm('Konto "'+acctNameOf(key)+'" wirklich löschen? Buchungen, Rechnungen, Kunden, Raten, To-dos und alle Dateien dieses Kontos werden endgültig entfernt.', ()=>deleteAccountFully(key)); }} style={{width:'100%',background:'none',border:'1px solid '+hexA(C.red,0.4),color:C.red,borderRadius:12,padding:'11px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',marginTop:10}}>Konto löschen</button>
           )}
           {(ak==='privat'||ak==='unter') && (
             <div style={{fontSize:11.5,color:C.mut,textAlign:'center',marginTop:12,lineHeight:1.5}}>{ak==='privat'?'Das Privat-Konto ist geschützt und kann nicht gelöscht werden.':'Das Hauptkonto ist geschützt und kann nicht gelöscht werden.'}</div>

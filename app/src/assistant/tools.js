@@ -280,6 +280,24 @@ export const ASSISTANT_TOOLS = [
     }, ['summary']),
   },
   {
+    name: 'save_payable',
+    description: 'Rechnung/Bescheid/Mahnung, die der Nutzer selbst überweisen muss (Eingangsrechnung, Steuernachzahlung, Versicherungsbeitrag …): legt im richtigen Konto eine „offene Zahlung" und ein To-do mit Frist an. Beim nächsten Kontoauszug wird sie automatisch abgehakt oder der Nutzer erinnert. Für schon bezahlte Belege stattdessen add_booking. Falls der Beleg auch für die Steuer relevant ist, zusätzlich file_tax_document.',
+    input_schema: obj({
+      payee: str('Empfänger/Rechnungssteller.'), amount: numT('Zu zahlender Betrag in Euro.'), due: str('Fällig bis JJJJ-MM-TT (falls genannt).'),
+      reference: str('Rechnungs-/Kunden-/Aktenzeichen bzw. Verwendungszweck.'), iban: str('IBAN des Empfängers (falls genannt).'), note: str('Kurzer Hinweis (optional).'),
+      account: str('Konto, zu dem die Zahlung gehört: ' + ACCOUNT_DESC),
+    }, ['payee', 'amount', 'account']),
+  },
+  {
+    name: 'file_tax_document',
+    description: 'Steuerrelevantes Dokument (Steuerbescheid, Spendenquittung, Handwerkerrechnung, Krankheitskosten, Versicherungsnachweis, Rentenbescheid …) für die Steuererklärung ablegen: Datei landet im Ordner Steuer/<Jahr>/<Kategorie> und in der Liste „Steuerunterlagen". Kann zusätzlich zu save_payable/add_booking genutzt werden.',
+    input_schema: obj({
+      title: str('Bezeichnung, z. B. „Spendenquittung Rotes Kreuz".'), year: intT('Steuerjahr, auf das sich das Dokument bezieht.'),
+      category: str('Kategorie.', { enum: ['Steuerbescheid', 'Spenden', 'Handwerkerleistungen', 'Krankheitskosten', 'Versicherungen', 'Betriebsausgaben/Werbungskosten', 'Vorsorge/Rente', 'Kapitalerträge', 'Sonstiges'] }),
+      amount: numT('Betrag in Euro (optional).'), note: str('Notiz (optional).'), account: str('Konto (optional): ' + ACCOUNT_DESC),
+    }, ['title', 'category']),
+  },
+  {
     name: 'search_letters',
     description: 'Bereits erfasste Briefe im Gedächtnis suchen (Absender, Betreff, Aktenzeichen, Inhalt). Liefert die gespeicherten Zusammenfassungen – der Originalbrief wird nicht erneut gelesen.',
     input_schema: obj({ query: str('Suchbegriff (leer = neueste).'), limit: intT('Max. Treffer (Standard 10).') }),
@@ -334,7 +352,7 @@ export function stepLabel(step) {
     delete_invoice: 'Rechnung gelöscht', move_to_account: (r.moved != null ? r.moved + ' ' : '') + 'Posten umsortiert', send_invoice_email: 'E-Mail-Versand geöffnet', prepare_payment_reminder: 'Mahnung vorbereitet', create_recurring_invoice: 'Wiederkehrende Rechnung angelegt',
     add_booking: (inp.kind === 'ein' ? 'Einnahme' : 'Ausgabe') + ' gebucht' + (inp.name ? ': ' + inp.name : ''), update_booking: 'Buchung geändert', delete_booking: 'Buchung gelöscht',
     add_import_drafts: (r.added != null ? r.added + ' ' : '') + 'Umsätze in den Bank-Import gelegt', extract_attachment_items: 'Datei ausgelesen' + (r.count != null ? ' (' + r.count + ' Posten)' : ''),
-    save_letter: 'Brief abgelegt' + (r.titel ? ': ' + r.titel : ''), search_letters: 'Briefe durchsucht', draft_email: 'E-Mail-Entwurf geöffnet',
+    save_payable: 'Offene Zahlung vermerkt' + (r.titel ? ': ' + r.titel : ''), file_tax_document: 'Steuerunterlage abgelegt', save_letter: 'Brief abgelegt' + (r.titel ? ': ' + r.titel : ''), search_letters: 'Briefe durchsucht', draft_email: 'E-Mail-Entwurf geöffnet',
     create_todo: 'To-do angelegt', update_todo: 'To-do geändert', delete_todo: 'To-do gelöscht',
     update_settings: 'Einstellungen geändert (' + (inp.section || '') + ')', open_app_tab: 'Bereich geöffnet: ' + (inp.tab || ''), set_period: 'Zeitraum gewechselt', export_data: 'Daten exportiert',
   }[n] || n;
@@ -354,7 +372,7 @@ export function buildSystemPrompt(ctx) {
   lines.push('- Fakten NIE erfinden: Zahlen, Kunden, Rechnungen immer über Werkzeuge nachschlagen. Prüfe vor dem Anlegen eines Kunden mit list_customers, ob er schon existiert.');
   lines.push('- Rechnungen: create_invoice zeigt eine Vorschau mit Bestätigungs-Button; sag dem Nutzer nur kurz, dass er bestätigen soll. Bestätigt er per Text ("ja", "passt", "erstellen"), rufe confirm_invoice auf. book_now nur bei ausdrücklichem Wunsch.');
   lines.push('- Löschen (Kunde, Rechnung, Buchung): einmal kurz rückfragen, dann mit confirmed=true ausführen.');
-  lines.push('- Angehängte Dateien liest du selbst: Beleg/Quittung → add_booking (Konto erfragen, wenn unklar); Kontoauszug oder Plattform-Abrechnung → add_import_drafts (bei sehr vielen Umsätzen extract_attachment_items); Auftrags-/Leistungsdaten → create_invoice; Kundenliste → create_customer je Kunde; Brief/Schreiben (Finanzamt, Anwalt, Versicherung, Behörde, Hausverwaltung …) → save_letter (Frist, Schritte, ggf. fertiger Antwortentwurf) und danach in 2–3 Sätzen sagen, was drinsteht und was zu tun ist. Verlangt der Brief eine Antwort und ist eine E-Mail-Adresse bekannt, biete draft_email an – gesendet wird nur nach Klick des Nutzers. Für Fragen zu früheren Briefen erst search_letters, nie raten. Fasse kurz zusammen, was du aus der Datei gelesen hast.');
+  lines.push('- Angehängte Dateien liest du selbst: Beleg/Quittung → add_booking (Konto erfragen, wenn unklar); Kontoauszug oder Plattform-Abrechnung → add_import_drafts (bei sehr vielen Umsätzen extract_attachment_items); Auftrags-/Leistungsdaten → create_invoice; Kundenliste → create_customer je Kunde; Brief/Schreiben (Finanzamt, Anwalt, Versicherung, Behörde, Hausverwaltung …) → save_letter (Frist, Schritte, ggf. fertiger Antwortentwurf) und danach in 2–3 Sätzen sagen, was drinsteht und was zu tun ist. Verlangt der Brief eine Antwort und ist eine E-Mail-Adresse bekannt, biete draft_email an – gesendet wird nur nach Klick des Nutzers. Für Fragen zu früheren Briefen erst search_letters, nie raten. Muss der Nutzer etwas überweisen (Eingangsrechnung, Bescheid mit Betrag, Mahnung) → save_payable im richtigen Konto (Konto aus Kontext/Absender ableiten, bei Unklarheit eine Rückfrage); der nächste Kontoauszug hakt es automatisch ab oder erinnert. Ist etwas für die Steuererklärung relevant (Spenden, Handwerker, Krankheitskosten, Versicherung, Bescheide …) → zusätzlich file_tax_document mit Jahr und Kategorie. Fasse kurz zusammen, was du aus der Datei gelesen hast.');
   lines.push('- Nach Aktionen: in einem Satz sagen, was erledigt ist (mit Nummern/Beträgen). Keine Wiederholung der Frage, keine Einleitungen.');
   lines.push('- Einstellungen: erst get_settings lesen, dann update_settings mit nur den geänderten Feldern.');
   lines.push('- Sortieren (z. B. „ordne alle Rechnungen richtig zu", Immobilie vs. Firma): Rechnungen mit list_invoices (limit hoch, z. B. 500) und Buchungen mit list_bookings lesen, anhand von Kunde, Leistung und Kontonamen entscheiden (Miete, Ferienwohnung, Airbnb, Nebenkosten → Immobilien-Konto; Dienstleistungen, Projekte → Firma), dann nur die falsch liegenden mit move_to_account verschieben. Unklare Fälle nicht raten, sondern am Ende kurz auflisten und nachfragen.');

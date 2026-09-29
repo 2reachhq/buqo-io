@@ -200,3 +200,15 @@ test('Prompt-Cache-Blöcke, Kosten und Verbrauch', () => {
   assert.deepEqual(addUsage(null, { input_tokens: 5, output_tokens: 2 }), { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, calls: 1 });
   assert.ok(ASSISTANT_TOOLS.some(x => x.name === 'save_letter') && ASSISTANT_TOOLS.some(x => x.name === 'draft_email'));
 });
+
+import { addPayable, matchPayables, addTaxDoc } from './actions.js';
+test('Offene Zahlung: anlegen, im Kontoauszug abhaken, sonst nachfragen; Steuerunterlage', () => {
+  const r = addPayable({}, { payee: 'Stadtwerke Köln', amount: 89.9, due: '2026-10-15', reference: 'K-4711', iban: 'DE12 3456' }, { id: 'P1', todoId: 'T1', today: '2026-09-29', account: 'p1' });
+  assert.equal(r.todo.dueDate, '2026-10-15'); assert.equal(r.todo.payableId, 'P1'); assert.equal(r.payable.account, 'p1'); assert.match(r.todo.title, /Überweisen: Stadtwerke Köln – 89,90 €/);
+  const hit = matchPayables(r.data.payables, [{ kind: 'aus', name: 'STADTWERKE KOELN', amount: 89.9, datum: '2026-10-14', note: '' }]);
+  assert.equal(hit.paid.length, 1); assert.equal(hit.missing.length, 0);
+  const miss = matchPayables(r.data.payables, [{ kind: 'aus', name: 'Rewe', amount: 12, datum: '2026-10-20' }]); assert.equal(miss.paid.length, 0); assert.equal(miss.missing.length, 1);
+  assert.equal(matchPayables(r.data.payables, [{ kind: 'aus', name: 'Rewe', amount: 12, datum: '2026-10-01' }]).missing.length, 0);
+  assert.throws(() => addPayable({}, { payee: 'x', amount: 0 }, { id: 'a', todoId: 'b', today: '2026-01-01' }));
+  const t = addTaxDoc({}, { title: 'Spendenquittung', year: 2025, category: 'Spenden', amount: 50 }, { id: 'D1', today: '2026-09-29' }); assert.equal(t.doc.category, 'Spenden'); assert.equal(t.data.taxDocs.length, 1);
+});
