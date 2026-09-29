@@ -1350,6 +1350,8 @@ function App({session}) {
   useEffect(()=>{ try{ localStorage.setItem('buqo_side',sideOpen?'1':'0'); }catch(_){} },[sideOpen]);
   const [resetBusy,setResetBusy]= useState(false);
   const [resetTxt,setResetTxt]= useState('');          // Zurücksetzen: Bestätigungstext
+  const [todoSelMode,setTodoSelMode]= useState(false); // To-do: Auswahl-Modus
+  const [todoSel,setTodoSel]= useState([]);
   const [taxDocY,setTaxDocY]= useState(null);        // Steuerunterlagen: gewähltes Jahr
   const [wiedF,setWiedF]= useState('alle');          // Wiederkehrend: Filter
   const [flyout,setFlyout]= useState(null);           // Overlay neben der Navigation {kind:'konten'|'mehr', top}
@@ -1592,7 +1594,8 @@ function App({session}) {
       let n = (row && row.names) || {};
       // Einmalige Übernahme alter lokaler Daten, falls online noch leer
       if(Object.keys(d).length===0){
-        try{ const raw=localStorage.getItem('fin-v5'); if(raw){ const p=JSON.parse(raw); if(p && p.data && Object.keys(p.data).length){ d=stripBlobs(p.data); if(p.names) n=p.names; } } }catch{}
+        try{ const raw=localStorage.getItem('fin-v5'); if(raw && localStorage.getItem('buqo_legacy_done')!=='1'){ const p=JSON.parse(raw); if(p && p.data && Object.keys(p.data).length){ d=stripBlobs(p.data); if(p.names) n=p.names; } } }catch{}
+      try{ localStorage.setItem('buqo_legacy_done','1'); localStorage.removeItem('fin-v5'); }catch{}
       }
       const finalNames = (n && Object.keys(n).length) ? n : names;
       setData(d);
@@ -2673,7 +2676,9 @@ function App({session}) {
   const todos = data.todos || [];
   const addTodo = (t) => setData(prev=>({...prev, todos:[{id:uid(), done:false, source:'user', createdAt:new Date().toISOString(), ref:null, note:'', ...t}, ...(prev.todos||[])]}));
   const updateTodo = (id, patch) => setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>t.id===id?{...t,...patch}:t)}));
-  const removeTodo = (id) => setData(prev=>({...prev, todos:(prev.todos||[]).filter(t=>t.id!==id)}));
+  const removeTodos = (ids) => { const set=new Set(ids); setData(prev=>{ const gone=(prev.todos||[]).filter(t=>set.has(t.id)); const keys=gone.map(t=>t.autoKey).filter(Boolean); return {...prev, todos:(prev.todos||[]).filter(t=>!set.has(t.id)), dismissedAuto:[...new Set([...(prev.dismissedAuto||[]),...keys])]}; }); };
+  const removeTodo = (id) => removeTodos([id]);
+  const doneTodos = (ids, done=true) => { const set=new Set(ids); setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>set.has(t.id)?{...t,done,doneAt:done?new Date().toISOString():null}:t)})); };
   const toggleTodoDone = (id) => setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>t.id===id?{...t,done:!t.done,doneAt:!t.done?new Date().toISOString():null}:t)}));
   const openTodoRef = (t) => { const ref=t&&t.ref; if(!ref) return;
     if(ref.type==='invoice'){ const iv=(data.invoices||[]).find(x=>x.id===ref.id); if(iv){ setTab('rechnung'); setInvView(iv); } }
@@ -2686,7 +2691,7 @@ function App({session}) {
     let list=(prev.todos||[]).slice(); let changed=false;
     const byKey={}; list.forEach(t=>{ if(t.autoKey) byKey[t.autoKey]=t; });
     const seen=new Set();
-    const upsert=(key,title,note,ref)=>{ seen.add(key); const ex=byKey[key];
+    const upsert=(key,title,note,ref)=>{ seen.add(key); const ex=byKey[key]; if(!ex && (prev.dismissedAuto||[]).includes(key)) return;
       if(ex){ if(ex.done && ex.autoResolved){ list=list.map(t=>t.id===ex.id?{...t,title,note,done:false,doneAt:null,autoResolved:false}:t); changed=true; byKey[key]={...ex,title,note,done:false}; }
         else if(ex.title!==title||ex.note!==note){ list=list.map(t=>t.id===ex.id?{...t,title,note}:t); changed=true; byKey[key]={...ex,title,note}; } }
       else { const t={id:uid(),autoKey:key,title,note,done:false,source:'ai',createdAt:new Date().toISOString(),ref}; list=[t,...list]; changed=true; byKey[key]=t; }
@@ -3114,6 +3119,7 @@ function App({session}) {
       const keep=['profile','company','companyImmo','companyPrivat','assistant','taxProfile',...PROPS.map(k=>'company_'+k)];
       setData(prev=>{ const nd={}; keep.forEach(k=>{ if(prev[k]!==undefined) nd[k]=prev[k]; }); return nd; });
       setNames(n=>({...PROP_DEFS, unternehmen:n.unternehmen||'Firma', privatLabel:n.privatLabel, cleanedDefaults:true}));
+      try{ localStorage.removeItem('fin-v5'); localStorage.setItem('buqo_legacy_done','1'); }catch(e){}
       setResetTxt(''); setOpenAcct(null); setTab('quellen'); setToast('Alles gelöscht ('+files+' Dateien) – Sicherung wurde heruntergeladen.');
     }catch(e){ setToast('Zurücksetzen fehlgeschlagen: '+(e.message||e)); }
     setResetBusy(false); };
@@ -5438,16 +5444,28 @@ function App({session}) {
                   </div>
                   <button onClick={openNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> To-do erstellen</button>
                 </div>
-                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
                   {[['offen','Offen',openT.length],['erledigt','Erledigt',doneT.length],['alle','Alle',allT.length]].map(([k,label,n])=>{ const on=todoFilter===k; return (
                     <button key={k} onClick={()=>setTodoFilter(k)} style={{background:on?hexA(C.pri,0.16):C.surf2,border:'1px solid '+(on?hexA(C.pri,0.4):C.bdr),color:on?C.pri:C.mut,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}{n?' · '+n:''}</button>
                   ); })}
+                  <span style={{flex:1}}/>
+                  {doneT.length>0 && !todoSelMode && <button onClick={()=>askConfirm('Alle '+doneT.length+' erledigten To-dos endgültig löschen?',()=>removeTodos(doneT.map(t=>t.id)),'Erledigte löschen?')} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.red,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Erledigte löschen · {doneT.length}</button>}
+                  <button onClick={()=>{ setTodoSelMode(m=>!m); setTodoSel([]); }} style={{background:todoSelMode?C.txt:C.surf2,border:'1px solid '+(todoSelMode?C.txt:C.bdr),color:todoSelMode?C.bg:C.sub,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{todoSelMode?'Fertig':'Auswählen'}</button>
                 </div>
+                {todoSelMode && (
+                  <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'10px 12px'}}>
+                    <button onClick={()=>setTodoSel(todoSel.length===shown.length?[]:shown.map(t=>t.id))} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{todoSel.length===shown.length&&shown.length>0?'Auswahl aufheben':'Alle auswählen ('+shown.length+')'}</button>
+                    <span style={{fontSize:13,color:C.sub,flex:1}}>{todoSel.length} ausgewählt</span>
+                    <button disabled={!todoSel.length} onClick={()=>{ doneTodos(todoSel,true); setTodoSel([]); }} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:todoSel.length?'pointer':'not-allowed',opacity:todoSel.length?1:0.45,fontFamily:'inherit'}}>Als erledigt markieren</button>
+                    <button disabled={!todoSel.length} onClick={()=>askConfirm(todoSel.length+' To-dos endgültig löschen?',()=>{ removeTodos(todoSel); setTodoSel([]); })} style={{background:C.redL,color:C.red,border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:todoSel.length?'pointer':'not-allowed',opacity:todoSel.length?1:0.45,fontFamily:'inherit'}}>Löschen</button>
+                  </div>
+                )}
                 {shown.length? (
                   <div style={{display:'flex',flexDirection:'column',gap:10}}>
                     {shown.map(t=>(
-                      <div key={t.id} onClick={()=>openDetail(t)} style={{display:'flex',alignItems:'flex-start',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',opacity:t.done?0.6:1,cursor:'pointer'}}>
-                        <button onClick={e=>{e.stopPropagation();toggleTodoDone(t.id);}} title={t.done?'Als offen markieren':'Erledigt'} style={{width:22,height:22,flexShrink:0,marginTop:1,borderRadius:'50%',border:'1.5px solid '+(t.done?C.accent:C.bdrM),background:t.done?C.accent:'none',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>{t.done && <Ic p={P.check} sz={13} col={C.accentTxt}/>}</button>
+                      <div key={t.id} onClick={()=>{ if(todoSelMode) setTodoSel(sel=>sel.includes(t.id)?sel.filter(x=>x!==t.id):[...sel,t.id]); else openDetail(t); }} style={{display:'flex',alignItems:'flex-start',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',opacity:t.done?0.6:1,cursor:'pointer'}}>
+                        {todoSelMode && <span style={{width:22,height:22,flexShrink:0,marginTop:1,borderRadius:7,border:'1.5px solid '+(todoSel.includes(t.id)?C.pri:C.bdrM),background:todoSel.includes(t.id)?C.pri:'none',display:'flex',alignItems:'center',justifyContent:'center'}}>{todoSel.includes(t.id)&&<Ic p={P.check} sz={14} col={C.priTxt}/>}</span>}
+                        {!todoSelMode && <button onClick={e=>{e.stopPropagation();toggleTodoDone(t.id);}} title={t.done?'Als offen markieren':'Erledigt'} style={{width:22,height:22,flexShrink:0,marginTop:1,borderRadius:'50%',border:'1.5px solid '+(t.done?C.accent:C.bdrM),background:t.done?C.accent:'none',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>{t.done && <Ic p={P.check} sz={13} col={C.accentTxt}/>}</button>}
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:14.5,fontWeight:700,color:C.txt,textDecoration:t.done?'line-through':'none',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                             {t.title}
