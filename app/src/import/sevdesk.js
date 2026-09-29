@@ -83,6 +83,8 @@ export const FIELDS = [
   ['sh',           ['soll/habenkennzeichen','sollhabenkennzeichen','sollhaben','s/h']],
   ['gegenkonto',   ['gegenkontoohnebuschluessel','gegenkonto']],
   ['bu',           ['buschluessel','bu']],
+  ['adresse',      ['adresse','anschrift','empfaengeradresse']],
+  ['kdnr',         ['kundennummer','kdnr','empfaengerkdnr']],
 ];
 export function autoMap(header) {
   const hs = header.map(norm); const used = new Set(); const map = {};
@@ -177,7 +179,7 @@ export function normalizeRows(parsed, mapping, opts = {}) {
     if (!brutto) warn.push('kein Betrag');
     if (cancelled) warn.push('storniert/Entwurf');
     const y = datum ? +datum.slice(0, 4) : null, m = datum ? (+datum.slice(5, 7) - 1) : null;
-    out.push({ idx, kind, datum, y, m, nummer, name: name.slice(0, 90), beschreibung, brutto, netto, mwst: rate, kategorie, status: paid ? 'bezahlt' : 'offen', cancelled, zahldatum, faellig: parseDate(get(row, 'faellig'), year), waehrung: (get(row, 'waehrung') || 'EUR').toUpperCase().slice(0, 3), skr, warn });
+    out.push({ idx, adresse: get(row, 'adresse'), kdnr: get(row, 'kdnr'), kind, datum, y, m, nummer, name: name.slice(0, 90), beschreibung, brutto, netto, mwst: rate, kategorie, status: paid ? 'bezahlt' : 'offen', cancelled, zahldatum, faellig: parseDate(get(row, 'faellig'), year), waehrung: (get(row, 'waehrung') || 'EUR').toUpperCase().slice(0, 3), skr, warn });
   });
   return out;
 }
