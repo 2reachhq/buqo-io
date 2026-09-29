@@ -25,6 +25,7 @@ export function buildApiMessages(history, { maxMessages = 16, attachment } = {})
   src.forEach((m, i) => {
     const last = i === src.length - 1;
     let text = String(m.content || '').trim();
+    if (!last && i < src.length - 2 && text.length > 700) text = text.slice(0, 700) + ' […gekürzt]'; // ältere Nachrichten komprimieren (Tokens sparen)
     if (m.role === 'assistant' && m.steps && m.steps.length) text += (text ? '\n' : '') + '[Ausgeführte Aktionen: ' + m.steps.map(st => st.name + (st.result && st.result.ok === false ? ' (fehlgeschlagen)' : '')).join(', ') + ']';
     if (m.role === 'user' && m.attachmentName && !(last && attachment)) text += (text ? '\n' : '') + '[Datei angehängt: ' + m.attachmentName + ']';
     if (!text && !(last && attachment && m.role === 'user')) return;
