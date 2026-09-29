@@ -399,3 +399,38 @@ export function detectBankAnomalies(drafts, history = []) {
   }
   return out;
 }
+
+/* ── Offene Zahlungen (Rechnungen/Bescheide, die der Nutzer überweisen muss) ─────────────────
+   Beim Hochladen legt die KI eine „offene Zahlung" im passenden Konto an (+ To-do mit Frist).
+   Beim nächsten Kontoauszug-Import wird sie automatisch abgehakt, wenn ein passender Umsatz da ist –
+   oder es entsteht ein To-do „Nicht abgebucht?", falls die Frist im Auszug schon verstrichen ist. */
+export function addPayable(data, input, { id, todoId, today, account }) {
+  const payee = cut(input.payee, 80); const amount = Math.abs(Number(input.amount) || 0);
+  if (!payee) throw new Error('Empfänger der Zahlung fehlt.'); if (!(amount > 0)) throw new Error('Betrag fehlt.');
+  const due = toISODate(input.due);
+  const p = { id, account: account || 'unter', payee, amount, due, reference: cut(input.reference, 80), iban: s(input.iban).replace(/\s+/g, '').slice(0, 34), note: cut(input.note, 300), status: 'offen', todoId, filePath: s(input.filePath), fileName: s(input.fileName), createdAt: today };
+  const note = [p.note, p.iban ? 'IBAN: ' + p.iban : '', p.reference ? 'Verwendungszweck/Referenz: ' + p.reference : ''].filter(Boolean).join('\n');
+  const todo = { id: todoId, done: false, source: 'payable', createdAt: new Date().toISOString(), ref: null, title: cut('Überweisen: ' + payee + ' – ' + eur(amount) + (due ? ' (bis ' + due.split('-').reverse().join('.') + ')' : ''), 140), note, comments: [], payableId: id, account: p.account, ...(due ? { dueDate: due } : {}), ...(p.filePath ? { filePath: p.filePath, fileName: p.fileName } : {}) };
+  return { data: { ...data, payables: [p, ...(data.payables || [])], todos: [todo, ...(data.todos || [])] }, payable: p, todo };
+}
+export function matchPayables(payables, drafts, today = '') {
+  const open = (payables || []).filter(p => p.status === 'offen'); const paid = [], missing = [];
+  const ds = (drafts || []).filter(d => d && d.kind === 'aus' && Number(d.amount) > 0);
+  const latest = ds.map(d => d.datum || '').filter(Boolean).sort().pop() || '';
+  for (const p of open) {
+    const hit = ds.find(d => Math.abs(Number(d.amount) - p.amount) < 0.01 && ((p.reference && lc(d.note + ' ' + d.belegnr + ' ' + d.name).includes(lc(p.reference))) || (normN(d.name).length > 2 && (normN(p.payee).includes(normN(d.name).slice(0, 5)) || normN(d.name).includes(normN(p.payee).slice(0, 5))))));
+    if (hit) paid.push({ payable: p, draft: hit });
+    else if (p.due && latest && latest >= p.due) missing.push(p);
+  }
+  return { paid, missing };
+}
+
+/* ── Steuerunterlagen (für die Steuererklärung richtig ablegen) ───────────────────────────── */
+export const TAX_CATS = ['Steuerbescheid', 'Spenden', 'Handwerkerleistungen', 'Krankheitskosten', 'Versicherungen', 'Betriebsausgaben/Werbungskosten', 'Vorsorge/Rente', 'Kapitalerträge', 'Sonstiges'];
+export function addTaxDoc(data, input, { id, today, account }) {
+  const title = cut(input.title, 120); if (!title) throw new Error('Bezeichnung fehlt.');
+  const year = Number(input.year) || new Date(today).getFullYear();
+  const d = { id, account: account || 'unter', year, category: TAX_CATS.includes(s(input.category)) ? s(input.category) : 'Sonstiges', title, amount: input.amount != null && input.amount !== '' ? Math.abs(Number(input.amount)) || 0 : null, note: cut(input.note, 300), filePath: s(input.filePath), fileName: s(input.fileName), createdAt: today };
+  return { data: { ...data, taxDocs: [d, ...(data.taxDocs || [])] }, doc: d };
+}
+export const taxDocView = t => ({ id: t.id, jahr: t.year, kategorie: t.category, titel: t.title, betrag: t.amount, notiz: t.note || '', konto: t.account });
