@@ -2,7 +2,7 @@
 // App-Zustandsobjekt (`data`, `names`) unverändert-immutabel und geben neue Objekte zurück,
 // damit main.jsx sie per setData/setNames anwenden kann. Dadurch sind sie testbar (node --test).
 
-export const PROPS = ['p1', 'p2', 'p3'];
+export const PROPS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
 export const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 export const CATS = ['Allgemein', 'Miete', 'Nebenkosten', 'Versicherung', 'Material', 'Personal', 'Steuern', 'Software', 'Marketing', 'Reise', 'Bewirtung', 'Bank & Gebühren', 'Sonstiges'];
 const COMPANY_FIELDS = ['name', 'address', 'email', 'phone', 'iban', 'bic', 'taxId', 'ustId', 'defMwst', 'invHeaderDefault', 'invFooterDefault', 'senderEmail', 'senderName', 'contactName', 'contactEmail'];
@@ -14,6 +14,7 @@ const ICONS = ['house', 'bed', 'brief', 'prson', 'grid', 'cal', 'doc'];
 export const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(',', '.')); return isNaN(n) ? 0 : n; };
 const s = v => (v == null ? '' : String(v)).trim();
 const lc = v => s(v).toLowerCase();
+export const toISODate = v => { const t = s(v); if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10); const m = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/); if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3]; return y + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0'); } return ''; };
 const clone = o => JSON.parse(JSON.stringify(o));
 export const todayISO = () => new Date().toISOString().slice(0, 10);
 export const toISO = (d) => {
@@ -196,7 +197,7 @@ export function recurringInvoiceView(data, r) {
 
 /* ── Buchungen ──────────────────────────────────────────────────────────── */
 export const forEachMonth = (data, fn) => { Object.keys(data || {}).forEach(y => { if (!/^\d+$/.test(y)) return; const Y = data[y]; if (!Y || typeof Y !== 'object') return; Object.keys(Y).forEach(m => { if (!/^\d+$/.test(m)) return; const M = Y[m]; if (M) fn(M, +y, +m); }); }); };
-export const emptyMonth = () => ({ props: { p1: { income: { mieteinnahmen: 0, airbnb: 0, booking: 0, sonstig: 0 }, expenses: [] }, p2: { income: { mieteinnahmen: 0, airbnb: 0, booking: 0, sonstig: 0 }, expenses: [] }, p3: { income: { mieteinnahmen: 0, airbnb: 0, booking: 0, sonstig: 0 }, expenses: [] } }, unternehmen: { clients: [], items: [] }, privat: { items: [] } });
+export const emptyMonth = () => ({ props: Object.fromEntries(PROPS.map(k => [k, { income: { mieteinnahmen: 0, airbnb: 0, booking: 0, sonstig: 0 }, expenses: [] }])), unternehmen: { clients: [], items: [] }, privat: { items: [] } });
 export function bookInto(M, account, kind, item) {
   const isExp = kind === 'aus';
   if (account === 'unter') { const sec = M.unternehmen || {}; M.unternehmen = isExp ? { ...sec, items: [...(sec.items || []), item] } : { ...sec, clients: [...(sec.clients || []), item] }; }
@@ -288,10 +289,10 @@ export function deleteBooking(data, id) {
 
 /* ── To-dos ─────────────────────────────────────────────────────────────── */
 export function findTodo(data, ref) { const list = data.todos || []; const q = s(ref); if (!q) return null; return list.find(t => t.id === q) || list.find(t => lc(t.title) === lc(q)) || list.find(t => lc(t.title).includes(lc(q))) || null; }
-export const todoView = t => ({ id: t.id, titel: t.title || '', notiz: t.note || '', erledigt: !!t.done, erstellt: (t.createdAt || '').slice(0, 10), quelle: t.source || 'user' });
+export const todoView = t => ({ id: t.id, titel: t.title || '', notiz: t.note || '', erledigt: !!t.done, erstellt: (t.createdAt || '').slice(0, 10), quelle: t.source || 'user', ...(t.dueDate ? { frist: t.dueDate } : {}), ...(t.letterId ? { briefId: t.letterId } : {}) });
 export function listTodos(data, { status = 'offen' } = {}) { let list = (data.todos || []).slice(); if (status === 'offen') list = list.filter(t => !t.done); else if (status === 'erledigt') list = list.filter(t => t.done); return list.map(todoView); }
-export function addTodo(data, input, id) { const title = s(input.title); if (!title) throw new Error('Titel fehlt.'); const t = { id, done: false, source: 'user', createdAt: new Date().toISOString(), ref: null, note: s(input.note), title, comments: [] }; return { data: { ...data, todos: [t, ...(data.todos || [])] }, todo: t }; }
-export function updateTodo(data, ref, patch) { const t = findTodo(data, ref); if (!t) throw new Error('Aufgabe „' + s(ref) + '" nicht gefunden.'); const next = { ...t }; if (patch.title != null) next.title = s(patch.title); if (patch.note != null) next.note = s(patch.note); if (patch.done != null) { next.done = !!patch.done; next.doneAt = patch.done ? new Date().toISOString() : null; } return { data: { ...data, todos: (data.todos || []).map(x => x.id === t.id ? next : x) }, todo: next }; }
+export function addTodo(data, input, id) { const title = s(input.title); if (!title) throw new Error('Titel fehlt.'); const t = { id, done: false, source: 'user', createdAt: new Date().toISOString(), ref: null, note: s(input.note), title, comments: [], ...(toISODate(input.due) ? { dueDate: toISODate(input.due) } : {}) }; return { data: { ...data, todos: [t, ...(data.todos || [])] }, todo: t }; }
+export function updateTodo(data, ref, patch) { const t = findTodo(data, ref); if (!t) throw new Error('Aufgabe „' + s(ref) + '" nicht gefunden.'); const next = { ...t }; if (patch.title != null) next.title = s(patch.title); if (patch.note != null) next.note = s(patch.note); if (patch.due != null) next.dueDate = toISODate(patch.due); if (patch.done != null) { next.done = !!patch.done; next.doneAt = patch.done ? new Date().toISOString() : null; } return { data: { ...data, todos: (data.todos || []).map(x => x.id === t.id ? next : x) }, todo: next }; }
 export function deleteTodo(data, ref) { const t = findTodo(data, ref); if (!t) throw new Error('Aufgabe „' + s(ref) + '" nicht gefunden.'); return { data: { ...data, todos: (data.todos || []).filter(x => x.id !== t.id) }, todo: t }; }
 
 /* ── Einstellungen ──────────────────────────────────────────────────────── */
@@ -305,7 +306,7 @@ export function getSettings(data, names, { section = 'alle', account, year, them
     out.firma = {};
     keys.forEach(k => { const co = data[companyKey(k)] || {}; const v = {}; COMPANY_FIELDS.forEach(f => { v[f] = co[f] == null ? '' : co[f]; }); v.logo = !!co.logoData; out.firma[k] = { kontoName: accountName(k, names), ...v }; });
   }
-  if (want('konten')) { out.konten = { names: { unternehmen: names.unternehmen || 'Firma', p1: names.p1 || '', p2: names.p2 || '', p3: names.p3 || '', privatLabel: names.privatLabel || 'Privat' }, icons: names.propIcon || {}, colors: names.acctColors || {}, angelegt: accountList(names, created).map(a => a.key) }; }
+  if (want('konten')) { out.konten = { names: { unternehmen: names.unternehmen || 'Firma', ...Object.fromEntries(PROPS.map(k => [k, names[k] || ''])), privatLabel: names.privatLabel || 'Privat' }, icons: names.propIcon || {}, colors: names.acctColors || {}, angelegt: accountList(names, created).map(a => a.key) }; }
   if (want('darstellung')) { out.darstellung = { theme: theme || 'light', colors: data.themeColors || {} }; }
   if (want('steuerprofil')) { const tp = data.taxProfile || {}; const y = year || new Date().getFullYear(); out.steuerprofil = { jahr: y, ...(tp[y] || {}) }; }
   if (want('assistent')) { out.assistent = { model: (data.assistant && data.assistant.model) || 'claude-opus-5' }; }
@@ -318,9 +319,9 @@ export function updateSettings(data, names, section, patch, { account, year, mod
   else if (section === 'firma') { const k = resolveAccount(account, names, 'unter') || 'unter'; const key = companyKey(k); const cur = { ...(data[key] || {}) }; Object.keys(p).forEach(f => { if (COMPANY_FIELDS.includes(f)) { cur[f] = f === 'defMwst' ? String(num(p[f])) : s(p[f]); applied.push(f); } else ignored.push(f); }); nd = { ...data, [key]: cur }; }
   else if (section === 'konten') {
     nn = { ...names };
-    const nm = p.names || {}; Object.keys(nm).forEach(k => { if (['unternehmen', 'p1', 'p2', 'p3', 'privatLabel'].includes(k)) { nn[k] = s(nm[k]); applied.push('name:' + k); } else ignored.push('names.' + k); });
+    const nm = p.names || {}; Object.keys(nm).forEach(k => { if (['unternehmen', ...PROPS, 'privatLabel'].includes(k)) { nn[k] = s(nm[k]); applied.push('name:' + k); } else ignored.push('names.' + k); });
     // Kurzformen: {account:"p1", name:"Ferienwohnung"} bzw. {unternehmen:"…"}
-    ['unternehmen', 'p1', 'p2', 'p3', 'privatLabel'].forEach(k => { if (p[k] != null && typeof p[k] === 'string') { nn[k] = s(p[k]); applied.push('name:' + k); } });
+    ['unternehmen', ...PROPS, 'privatLabel'].forEach(k => { if (p[k] != null && typeof p[k] === 'string') { nn[k] = s(p[k]); applied.push('name:' + k); } });
     if (p.account && p.name != null) { const k = resolveAccount(p.account, names); if (k === 'unter') nn.unternehmen = s(p.name); else if (k === 'privat') nn.privatLabel = s(p.name); else if (k) nn[k] = s(p.name); if (k) applied.push('name:' + k); }
     const ic = p.icon || p.icons || {}; Object.keys(ic).forEach(k => { const key = resolveAccount(k, names); if (key && ICONS.includes(s(ic[k]))) { nn.propIcon = { ...(nn.propIcon || {}), [key]: s(ic[k]) }; applied.push('icon:' + key); } else ignored.push('icon.' + k); });
     const co = p.color || p.colors || {}; Object.keys(co).forEach(k => { const key = resolveAccount(k, names); if (key && isHex(co[k])) { nn.acctColors = { ...(nn.acctColors || {}), [key]: s(co[k]) }; applied.push('color:' + key); } else ignored.push('color.' + k); });
@@ -338,4 +339,63 @@ export function updateSettings(data, names, section, patch, { account, year, mod
   else if (section === 'assistent') { if (p.model) { nd = { ...data, assistant: { ...(data.assistant || {}), model: s(p.model) } }; applied.push('model'); } Object.keys(p).forEach(k => { if (k !== 'model') ignored.push(k); }); }
   else throw new Error('Unbekannter Einstellungsbereich: ' + s(section));
   return { data: nd, names: nn, theme, applied, ignored };
+}
+
+
+/* ── Briefe (Finanzamt, Anwalt, Versicherung …) ─────────────────────────────
+   Die KI liest den Brief einmal, `addLetter` legt daraus ein To-do (mit Frist, Schritten und
+   Antwortentwurf) und einen kompakten Gedächtnis-Eintrag an. Im Kontext der KI stehen später nur
+   diese Einzeiler – der volle Brief wird nie erneut geschickt (spart Tokens). */
+const cut = (v, n) => { const t = s(v).replace(/\s+/g, ' '); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+export const LETTER_KINDS = ['Finanzamt', 'Anwalt', 'Versicherung', 'Bank', 'Behörde', 'Vermieter/Hausverwaltung', 'Kunde/Lieferant', 'Sonstiges'];
+export function addLetter(data, input, { id, todoId, today }) {
+  const sender = cut(input.sender, 80), subject = cut(input.subject, 120);
+  if (!sender && !subject) throw new Error('Absender oder Betreff des Briefs fehlt.');
+  const deadline = toISODate(input.deadline);
+  const steps = (Array.isArray(input.steps) ? input.steps : []).map(x => cut(x, 160)).filter(Boolean).slice(0, 8);
+  const reply = input.reply && (s(input.reply.body) || s(input.reply.to)) ? { to: s(input.reply.to), subject: cut(input.reply.subject || ('Ihr Schreiben' + (input.reference ? ' – ' + input.reference : '')), 140), body: s(input.reply.body).slice(0, 4000) } : null;
+  const letter = { id, createdAt: today + 'T00:00:00.000Z', kind: LETTER_KINDS.includes(s(input.kind)) ? s(input.kind) : 'Sonstiges', sender, subject, reference: cut(input.reference, 60), letterDate: toISODate(input.letter_date), deadline, amount: input.amount != null && input.amount !== '' ? Number(input.amount) || 0 : null, summary: cut(input.summary, 400), steps, todoId, filePath: s(input.filePath), fileName: s(input.fileName), replyNeeded: !!reply };
+  const titleBase = (letter.kind !== 'Sonstiges' ? letter.kind + ': ' : (sender ? sender + ': ' : '')) + (subject || 'Schreiben');
+  const note = [letter.summary, steps.length ? 'Zu tun:\n' + steps.map(x => '• ' + x).join('\n') : '', letter.reference ? 'Aktenzeichen: ' + letter.reference : '', letter.amount ? 'Betrag: ' + letter.amount.toFixed(2).replace('.', ',') + ' €' : ''].filter(Boolean).join('\n\n');
+  const todo = { id: todoId, done: false, source: 'brief', createdAt: new Date().toISOString(), ref: null, title: cut(titleBase + (deadline ? ' (Frist ' + deadline.split('-').reverse().join('.') + ')' : ''), 140), note, comments: [], letterId: id, ...(deadline ? { dueDate: deadline } : {}), ...(reply ? { replyDraft: reply } : {}), ...(letter.filePath ? { filePath: letter.filePath, fileName: letter.fileName } : {}) };
+  return { data: { ...data, letters: [letter, ...(data.letters || [])], todos: [todo, ...(data.todos || [])] }, letter, todo };
+}
+export const letterView = l => ({ id: l.id, art: l.kind, absender: l.sender, betreff: l.subject, aktenzeichen: l.reference || '', briefdatum: l.letterDate || '', frist: l.deadline || '', betrag: l.amount, zusammenfassung: l.summary, schritte: l.steps || [], antwortNoetig: !!l.replyNeeded, todoId: l.todoId, erfasst: (l.createdAt || '').slice(0, 10) });
+export function listLetters(data, { query, limit = 20 } = {}) {
+  let list = (data.letters || []).slice();
+  const q = lc(query); if (q) list = list.filter(l => lc([l.sender, l.subject, l.reference, l.summary, l.kind].join(' ')).includes(q));
+  return list.slice(0, Math.max(1, Math.min(100, limit))).map(letterView);
+}
+// Einzeiler fürs KI-Gedächtnis: neueste Briefe, offene Fristen zuerst – bewusst kurz gehalten
+export function letterMemoryLines(data, max = 8) {
+  const todos = data.todos || []; const open = l => { const t = todos.find(x => x.id === l.todoId); return !t || !t.done; };
+  const list = (data.letters || []).filter(open).sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999')).slice(0, max);
+  return list.map(l => '• ' + [l.kind, l.sender, cut(l.subject, 50), l.deadline ? 'Frist ' + l.deadline : ''].filter(Boolean).join(' · '));
+}
+
+/* ── Auffälligkeiten im Kontoauszug → To-dos ────────────────────────────────
+   Deterministisch (ohne KI): doppelt abgebucht, teurer/günstiger als zuletzt. `history` sind
+   bekannte frühere Ausgaben {name, amount, datum}; `drafts` die neuen Bankumsätze. */
+const normN = v => lc(v).replace(/[^a-z0-9äöüß]/g, '');
+const eur = n => Number(n).toFixed(2).replace('.', ',') + ' €';
+const dayDiff = (a, b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
+export function detectBankAnomalies(drafts, history = []) {
+  const out = []; const seen = new Set();
+  const push = (key, title, note) => { if (seen.has(key)) return; seen.add(key); out.push({ key, title: cut(title, 140), note }); };
+  const list = (drafts || []).filter(d => d && d.kind === 'aus' && Number(d.amount) > 0 && normN(d.name).length > 2);
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const a = list[i], b = list[j];
+    if (normN(a.name) !== normN(b.name) || Math.abs(Number(a.amount) - Number(b.amount)) > 0.005) continue;
+    if (a.datum && b.datum && dayDiff(a.datum, b.datum) > 5) continue;
+    push('anom:dup:' + normN(a.name) + ':' + Number(a.amount).toFixed(2) + ':' + (a.datum || ''), 'Doppelt abgebucht: ' + cut(a.name, 40) + ' – ' + eur(a.amount), 'Im Kontoauszug taucht „' + cut(a.name, 60) + '" zweimal mit ' + eur(a.amount) + (a.datum ? ' (' + a.datum.split('-').reverse().join('.') + ')' : '') + ' auf. Prüfen, ob eine Buchung zu viel ist, und ggf. beim Anbieter zurückfordern.');
+  }
+  for (const d of list) {
+    const past = (history || []).filter(h => normN(h.name) === normN(d.name) && Number(h.amount) > 0 && (!h.datum || !d.datum || h.datum < d.datum)).sort((x, y) => String(y.datum || '').localeCompare(String(x.datum || '')));
+    if (!past.length) continue;
+    const prev = Number(past[0].amount), now = Number(d.amount);
+    if (Math.abs(now - prev) < 0.5 || Math.abs(now - prev) / prev < 0.02) continue;
+    const up = now > prev;
+    push('anom:price:' + normN(d.name) + ':' + now.toFixed(2), (up ? 'Teurer geworden: ' : 'Günstiger geworden: ') + cut(d.name, 40) + ' – ' + eur(prev) + ' → ' + eur(now), cut(d.name, 60) + ' wurde zuletzt mit ' + eur(prev) + ' gebucht, jetzt ' + eur(now) + ' (' + (up ? '+' : '−') + eur(Math.abs(now - prev)) + '). ' + (up ? 'Preiserhöhung prüfen und ggf. kündigen oder verhandeln.' : 'Zur Kenntnis nehmen.'));
+  }
+  return out;
 }

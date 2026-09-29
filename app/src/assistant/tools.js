@@ -10,7 +10,7 @@ export const ASSISTANT_MODELS = [
 ];
 export const DEFAULT_ASSISTANT_MODEL = 'claude-opus-5';
 
-const ACCOUNT_DESC = 'Konto: "firma" (Unternehmen), "privat", "p1"/"p2"/"p3" (Immobilien-Konten) oder der Name des Kontos.';
+const ACCOUNT_DESC = 'Konto: "firma" (Unternehmen), "privat", "p1"…"p6" (Zusatz-Konten, z. B. Immobilien) oder der Name des Kontos.';
 const obj = (properties, required = []) => ({ type: 'object', properties, required });
 const str = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const numT = (description) => ({ type: 'number', description });
@@ -247,18 +247,47 @@ export const ASSISTANT_TOOLS = [
   // ── To-dos ────────────────────────────────────────────────────────────────
   {
     name: 'create_todo',
-    description: 'Aufgabe anlegen.',
-    input_schema: obj({ title: str('Titel.'), note: str('Beschreibung.') }, ['title']),
+    description: 'Aufgabe anlegen (optional mit Frist).',
+    input_schema: obj({ title: str('Titel.'), note: str('Beschreibung.'), due: str('Frist als JJJJ-MM-TT (optional).') }, ['title']),
   },
   {
     name: 'update_todo',
     description: 'Aufgabe ändern oder abhaken.',
-    input_schema: obj({ id: str('Aufgaben-id oder (Teil des) Titels.'), done: boolT('true = erledigt.'), title: str('Neuer Titel.'), note: str('Neue Beschreibung.') }, ['id']),
+    input_schema: obj({ id: str('Aufgaben-id oder (Teil des) Titels.'), done: boolT('true = erledigt.'), title: str('Neuer Titel.'), note: str('Neue Beschreibung.'), due: str('Neue Frist JJJJ-MM-TT.') }, ['id']),
   },
   {
     name: 'delete_todo',
     description: 'Aufgabe löschen.',
     input_schema: obj({ id: str('Aufgaben-id oder (Teil des) Titels.') }, ['id']),
+  },
+
+  // ── Post / Briefe ─────────────────────────────────────────────────────────
+  {
+    name: 'save_letter',
+    description: 'Einen angehängten Brief (Finanzamt, Anwalt, Versicherung, Bank, Behörde, Hausverwaltung …) nach dem Lesen ablegen: legt ein To-do mit Frist, Schritten und ggf. Antwortentwurf an, speichert die Datei und merkt sich den Inhalt kompakt. Nutze das für jedes Schreiben, das etwas vom Nutzer verlangt oder wissen sollte – NICHT für Belege/Rechnungen zum Buchen. Fasse selbst zusammen (kurz!) und erfinde nichts.',
+    input_schema: obj({
+      kind: str('Art des Absenders.', { enum: ['Finanzamt', 'Anwalt', 'Versicherung', 'Bank', 'Behörde', 'Vermieter/Hausverwaltung', 'Kunde/Lieferant', 'Sonstiges'] }),
+      sender: str('Absender (Name der Stelle/Kanzlei).'),
+      subject: str('Betreff in wenigen Worten.'),
+      reference: str('Aktenzeichen / Steuernummer / Vorgangsnummer (optional).'),
+      letter_date: str('Briefdatum JJJJ-MM-TT (optional).'),
+      deadline: str('Frist/Stichtag JJJJ-MM-TT, falls im Brief genannt (z. B. Einspruchsfrist, Zahlungsziel).'),
+      amount: numT('Geforderter/erstatteter Betrag in Euro, falls genannt.'),
+      summary: str('Worum geht es? Max. 2–3 Sätze, Klartext.'),
+      steps: { type: 'array', items: { type: 'string' }, description: 'Konkrete To-dos für den Nutzer (max. 6, kurz).' },
+      reply: obj({ to: str('E-Mail-Adresse des Absenders, falls im Brief genannt.'), subject: str('Betreff der Antwort.'), body: str('Fertiger, höflicher Antworttext (Sie-Form) – nur wenn eine Antwort nötig/sinnvoll ist.') }),
+      account: str('Konto, dem der Brief gehört (optional): ' + ACCOUNT_DESC),
+    }, ['summary']),
+  },
+  {
+    name: 'search_letters',
+    description: 'Bereits erfasste Briefe im Gedächtnis suchen (Absender, Betreff, Aktenzeichen, Inhalt). Liefert die gespeicherten Zusammenfassungen – der Originalbrief wird nicht erneut gelesen.',
+    input_schema: obj({ query: str('Suchbegriff (leer = neueste).'), limit: intT('Max. Treffer (Standard 10).') }),
+  },
+  {
+    name: 'draft_email',
+    description: 'E-Mail-Entwurf in der App öffnen (z. B. Antwort auf einen Brief). Der Nutzer prüft und klickt selbst auf „Senden" – es geht nie etwas ohne seinen Klick raus. Nimm für Brief-Antworten die todo_id des Brief-To-dos.',
+    input_schema: obj({ to: str('Empfänger-E-Mail.'), subject: str('Betreff.'), body: str('Nachricht.'), todo_id: str('To-do, zu dem die E-Mail gehört (optional).') }, ['body']),
   },
 
   // ── Einstellungen & App ───────────────────────────────────────────────────
@@ -274,7 +303,7 @@ export const ASSISTANT_TOOLS = [
   },
   {
     name: 'open_app_tab',
-    description: 'Bereich der App öffnen: kunden, rechnung (sub: neu | wiederkehrend), belege, bank (Kontoauszug-Import), aufgaben, konten (sub: firma | privat | p1 | p2 | p3 | alle), steuer (Steuerprognose), steuern (sub: ustva | euer | guv | bwa | susa | datev), analyse, raten, events, download, kosten, sevdesk, settings (sub: profil | konten | gmail | email-import | admin).',
+    description: 'Bereich der App öffnen: kunden, rechnung (sub: neu | wiederkehrend), belege, bank (Kontoauszug-Import), aufgaben, konten (sub: firma | privat | p1…p6 | alle), wiederkehrend (alle Fixposten), steuer (Steuerprognose), steuern (sub: ustva | euer | guv | bwa | susa | datev), analyse, raten, events, download, kosten, sevdesk, settings (sub: profil | konten | gmail | email-import | admin).',
     input_schema: obj({ tab: str('Bereich.'), sub: str('Unterbereich (optional).') }, ['tab']),
   },
   {
@@ -305,6 +334,7 @@ export function stepLabel(step) {
     delete_invoice: 'Rechnung gelöscht', move_to_account: (r.moved != null ? r.moved + ' ' : '') + 'Posten umsortiert', send_invoice_email: 'E-Mail-Versand geöffnet', prepare_payment_reminder: 'Mahnung vorbereitet', create_recurring_invoice: 'Wiederkehrende Rechnung angelegt',
     add_booking: (inp.kind === 'ein' ? 'Einnahme' : 'Ausgabe') + ' gebucht' + (inp.name ? ': ' + inp.name : ''), update_booking: 'Buchung geändert', delete_booking: 'Buchung gelöscht',
     add_import_drafts: (r.added != null ? r.added + ' ' : '') + 'Umsätze in den Bank-Import gelegt', extract_attachment_items: 'Datei ausgelesen' + (r.count != null ? ' (' + r.count + ' Posten)' : ''),
+    save_letter: 'Brief abgelegt' + (r.titel ? ': ' + r.titel : ''), search_letters: 'Briefe durchsucht', draft_email: 'E-Mail-Entwurf geöffnet',
     create_todo: 'To-do angelegt', update_todo: 'To-do geändert', delete_todo: 'To-do gelöscht',
     update_settings: 'Einstellungen geändert (' + (inp.section || '') + ')', open_app_tab: 'Bereich geöffnet: ' + (inp.tab || ''), set_period: 'Zeitraum gewechselt', export_data: 'Daten exportiert',
   }[n] || n;
@@ -324,7 +354,7 @@ export function buildSystemPrompt(ctx) {
   lines.push('- Fakten NIE erfinden: Zahlen, Kunden, Rechnungen immer über Werkzeuge nachschlagen. Prüfe vor dem Anlegen eines Kunden mit list_customers, ob er schon existiert.');
   lines.push('- Rechnungen: create_invoice zeigt eine Vorschau mit Bestätigungs-Button; sag dem Nutzer nur kurz, dass er bestätigen soll. Bestätigt er per Text ("ja", "passt", "erstellen"), rufe confirm_invoice auf. book_now nur bei ausdrücklichem Wunsch.');
   lines.push('- Löschen (Kunde, Rechnung, Buchung): einmal kurz rückfragen, dann mit confirmed=true ausführen.');
-  lines.push('- Angehängte Dateien liest du selbst: Beleg/Quittung → add_booking (Konto erfragen, wenn unklar); Kontoauszug oder Plattform-Abrechnung → add_import_drafts (bei sehr vielen Umsätzen extract_attachment_items); Auftrags-/Leistungsdaten → create_invoice; Kundenliste → create_customer je Kunde. Fasse kurz zusammen, was du aus der Datei gelesen hast.');
+  lines.push('- Angehängte Dateien liest du selbst: Beleg/Quittung → add_booking (Konto erfragen, wenn unklar); Kontoauszug oder Plattform-Abrechnung → add_import_drafts (bei sehr vielen Umsätzen extract_attachment_items); Auftrags-/Leistungsdaten → create_invoice; Kundenliste → create_customer je Kunde; Brief/Schreiben (Finanzamt, Anwalt, Versicherung, Behörde, Hausverwaltung …) → save_letter (Frist, Schritte, ggf. fertiger Antwortentwurf) und danach in 2–3 Sätzen sagen, was drinsteht und was zu tun ist. Verlangt der Brief eine Antwort und ist eine E-Mail-Adresse bekannt, biete draft_email an – gesendet wird nur nach Klick des Nutzers. Für Fragen zu früheren Briefen erst search_letters, nie raten. Fasse kurz zusammen, was du aus der Datei gelesen hast.');
   lines.push('- Nach Aktionen: in einem Satz sagen, was erledigt ist (mit Nummern/Beträgen). Keine Wiederholung der Frage, keine Einleitungen.');
   lines.push('- Einstellungen: erst get_settings lesen, dann update_settings mit nur den geänderten Feldern.');
   lines.push('- Sortieren (z. B. „ordne alle Rechnungen richtig zu", Immobilie vs. Firma): Rechnungen mit list_invoices (limit hoch, z. B. 500) und Buchungen mit list_bookings lesen, anhand von Kunde, Leistung und Kontonamen entscheiden (Miete, Ferienwohnung, Airbnb, Nebenkosten → Immobilien-Konto; Dienstleistungen, Projekte → Firma), dann nur die falsch liegenden mit move_to_account verschieben. Unklare Fälle nicht raten, sondern am Ende kurz auflisten und nachfragen.');
@@ -343,6 +373,29 @@ export function buildSystemPrompt(ctx) {
   if (c.finance) lines.push('Zahlen:\n' + c.finance);
   if (c.counts) lines.push('Bestand: ' + c.counts + '.');
   if (c.pendingInvoice) lines.push('Es liegt ein unbestätigter Rechnungsentwurf vor: ' + c.pendingInvoice + '. Bestätigt der Nutzer, rufe confirm_invoice auf; will er etwas ändern, rufe create_invoice erneut mit den korrigierten Daten auf.');
+  if (c.letters && c.letters.length) lines.push('Offene Briefe (Gedächtnis, Details über search_letters):\n' + c.letters.join('\n'));
   if (c.attachment) lines.push('An die aktuelle Nachricht ist eine Datei angehängt: ' + c.attachment + '.');
   return lines.join('\n');
+}
+
+// Systemprompt als zwei Blöcke: der stabile Teil (Rolle/Regeln) wird von Anthropic zwischengespeichert
+// (cache_control) und kostet bei Folgeanfragen nur ~10 %; der wechselnde Kontext (Zahlen, Datum) steht dahinter.
+export function buildSystemBlocks(ctx) {
+  const full = buildSystemPrompt(ctx); const i = full.indexOf('\nKONTEXT\n');
+  if (i < 0) return [{ type: 'text', text: full }];
+  return [{ type: 'text', text: full.slice(0, i), cache_control: { type: 'ephemeral' } }, { type: 'text', text: full.slice(i + 1) }];
+}
+// Werkzeugliste mit Cache-Marker am Ende (Tools ändern sich nicht → zwischengespeichert)
+export function toolsWithCache(tools) { return tools.map((t, i) => i === tools.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t); }
+
+// Preise in USD pro 1 Mio. Tokens (Eingabe/Ausgabe); Cache-Lesen = 0,1×, Cache-Schreiben = 1,25× der Eingabe
+export const MODEL_PRICES = { 'claude-opus-5': { in: 5, out: 25 }, 'claude-sonnet-5': { in: 2, out: 10 }, 'claude-haiku-4-5': { in: 1, out: 5 } };
+export function usageCost(model, u) {
+  const p = MODEL_PRICES[model] || MODEL_PRICES['claude-sonnet-5']; const x = u || {};
+  const inT = x.input_tokens || 0, outT = x.output_tokens || 0, cr = x.cache_read_input_tokens || 0, cw = x.cache_creation_input_tokens || 0;
+  return (inT * p.in + cw * p.in * 1.25 + cr * p.in * 0.1 + outT * p.out) / 1e6;
+}
+export function addUsage(sum, u) {
+  const x = u || {}; const s = sum || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 };
+  return { input: s.input + (x.input_tokens || 0), output: s.output + (x.output_tokens || 0), cacheRead: s.cacheRead + (x.cache_read_input_tokens || 0), cacheWrite: s.cacheWrite + (x.cache_creation_input_tokens || 0), calls: s.calls + 1 };
 }

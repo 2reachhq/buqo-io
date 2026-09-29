@@ -90,7 +90,10 @@ Deno.serve(async (req) => {
 
     // 4) Nutzung abrechnen (nur bei Erfolg und wenn ein Guthaben-Konto existiert).
     if (r.ok && hasCreditAccount && data?.usage) {
-      const inTok = data.usage.input_tokens || 0;
+      // Prompt-Cache: Lesen kostet 0,1×, Schreiben 1,25× des Eingabepreises → in „effektive" Eingabe-Tokens umrechnen
+      const inTok = Math.round((data.usage.input_tokens || 0)
+        + (data.usage.cache_read_input_tokens || 0) * 0.1
+        + (data.usage.cache_creation_input_tokens || 0) * 1.25);
       const outTok = data.usage.output_tokens || 0;
       const { charge, raw } = chargeCents(model, inTok, outTok);
       const chargeCentsRounded = Math.max(0, Math.ceil(charge)); // mind. 0, auf ganze Cent aufrunden

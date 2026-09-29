@@ -25,9 +25,9 @@
     button:disabled { cursor: default; }
     a { text-decoration: none; }
     select option { background: #242424; color: #fff; }
-    ::-webkit-scrollbar { width: 5px; height: 5px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #2E2E2E; border-radius: 3px; }
+    /* Scrollbalken überall ausgeblendet – gescrollt wird weiterhin per Maus/Touch */
+    * { scrollbar-width: none; -ms-overflow-style: none; }
+    *::-webkit-scrollbar { display: none; width: 0; height: 0; }
     .navlink { background:none; border:none; cursor:pointer; color:rgba(255,255,255,0.62); transition:color .14s ease; }
     .navlink:hover { color:#9BC72E; }
     .drawerPanel{animation:slideInRight .24s cubic-bezier(.2,.7,.2,1)}
@@ -50,7 +50,7 @@
     .railBtn:hover .railTip{opacity:1;transform:translateY(-50%) translateX(0);}
     .glassPanel{backdrop-filter:blur(22px) saturate(1.4);-webkit-backdrop-filter:blur(22px) saturate(1.4);}
   </style>
-  <script type="module" crossorigin src="/buqo-io/assets/index-pC0fYTzz.js"></script>
+  <script type="module" crossorigin src="/buqo-io/assets/index-Clb3Pipz.js"></script>
 </head>
 <body>
 <script>try{var _t=(localStorage.getItem('sp_theme_v2')?localStorage.getItem('sp_theme'):'light')||'light';var _d=_t==='dark'||(_t==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var _bg=_d?'#181818':'#F5F5F7';document.documentElement.style.background=_bg;document.body.style.background=_bg;document.documentElement.style.colorScheme=_d?'dark':'light';}catch(e){}</script>

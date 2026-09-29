@@ -167,3 +167,36 @@ test('Rechnung samt Einnahme-Buchung auf ein Immobilien-Konto verschieben', () =
   const b = updateBooking(r.data, names, 'b2', { account: 'privat' });
   assert.equal(b.account, 'privat'); assert.equal(b.data[2025][2].privat.einnahmen[0].id, 'b2');
 });
+
+import { addLetter, listLetters, letterMemoryLines, detectBankAnomalies, toISODate } from './actions.js';
+import { buildSystemBlocks, toolsWithCache, usageCost, addUsage } from './tools.js';
+
+test('Brief: To-do mit Frist, Schritten, Antwortentwurf und kompaktem Gedächtnis', () => {
+  const r = addLetter({ todos: [] }, { kind: 'Finanzamt', sender: 'Finanzamt Köln-Mitte', subject: 'Einkommensteuerbescheid 2024', reference: '214/5678/1234', deadline: '12.10.2026', amount: 1234.5, summary: 'Nachzahlung fällig.', steps: ['Bescheid prüfen', 'Einspruch erwägen'], reply: { to: 'poststelle@fa.de', body: 'Sehr geehrte Damen und Herren, …' }, filePath: 'Briefe/2026/x.pdf', fileName: 'x.pdf' }, { id: 'L1', todoId: 'T1', today: '2026-09-29' });
+  assert.equal(r.todo.dueDate, '2026-10-12'); assert.equal(r.todo.source, 'brief'); assert.match(r.todo.title, /Finanzamt: Einkommensteuerbescheid 2024 \(Frist 12\.10\.2026\)/);
+  assert.match(r.todo.note, /• Bescheid prüfen/); assert.equal(r.todo.replyDraft.to, 'poststelle@fa.de'); assert.equal(r.data.letters.length, 1);
+  assert.equal(listLetters(r.data, { query: 'köln' }).length, 1); assert.equal(listLetters(r.data, { query: 'zzz' }).length, 0);
+  const mem = letterMemoryLines(r.data); assert.equal(mem.length, 1); assert.ok(mem[0].length < 140);
+  const done = { ...r.data, todos: r.data.todos.map(t => ({ ...t, done: true })) }; assert.equal(letterMemoryLines(done).length, 0);
+  assert.throws(() => addLetter({}, { summary: 'x' }, { id: 'a', todoId: 'b', today: '2026-01-01' }));
+  assert.equal(toISODate('5.3.26'), '2026-03-05');
+});
+
+test('Bank-Auffälligkeiten: doppelt abgebucht und Preisänderung, ohne Wiederholung', () => {
+  const drafts = [
+    { name: 'Netflix', amount: 12.99, kind: 'aus', datum: '2026-09-03' }, { name: 'NETFLIX', amount: 12.99, kind: 'aus', datum: '2026-09-03' },
+    { name: 'Telekom', amount: 49.95, kind: 'aus', datum: '2026-09-05' }, { name: 'Rewe', amount: 20, kind: 'aus', datum: '2026-09-05' }, { name: 'Rewe', amount: 20, kind: 'aus', datum: '2026-09-25' },
+  ];
+  const found = detectBankAnomalies(drafts, [{ name: 'Telekom', amount: 39.95, datum: '2026-08-05' }, { name: 'Netflix', amount: 12.99, datum: '2026-08-03' }]);
+  assert.equal(found.length, 2);
+  assert.ok(found.some(f => /Doppelt abgebucht: Netflix/.test(f.title))); assert.ok(found.some(f => /Teurer geworden: Telekom/.test(f.title) && /39,95/.test(f.title) && /49,95/.test(f.title)));
+  assert.equal(new Set(found.map(f => f.key)).size, 2);
+});
+
+test('Prompt-Cache-Blöcke, Kosten und Verbrauch', () => {
+  const b = buildSystemBlocks({ today: '29.09.2026' }); assert.equal(b.length, 2); assert.ok(b[0].cache_control); assert.ok(!b[1].cache_control); assert.match(b[1].text, /KONTEXT/);
+  const t = toolsWithCache(ASSISTANT_TOOLS); assert.ok(t[t.length - 1].cache_control); assert.ok(!t[0].cache_control);
+  const c = usageCost('claude-opus-5', { input_tokens: 1000, output_tokens: 1000, cache_read_input_tokens: 10000 }); assert.ok(Math.abs(c - (0.005 + 0.025 + 0.005)) < 1e-9);
+  assert.deepEqual(addUsage(null, { input_tokens: 5, output_tokens: 2 }), { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, calls: 1 });
+  assert.ok(ASSISTANT_TOOLS.some(x => x.name === 'save_letter') && ASSISTANT_TOOLS.some(x => x.name === 'draft_email'));
+});
