@@ -6,7 +6,7 @@ const clip = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().sl
 // Eine Zeile pro Posten – kompakt, damit viele Posten in eine Anfrage passen.
 export function rowLine(r) {
   const art = r.key && r.key[0] === 'r' ? 'Rechnung' : (r.kind === 'ein' ? 'Einnahme' : 'Ausgabe');
-  return [r.key, art, r.datum || '', clip(r.name, 60), clip(r.beschreibung && r.beschreibung !== r.name ? r.beschreibung : '', 90), clip(r.kategorie, 30), (Math.round((r.brutto || 0) * 100) / 100).toFixed(2) + ' €'].join(' | ');
+  return [r.key, art, r.datum || '', clip(r.name, 60), clip(r.beschreibung && r.beschreibung !== r.name ? r.beschreibung : '', 90), clip(r.kategorie, 30), (Math.round((r.brutto || 0) * 100) / 100).toFixed(2) + ' €', (r.mwst != null && !isNaN(r.mwst) ? r.mwst + ' %' : '')].join(' | ');
 }
 
 export function buildClassifyPrompt(accounts, hint) {
@@ -63,7 +63,7 @@ export async function classifyRows({ invoke, model, adaptive = true, accounts, r
     let todo = batch;
     for (let attempt = 0; attempt < 2 && todo.length; attempt++) {
       const ids = new Set(todo.map(r => r.key));
-      const body = { model, max_tokens: 8000, system, messages: [{ role: 'user', content: [{ type: 'text', text: 'POSTEN (id | Art | Datum | Name | Beschreibung | Kategorie | Brutto):\n' + todo.map(rowLine).join('\n') }] }] };
+      const body = { model, max_tokens: 8000, system, messages: [{ role: 'user', content: [{ type: 'text', text: 'POSTEN (id | Art | Datum | Name | Beschreibung | Kategorie | Brutto | MwSt-Satz):\n' + todo.map(rowLine).join('\n') }] }] };
       if (adaptive) { body.thinking = { type: 'adaptive' }; body.output_config = { effort: 'low' }; }
       const resp = await invoke(body);
       Object.assign(results, parseClassification(textOf(resp), validKeys, ids));

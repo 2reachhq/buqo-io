@@ -5,8 +5,8 @@ import { rowLine, buildClassifyPrompt, parseClassification, classifyRows } from 
 const accounts = [{ key: 'unter', label: 'Designpeak' }, { key: 'p1', label: 'Ferienwohnung Sylt' }, { key: 'privat', label: 'Privat' }];
 
 test('Zeile und Prompt enthalten alles Nötige', () => {
-  const l = rowLine({ key: 'r3', kind: 'ein', datum: '2025-03-01', name: 'Müller', beschreibung: 'Miete März', kategorie: '', brutto: 850 });
-  assert.equal(l, 'r3 | Rechnung | 2025-03-01 | Müller | Miete März |  | 850.00 €');
+  const l = rowLine({ key: 'r3', kind: 'ein', datum: '2025-03-01', name: 'Müller', beschreibung: 'Miete März', kategorie: '', brutto: 850, mwst: 7 });
+  assert.equal(l, 'r3 | Rechnung | 2025-03-01 | Müller | Miete März |  | 850.00 € | 7 %');
   const p = buildClassifyPrompt(accounts, 'Mieter Müller = Sylt');
   assert.match(p, /p1: Ferienwohnung Sylt/); assert.match(p, /Mieter Müller = Sylt/); assert.match(p, /"z"/);
 });

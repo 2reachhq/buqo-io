@@ -21,6 +21,7 @@ export default function SevdeskImport(props) {
   const [rowAcct, setRowAcct] = useState({});
   const [skip, setSkip] = useState({});
   const [confirmed, setConfirmed] = useState(true);
+  const [minCust, setMinCust] = useState(2); // Kunden nur anlegen, wenn er mind. so viele Rechnungen hat (1 = alle)
   const [mapOpen, setMapOpen] = useState({});
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
@@ -85,7 +86,7 @@ export default function SevdeskImport(props) {
     setBusy(true); setErr(''); setResult(null);
     try {
       const payload = {
-        confirmed,
+        confirmed, minCust,
         belege: belegeGo.map(r => ({ ...r, dest: acctOf('b', r), file: fileFor(zipB, r.file) })),
         rechnungen: rechGo.map(r => ({ ...r, dest: acctOf('r', r), file: fileFor(zipR, r.file) })),
       };
@@ -134,9 +135,10 @@ export default function SevdeskImport(props) {
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div><div style={lbl}>Steuerjahr</div><select value={year} onChange={e => setYear(e.target.value)} style={{ ...SS, width: 130 }}><option value="alle">Alle Jahre</option>{[...new Set([...(yearsSeen), defaultYear].filter(Boolean))].sort().map(y => <option key={y} value={String(y)}>{y}</option>)}</select></div>
           {B && <div><div style={lbl}>Belege standardmäßig auf Konto</div><select value={acct} onChange={e => setAcct(e.target.value)} style={{ ...SS, width: 220 }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></div>}
+          <div><div style={lbl}>Kunden anlegen ab</div><select value={minCust} onChange={e => setMinCust(+e.target.value)} style={{ ...SS, width: 190 }}><option value={1}>1 Rechnung (alle)</option><option value={2}>2 Rechnungen</option><option value={3}>3 Rechnungen</option><option value={5}>5 Rechnungen</option></select></div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.txt, cursor: 'pointer', paddingBottom: 8 }}><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> Als abgeschlossen importieren (kein „wartet auf Kontoauszug")</label>
         </div>
-        <div style={{ fontSize: 12, color: C.mut, marginTop: 10, lineHeight: 1.5 }}>Jede Rechnung und jeder Beleg landet auf dem Konto, das in der Tabelle steht. Lass die KI unten alles vorsortieren und korrigiere nur, was gelb markiert ist.</div>
+        <div style={{ fontSize: 12, color: C.mut, marginTop: 10, lineHeight: 1.5 }}>Jede Rechnung und jeder Beleg landet auf dem Konto, das in der Tabelle steht. Einmalige Gäste werden nicht als Kunde angelegt (ihre Rechnung bleibt mit Namen erhalten) – nur wer mindestens so viele Rechnungen hat, wie oben gewählt. Lass die KI unten alles vorsortieren und korrigiere nur, was gelb markiert ist.</div>
       </div>
 
       {aiClassify && allGo.length > 0 && (
