@@ -2525,7 +2525,7 @@ function App({session}) {
     const minCust=Math.max(1,+payload.minCust||1); const perName={}; rec.forEach(r=>{ const n=normName(r.name||'Kunde'); perName[n]=(perName[n]||0)+1; }); const wantCust=(nm)=>perName[normName(nm)]>=minCust; const knownNames=new Set(customers.map(c=>normName(c.name))); const newNames=new Set(); rec.forEach(r=>{ const n=normName(r.name||'Kunde'); if(!knownNames.has(n) && wantCust(r.name||'Kunde')) newNames.add(n); });
     setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const now2=new Date().toISOString();
       bel.forEach(r=>{ if(!nd[r.y]) nd[r.y]={}; if(!nd[r.y][r.m]) nd[r.y][r.m]=emptyMonth(); const done=payload.confirmed||r.status==='bezahlt';
-        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), amount:r.brutto, netto:r.netto, mwst:r.mwst, category:r.kategorie||'', note:[(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
+        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), ...(r.recur?{recurring:true, from:r.recur.from, until:r.recur.until}:{}), amount:r.brutto, netto:r.netto, mwst:r.mwst, category:r.kategorie||'', note:[(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
         _bookKind(nd[r.y][r.m], r.acct, r.kind, item); });
       const custs=[...(nd.customers||[])]; const invs=[...(nd.invoices||[])];
       rec.forEach(r=>{ const nm=(r.name||'Kunde').trim(); let c=custs.find(x=>normName(x.name)===normName(nm)); if(!c && wantCust(nm)){ const nums=custs.filter(x=>(x.domain||'unter')===r.acct).map(x=>parseInt(x.custNo,10)).filter(n=>!isNaN(n)); c={id:uid(), name:nm, company:nm, firstName:'', lastName:'', anrede:'', address:String(r.adresse||'').replace(/,\s*/,'\n'), email:'', phone:'', website:'', custNo:String(r.kdnr||(nums.length?Math.max(...nums)+1:1001)), domain:r.acct, imported:'sevdesk'}; custs.push(c); }
@@ -2535,10 +2535,16 @@ function App({session}) {
         const item={...newItem(('Rechnung '+(r.nummer||'')+' · '+nm).slice(0,90)), amount:r.brutto, netto:r.netto, mwst:r.mwst, belegnr:r.nummer||'', datum:r.datum, category:'Allgemein', note:'Rechnung · Import aus sevDesk', invId, customerId:c?c.id:'', custName:nm, paid, status:paid?'bezahlt':'offen', bankConfirmed:paid, filePath:r.pdfPath, fileName:r.pdfPath?('Rechnung_'+(r.nummer||'')+'.pdf'):'', imported:'sevdesk', importedAt:now2 };
         _bookKind(nd[r.y][r.m], r.acct, 'ein', item); });
       nd.customers=custs; nd.invoices=invs;
+      // Laufende Rechnungs-Serien (aus dem Import erkannt): ab dem Folgemonat automatisch weiter erzeugen
+      const recs0=[...(nd.recurInvoices||[])];
+      (payload.recurInvoices||[]).forEach(g=>{ const nm=String(g.name||'').trim(); if(!nm) return; const acct=(g.dest==='privat'||PROPS.includes(g.dest))?g.dest:'unter'; const c=custs.find(x=>normName(x.name)===normName(nm)); const nextK=g.lastY*12+g.lastM+1; const fromY=Math.floor(nextK/12), fromM=nextK%12;
+        if(recs0.some(x=>normName(x.custName)===normName(nm) && x.fromY===fromY && x.fromM===fromM)) return;
+        recs0.push({ id:uid(), domain:acct, account:acct, customerId:c?c.id:'', custName:nm, custAddress:c?(c.address||''):String(g.adresse||'').replace(/,\s*/,'\n'), custEmail:'', firstName:'', lastName:'', company:nm, anrede:'', saveCust:false, fromY, fromM, toY:fromY+1, toM:11, genDay:1, items:[{desc:g.beschreibung||'Leistung laut Rechnung', qty:1, price:g.netto, mwst:g.mwst}], note:'', active:true, imported:'sevdesk' }); });
+      nd.recurInvoices=recs0;
       nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
       return nd; });
     setToast('Import abgeschlossen: '+bel.length+' Belege, '+rec.length+' Rechnungen');
-    return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler };
+    return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler, wiederkehrend:(payload.belege||[]).filter(r=>r.recur).length, serien:(payload.recurInvoices||[]).length };
   };
   // ── P0: Nutzungsart (privat/geschäftlich/gemischt) + Bewirtungs-Rückfrage + automatischer Steuer-Tipp ──
   const belegDom = (dest)=> PROPS.includes(dest) ? 'immo' : (dest==='unterInc'||dest==='unterExp') ? 'unter' : null;

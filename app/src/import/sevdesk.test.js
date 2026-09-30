@@ -74,3 +74,14 @@ test('Kategorie-Mapping und Windows-1252-Fallback', () => {
   assert.equal(mapCategory('', '4964'), 'Software'); assert.equal(mapCategory('Versicherung Allianz'), 'Versicherung'); assert.equal(mapCategory('Bank & Gebühren'), 'Bank & Gebühren'); assert.equal(mapCategory('Reinigungskraft'), 'Personal'); assert.equal(mapCategory('Müller Immobilien GmbH'), '');
   const cp = new Uint8Array([0x4d, 0xfc, 0x6c, 0x6c, 0x65, 0x72]); const t = decodeText(cp); assert.ok(t === 'Müller' || t.includes('�'));
 });
+
+import { detectRecurring } from './sevdesk.js';
+test('Wiederkehrendes erkennen: gleicher Name+Betrag in ≥3 Monaten, Lücke überbrückt, Einzelposten nicht', () => {
+  const mk = (idx, name, y, m, brutto) => ({ idx, name, y, m, brutto, netto: brutto / 1.19, mwst: 19, datum: y + '-' + String(m + 1).padStart(2, '0') + '-05', cancelled: false, dup: false });
+  const rows = [mk(1, 'VW Leasing GmbH', 2026, 5, 228.63), mk(2, 'VW Leasing GmbH', 2026, 6, 228.63), mk(3, 'VW Leasing GmbH', 2026, 8, 228.63), mk(4, 'VW Leasing GmbH', 2026, 7, 230), // 230 liegt innerhalb 2 %
+    mk(5, 'Jet', 2026, 1, 50), mk(6, 'Jet', 2026, 2, 80), mk(7, 'Jet', 2026, 3, 30), // schwankende Beträge → kein Treffer
+    mk(8, 'Adobe', 2025, 0, 29.4), mk(9, 'Adobe', 2025, 1, 29.4)]; // nur 2 Monate
+  const g = detectRecurring(rows, { today: new Date('2026-09-29') });
+  assert.equal(g.length, 1); assert.equal(g[0].name, 'VW Leasing GmbH'); assert.equal(g[0].months, 4); assert.equal(g[0].ongoing, true); assert.deepEqual(g[0].to, { y: 2026, m: 8 }); assert.equal(g[0].idxs.length, 4);
+  assert.equal(detectRecurring(rows, { today: new Date('2027-06-01') })[0].ongoing, false);
+});

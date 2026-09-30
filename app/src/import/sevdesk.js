@@ -211,3 +211,45 @@ export function summarize(records) {
   const sum = (arr, f) => Math.round(arr.reduce((s, r) => s + (r[f] || 0), 0) * 100) / 100;
   return { total: records.length, importable: ok.length, dup: records.filter(r => r.dup).length, cancelled: records.filter(r => r.cancelled).length, invalid: records.filter(r => !r.dup && !r.cancelled && !(r.brutto > 0 && r.datum)).length, brutto: sum(ok, 'brutto'), netto: sum(ok, 'netto'), years: [...new Set(ok.map(r => r.y))].sort() };
 }
+
+/* ── Wiederkehrendes erkennen ─────────────────────────────────────────────────────────────
+   Gleicher Name + (fast) gleicher Betrag in mindestens `minMonths` Monaten in Folge (ein fehlender Monat wird überbrückt).
+   rows: normalisierte Zeilen (normalizeRows) – bewusst ALLE Jahre, damit ein Lauf nicht an der
+   Jahresgrenze abreißt. Ergebnis je Gruppe: { id, name, amount, mwst, months, from:{y,m}, to:{y,m},
+   idxs:[Zeilen-idx], ongoing, last:{idx,...} }. `today` (Date) bestimmt, ob eine Gruppe noch läuft
+   (letzter Eintrag im aktuellen oder Vormonat). */
+export function detectRecurring(rows, { minMonths = 3, tolerance = 0.02, today = new Date() } = {}) {
+  const usable = (rows || []).filter(r => r && !r.cancelled && !r.dup && r.brutto > 0 && r.datum && r.y != null);
+  const byName = new Map();
+  usable.forEach(r => { const k = norm(r.name); if (k.length < 3) return; if (!byName.has(k)) byName.set(k, []); byName.get(k).push(r); });
+  const nowK = today.getFullYear() * 12 + today.getMonth();
+  const out = [];
+  byName.forEach((list, nameKey) => {
+    // Beträge clustern: erster Betrag einer Gruppe gibt die Mitte vor, ±tolerance
+    const clusters = [];
+    list.slice().sort((a, b) => a.datum.localeCompare(b.datum)).forEach(r => {
+      let c = clusters.find(x => Math.abs(r.brutto - x.center) <= Math.max(0.01, x.center * tolerance));
+      if (!c) { c = { center: r.brutto, rows: [] }; clusters.push(c); }
+      c.rows.push(r);
+    });
+    clusters.forEach(c => {
+      const ks = [...new Set(c.rows.map(r => r.y * 12 + r.m))].sort((a, b) => a - b);
+      // Monatsläufe (Lücke von höchstens einem Monat wird überbrückt)
+      let start = 0;
+      for (let i = 1; i <= ks.length; i++) {
+        if (i === ks.length || ks[i] > ks[i - 1] + 2) { // ein fehlender Monat unterbricht den Lauf nicht
+          const run = ks.slice(start, i);
+          if (run.length >= minMonths) {
+            const inRun = c.rows.filter(r => { const k = r.y * 12 + r.m; return k >= run[0] && k <= run[run.length - 1]; });
+            const lastRow = inRun.slice().sort((a, b) => a.datum.localeCompare(b.datum)).pop();
+            const avg = inRun.reduce((s, r) => s + r.brutto, 0) / inRun.length;
+            out.push({ id: nameKey + '|' + Math.round(c.center * 100) + '|' + run[0], name: lastRow.name, amount: Math.round(avg * 100) / 100, mwst: lastRow.mwst, netto: lastRow.netto, beschreibung: lastRow.beschreibung || '', months: run.length,
+              from: { y: Math.floor(run[0] / 12), m: run[0] % 12 }, to: { y: Math.floor(run[run.length - 1] / 12), m: run[run.length - 1] % 12 }, idxs: inRun.map(r => r.idx), ongoing: run[run.length - 1] >= nowK - 1, last: lastRow });
+          }
+          start = i;
+        }
+      }
+    });
+  });
+  return out.sort((a, b) => (Number(b.ongoing) - Number(a.ongoing)) || (b.months - a.months));
+}
