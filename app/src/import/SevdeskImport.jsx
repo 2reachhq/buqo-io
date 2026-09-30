@@ -2,7 +2,7 @@
 // Alles wird lokal gelesen und in einer Vorschau gezeigt; erst „Jetzt importieren" schreibt Buchungen,
 // Rechnungen, Kunden und lädt die PDFs in den Beleg-Speicher (übernimmt die App über onImport).
 import React from 'react';
-import { decodeText, parseCSV, autoMap, detectFormat, FORMAT_LABEL, normalizeRows, matchFiles, markDuplicates, summarize, CATS } from './sevdesk.js';
+import { decodeText, parseCSV, autoMap, detectFormat, FORMAT_LABEL, normalizeRows, matchFiles, markDuplicates, summarize, detectRecurring, CATS } from './sevdesk.js';
 import { readZipEntries, baseName } from './zip.js';
 
 const { useState, useMemo } = React;
@@ -21,6 +21,7 @@ export default function SevdeskImport(props) {
   const [rowAcct, setRowAcct] = useState({});
   const [skip, setSkip] = useState({});
   const [confirmed, setConfirmed] = useState(true);
+  const [recurOff, setRecurOff] = useState({}); // erkannte Wiederkehrend-Gruppen, die der Nutzer abgewählt hat
   const [minCust, setMinCust] = useState(2); // Kunden nur anlegen, wenn er mind. so viele Rechnungen hat (1 = alle)
   const [mapOpen, setMapOpen] = useState({});
   const [busy, setBusy] = useState(false);
@@ -57,6 +58,11 @@ export default function SevdeskImport(props) {
 
   const willImport = (X, key) => X ? X.rows.filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum && !skip[key + r.idx]) : [];
   const belegeGo = willImport(B, 'b'), rechGo = willImport(R, 'r');
+  // Wiederkehrendes: über ALLE Jahre erkennen (Lauf reißt nicht an der Jahresgrenze ab), gesetzt wird es nur bei importierten Zeilen
+  const recurB = useMemo(() => B ? detectRecurring(B.rows.filter(r => !r.dup).map(r => r)) : [], [B]);
+  const recurR = useMemo(() => R ? detectRecurring(R.rows.filter(r => !r.dup).map(r => r)) : [], [R]);
+  const goIdx = (go) => new Set(go.map(r => r.idx));
+  const recurActive = (groups, go, k) => { const set = goIdx(go); return groups.filter(g => !recurOff[k + g.id] && g.idxs.some(i => set.has(i))); };
   // Belege mit Wohnungs-/Vermietungsbezug landen standardmäßig beim ersten Immobilien-Konto
   const propKeys = accounts.filter(a => /^p\d$/.test(a.key)).map(a => a.key);
   const RE_PROP = /ferienwohnung|airbnb|booking|apartment|wohnung|immobil|mieter|vermiet|reinigung|putz|hausgeld|hausverwalt|stadtwerke|nebenkosten/i;
@@ -87,8 +93,10 @@ export default function SevdeskImport(props) {
     try {
       const payload = {
         confirmed, minCust,
-        belege: belegeGo.map(r => ({ ...r, dest: acctOf('b', r), file: fileFor(zipB, r.file) })),
+        belege: belegeGo.map(r => { const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
         rechnungen: rechGo.map(r => ({ ...r, dest: acctOf('r', r), file: fileFor(zipR, r.file) })),
+        // laufende Rechnungs-Serien: ab dem Folgemonat automatisch weiter erzeugen
+        recurInvoices: recurActive(recurR, rechGo, 'r').filter(g => g.ongoing && g.idxs.includes(g.last.idx) && rechGo.some(r => r.idx === g.last.idx)).map(g => ({ name: g.last.name, dest: acctOf('r', g.last), netto: g.last.netto, mwst: g.last.mwst, beschreibung: g.last.beschreibung, adresse: g.last.adresse, lastY: g.to.y, lastM: g.to.m })),
       };
       const res = await onImport(payload, setProgress);
       setResult(res);
@@ -183,6 +191,27 @@ export default function SevdeskImport(props) {
         </div>
       )}
 
+      {(recurB.length + recurR.length > 0) && (() => {
+        const M = (f) => ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'][f.m] + ' ' + f.y;
+        const sec = (title, groups, go, k, note) => groups.filter(g => g.idxs.some(i => goIdx(go).has(i))).length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.sub, letterSpacing: '0.03em', marginBottom: 6 }}>{title}</div>
+            {groups.filter(g => g.idxs.some(i => goIdx(go).has(i))).map(g => { const off = !!recurOff[k + g.id]; return (
+              <label key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', borderTop: '1px solid ' + C.sep, cursor: 'pointer', opacity: off ? 0.5 : 1 }}>
+                <input type="checkbox" checked={!off} onChange={e => setRecurOff(o => ({ ...o, [k + g.id]: !e.target.checked }))} />
+                <span style={{ flex: 1, minWidth: 0 }}><span style={{ fontSize: 13.5, fontWeight: 600, color: C.txt }}>{g.name}</span><span style={{ display: 'block', fontSize: 12, color: C.sub }}>{g.months} Monate · {M(g.from)} – {M(g.to)}{g.ongoing ? ' · läuft noch' : ''}{note && g.ongoing ? note(g) : ''}</span></span>
+                <span style={{ fontSize: 13.5, fontWeight: 700, ...NUM }}>{fmt(g.amount)}</span>
+              </label>); })}
+          </div>);
+        return (
+          <div style={{ ...card, marginBottom: 14 }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Wiederkehrendes erkannt</div>
+            <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>Gleicher Name und Betrag in mindestens 3 Monaten hintereinander. Die einzelnen Monate bleiben als Buchungen erhalten; zusätzlich werden sie als wiederkehrend markiert. Bei laufenden Rechnungs-Serien wird ab dem Folgemonat automatisch weiter eine Rechnung erzeugt. Nimm das Häkchen raus, wo es nicht stimmt.</div>
+            {sec('BELEGE / AUSGABEN', recurB, belegeGo, 'b')}
+            {sec('RECHNUNGEN / EINNAHMEN', recurR, rechGo, 'r', g => ' · neue Rechnung ab ' + M({ y: g.to.m === 11 ? g.to.y + 1 : g.to.y, m: (g.to.m + 1) % 12 }))}
+          </div>);
+      })()}
+
       <div style={{ ...card, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ fontSize: 15, fontWeight: 700 }}>{belegeGo.length} Belege und {rechGo.length} Rechnungen{year !== 'alle' ? ' für ' + year : ''} importieren</div>
@@ -193,7 +222,7 @@ export default function SevdeskImport(props) {
       {busy && <div className="prog" style={{ marginBottom: 14 }} />}
       {result && (
         <div style={{ ...card, marginBottom: 14, background: hexA(C.grn, 0.07), border: '1px solid ' + hexA(C.grn, 0.35) }}>
-          <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>Fertig – {result.belege} Belege, {result.rechnungen} Rechnungen, {result.kunden} neue Kunden, {result.dateien} Dateien abgelegt</div>
+          <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>Fertig – {result.belege} Belege, {result.rechnungen} Rechnungen, {result.kunden} neue Kunden, {result.dateien} Dateien abgelegt{result.wiederkehrend ? ' · ' + result.wiederkehrend + ' Belege als wiederkehrend markiert' : ''}{result.serien ? ' · ' + result.serien + ' laufende Rechnungs-Serie(n) angelegt' : ''}</div>
           <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.6 }}>{result.fehler ? result.fehler + ' Datei(en) konnten nicht hochgeladen werden, die Buchungen sind trotzdem da. ' : ''}Schau jetzt in die Konten oder direkt in die Steuerprognose {year !== 'alle' ? year : ''} – dort sind die Zahlen sofort drin. Einen erneuten Import mit denselben Dateien erkennt Buqo als Dubletten.</div>
         </div>
       )}

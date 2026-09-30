@@ -2156,7 +2156,7 @@ function App({session}) {
   const toISO = s => { if(!s) return ''; s=String(s); if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10); const m=s.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})/); if(m){ let y=m[3]; if(y.length===2)y='20'+y; return y+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0'); } return ''; };
   const addDays = (iso,n)=>{ try{ const d=new Date(iso); if(isNaN(d.getTime())) return ''; d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }catch(e){ return ''; } };
   // Unbezahlte Rechnungen, die ihr Fälligkeitsdatum (oder ohne Angabe: 14 Tage nach Rechnungsdatum) überschritten haben
-  const overdueInvoices = ()=>{ const today=new Date().toISOString().slice(0,10); return (data.invoices||[]).filter(iv=>{ if(iv.paid) return false; const due = iv.due || addDays(iv.date,14); return due && due<today; }); };
+  const overdueInvoices = (dd)=>{ const today=new Date().toISOString().slice(0,10); return ((dd||data).invoices||[]).filter(iv=>{ if(iv.paid) return false; const due = iv.due || addDays(iv.date,14); return due && due<today; }); };
   // Dublette + Wiederkehrend für einen Entwurf bestimmen
   const flagDraft = (d, all) => { const dn=normName(d.name), da=num(d.amount); const dNote=String(d.note||'').toLowerCase(); let dup=null;
     for(const b of all){ const bn=b.it.belegnr, ba=num(b.it.amount);
@@ -2525,7 +2525,7 @@ function App({session}) {
     const minCust=Math.max(1,+payload.minCust||1); const perName={}; rec.forEach(r=>{ const n=normName(r.name||'Kunde'); perName[n]=(perName[n]||0)+1; }); const wantCust=(nm)=>perName[normName(nm)]>=minCust; const knownNames=new Set(customers.map(c=>normName(c.name))); const newNames=new Set(); rec.forEach(r=>{ const n=normName(r.name||'Kunde'); if(!knownNames.has(n) && wantCust(r.name||'Kunde')) newNames.add(n); });
     setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const now2=new Date().toISOString();
       bel.forEach(r=>{ if(!nd[r.y]) nd[r.y]={}; if(!nd[r.y][r.m]) nd[r.y][r.m]=emptyMonth(); const done=payload.confirmed||r.status==='bezahlt';
-        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), amount:r.brutto, netto:r.netto, mwst:r.mwst, category:r.kategorie||'', note:[(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
+        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), ...(r.recur?{recurring:true, from:r.recur.from, until:r.recur.until}:{}), amount:r.brutto, netto:r.netto, mwst:r.mwst, category:r.kategorie||'', note:[(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
         _bookKind(nd[r.y][r.m], r.acct, r.kind, item); });
       const custs=[...(nd.customers||[])]; const invs=[...(nd.invoices||[])];
       rec.forEach(r=>{ const nm=(r.name||'Kunde').trim(); let c=custs.find(x=>normName(x.name)===normName(nm)); if(!c && wantCust(nm)){ const nums=custs.filter(x=>(x.domain||'unter')===r.acct).map(x=>parseInt(x.custNo,10)).filter(n=>!isNaN(n)); c={id:uid(), name:nm, company:nm, firstName:'', lastName:'', anrede:'', address:String(r.adresse||'').replace(/,\s*/,'\n'), email:'', phone:'', website:'', custNo:String(r.kdnr||(nums.length?Math.max(...nums)+1:1001)), domain:r.acct, imported:'sevdesk'}; custs.push(c); }
@@ -2535,10 +2535,16 @@ function App({session}) {
         const item={...newItem(('Rechnung '+(r.nummer||'')+' · '+nm).slice(0,90)), amount:r.brutto, netto:r.netto, mwst:r.mwst, belegnr:r.nummer||'', datum:r.datum, category:'Allgemein', note:'Rechnung · Import aus sevDesk', invId, customerId:c?c.id:'', custName:nm, paid, status:paid?'bezahlt':'offen', bankConfirmed:paid, filePath:r.pdfPath, fileName:r.pdfPath?('Rechnung_'+(r.nummer||'')+'.pdf'):'', imported:'sevdesk', importedAt:now2 };
         _bookKind(nd[r.y][r.m], r.acct, 'ein', item); });
       nd.customers=custs; nd.invoices=invs;
+      // Laufende Rechnungs-Serien (aus dem Import erkannt): ab dem Folgemonat automatisch weiter erzeugen
+      const recs0=[...(nd.recurInvoices||[])];
+      (payload.recurInvoices||[]).forEach(g=>{ const nm=String(g.name||'').trim(); if(!nm) return; const acct=(g.dest==='privat'||PROPS.includes(g.dest))?g.dest:'unter'; const c=custs.find(x=>normName(x.name)===normName(nm)); const nextK=g.lastY*12+g.lastM+1; const fromY=Math.floor(nextK/12), fromM=nextK%12;
+        if(recs0.some(x=>normName(x.custName)===normName(nm) && x.fromY===fromY && x.fromM===fromM)) return;
+        recs0.push({ id:uid(), domain:acct, account:acct, customerId:c?c.id:'', custName:nm, custAddress:c?(c.address||''):String(g.adresse||'').replace(/,\s*/,'\n'), custEmail:'', firstName:'', lastName:'', company:nm, anrede:'', saveCust:false, fromY, fromM, toY:fromY+1, toM:11, genDay:1, items:[{desc:g.beschreibung||'Leistung laut Rechnung', qty:1, price:g.netto, mwst:g.mwst}], note:'', active:true, imported:'sevdesk' }); });
+      nd.recurInvoices=recs0;
       nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
       return nd; });
     setToast('Import abgeschlossen: '+bel.length+' Belege, '+rec.length+' Rechnungen');
-    return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler };
+    return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler, wiederkehrend:(payload.belege||[]).filter(r=>r.recur).length, serien:(payload.recurInvoices||[]).length };
   };
   // ── P0: Nutzungsart (privat/geschäftlich/gemischt) + Bewirtungs-Rückfrage + automatischer Steuer-Tipp ──
   const belegDom = (dest)=> PROPS.includes(dest) ? 'immo' : (dest==='unterInc'||dest==='unterExp') ? 'unter' : null;
@@ -2631,7 +2637,7 @@ function App({session}) {
   // Liste offener Belege (Status „offen") – optional nach Art (ein/aus) gefiltert
   // Schnell-Zuordnung eines Bank-Entwurfs zu einem beliebigen Konto (Einnahme ODER Ausgabe)
   const quickAssignDraft = (draftId, account)=>{ const d=(drafts||[]).find(x=>x.id===draftId); if(!d) return; const dt=new Date(d.datum); const ty=isNaN(dt)?yr:dt.getFullYear(); const tm=isNaN(dt)?mo:dt.getMonth(); const kind=(d.kind==='ein'?'ein':'aus'); setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); if(!nd[ty])nd[ty]={}; if(!nd[ty][tm])nd[ty][tm]=emptyMonth(); const item={...newItem(d.name),amount:num(d.amount),netto:num(d.netto),mwst:(d.mwst!=null?d.mwst:''),note:(d.note||''),belegnr:d.belegnr||'',category:d.category||'',datum:d.datum||'',status:(kind==='ein'?'bezahlt':'abgebucht'),bankConfirmed:true,fileData:d.fileData||null,fileName:d.fileName||'',id:uid()}; _bookKind(nd[ty][tm], account, kind, item); nd.drafts=(nd.drafts||[]).filter(x=>x.id!==draftId); return nd; }); setDraftSel(s=>s.filter(x=>x!==draftId)); setToast('Zugeordnet → '+captureAccLabel(account)+' · '+MONTHS[tm]+' '+ty); };
-  const openBelegeList = (kindFilter)=>{ const out=[]; Object.keys(data||{}).forEach(yk=>{ if(isNaN(+yk))return; const Y=data[yk]; if(!Y||typeof Y!=='object')return; Object.keys(Y).forEach(mk=>{ if(isNaN(+mk))return; const M=Y[mk]; if(!M)return; const grab=(arr,acc,kd)=>{ (arr||[]).forEach(it=>{ if(it.status==='offen' && (!kindFilter||kd===kindFilter)) out.push({it,account:acc,kind:kd,ty:+yk,tm:+mk}); }); }; if(M.props)Object.keys(M.props).forEach(pid=>{ const p=M.props[pid]||{}; grab(p.einnahmen,pid,'ein'); grab(p.expenses,pid,'aus'); }); if(M.unternehmen){ grab(M.unternehmen.clients,'unter','ein'); grab(M.unternehmen.items,'unter','aus'); } if(M.privat){ grab(M.privat.einnahmen,'privat','ein'); grab(M.privat.items,'privat','aus'); } }); }); out.sort((a,b)=>(b.ty-a.ty)||(b.tm-a.tm)); return out; };
+  const openBelegeList = (kindFilter, dd)=>{ const D0=dd||data; const out=[]; Object.keys(D0||{}).forEach(yk=>{ if(isNaN(+yk))return; const Y=D0[yk]; if(!Y||typeof Y!=='object')return; Object.keys(Y).forEach(mk=>{ if(isNaN(+mk))return; const M=Y[mk]; if(!M)return; const grab=(arr,acc,kd)=>{ (arr||[]).forEach(it=>{ if(it.status==='offen' && (!kindFilter||kd===kindFilter)) out.push({it,account:acc,kind:kd,ty:+yk,tm:+mk}); }); }; if(M.props)Object.keys(M.props).forEach(pid=>{ const p=M.props[pid]||{}; grab(p.einnahmen,pid,'ein'); grab(p.expenses,pid,'aus'); }); if(M.unternehmen){ grab(M.unternehmen.clients,'unter','ein'); grab(M.unternehmen.items,'unter','aus'); } if(M.privat){ grab(M.privat.einnahmen,'privat','ein'); grab(M.privat.items,'privat','aus'); } }); }); out.sort((a,b)=>(b.ty-a.ty)||(b.tm-a.tm)); return out; };
 
   /* ── Rechnungen ── */
   const company = data.company || {};              // Unternehmen (bestehend)
@@ -2688,17 +2694,25 @@ function App({session}) {
   // Deterministische Sync: überfällige Rechnungen, offene Belege und Dubletten werden als
   // Aufgaben abgebildet – neue tauchen auf, erledigte werden automatisch abgehakt. KEIN Chat-Popup mehr.
   const syncAutoTodos = () => { setData(prev=>{
+    // WICHTIG: alles nur aus `prev` (dem aktuellen Stand) berechnen – nicht aus dem Render-Closure. Der Sync läuft in einem
+    // Intervall und hätte sonst den Stand vom Seitenaufruf gesehen und längst gelöschte Rechnungen/Belege als To-dos zurückgebracht.
     let list=(prev.todos||[]).slice(); let changed=false;
+    const dismissed=new Set(prev.dismissedAuto||[]);
     const byKey={}; list.forEach(t=>{ if(t.autoKey) byKey[t.autoKey]=t; });
     const seen=new Set();
-    const upsert=(key,title,note,ref)=>{ seen.add(key); const ex=byKey[key]; if(!ex && (prev.dismissedAuto||[]).includes(key)) return;
+    const upsert=(key,title,note,ref)=>{ seen.add(key); if(dismissed.has(key)) return; const ex=byKey[key];
       if(ex){ if(ex.done && ex.autoResolved){ list=list.map(t=>t.id===ex.id?{...t,title,note,done:false,doneAt:null,autoResolved:false}:t); changed=true; byKey[key]={...ex,title,note,done:false}; }
         else if(ex.title!==title||ex.note!==note){ list=list.map(t=>t.id===ex.id?{...t,title,note}:t); changed=true; byKey[key]={...ex,title,note}; } }
       else { const t={id:uid(),autoKey:key,title,note,done:false,source:'ai',createdAt:new Date().toISOString(),ref}; list=[t,...list]; changed=true; byKey[key]=t; }
     };
-    try{ overdueInvoices().forEach(iv=>{ const c=invCustomer(iv); upsert('inv:'+iv.id, 'Rechnung '+iv.number+' ist überfällig', (c&&c.name?('Kunde: '+c.name+'. '):'')+'Zahlungserinnerung oder Mahnung senden.', {type:'invoice', id:iv.id}); }); }catch(e){}
-    try{ openBelegeList().forEach(b=>{ upsert('beleg:'+b.it.id, 'Beleg „'+(b.it.name||'—')+'" wartet auf Bestätigung', 'Über den Kontoauszug bestätigen oder manuell zuordnen.', {type:'booking', id:b.it.id, year:b.ty}); }); }catch(e){}
-    try{ (data.drafts||[]).filter(d=>d.dup && !d.confirmed && !d.ignored && !d.privat).forEach(d=>{ upsert('dup:'+d.id, 'Mögliche Dublette: „'+(d.name||'—')+'"', 'Im Import prüfen, ob das schon gebucht wurde.', {type:'draft', id:d.id}); }); }catch(e){}
+    try{ overdueInvoices(prev).forEach(iv=>{ const c=(prev.customers||[]).find(x=>x.id===iv.customerId); upsert('inv:'+iv.id, 'Rechnung '+iv.number+' ist überfällig', (c&&c.name?('Kunde: '+c.name+'. '):'')+'Zahlungserinnerung oder Mahnung senden.', {type:'invoice', id:iv.id}); }); }catch(e){}
+    try{ openBelegeList(undefined, prev).forEach(b=>{ upsert('beleg:'+b.it.id, 'Beleg „'+(b.it.name||'—')+'" wartet auf Bestätigung', 'Über den Kontoauszug bestätigen oder manuell zuordnen.', {type:'booking', id:b.it.id, year:b.ty}); }); }catch(e){}
+    try{ (prev.drafts||[]).filter(d=>d.dup && !d.confirmed && !d.ignored && !d.privat).forEach(d=>{ upsert('dup:'+d.id, 'Mögliche Dublette: „'+(d.name||'—')+'"', 'Im Import prüfen, ob das schon gebucht wurde.', {type:'draft', id:d.id}); }); }catch(e){}
+    // Verwaiste automatische To-dos (Rechnung/Beleg/Entwurf gibt es nicht mehr) komplett entfernen; gelöste nur abhaken
+    const bookingIds=new Set(); Object.keys(prev).forEach(yk=>{ if(isNaN(+yk)) return; const Y=prev[yk]||{}; Object.keys(Y).forEach(mk=>{ const M=Y[mk]||{}; const grab=arr=>(arr||[]).forEach(it=>it&&it.id&&bookingIds.add(it.id)); Object.keys(M.props||{}).forEach(pid=>{ grab((M.props[pid]||{}).einnahmen); grab((M.props[pid]||{}).expenses); }); grab((M.unternehmen||{}).clients); grab((M.unternehmen||{}).items); grab((M.privat||{}).einnahmen); grab((M.privat||{}).items); }); });
+    const invIds=new Set((prev.invoices||[]).map(i=>i.id)), draftIds=new Set((prev.drafts||[]).map(d=>d.id));
+    const orphan=(t)=>{ const k=t.autoKey||''; const id=k.slice(k.indexOf(':')+1); return (k.indexOf('inv:')===0&&!invIds.has(id)) || (k.indexOf('beleg:')===0&&!bookingIds.has(id)) || (k.indexOf('dup:')===0&&!draftIds.has(id)); };
+    const before=list.length; list=list.filter(t=>!(t.autoKey && orphan(t))); if(list.length!==before) changed=true;
     list = list.map(t=>{ if(!t.autoKey || t.done) return t; const tracked = t.autoKey.indexOf('inv:')===0 || t.autoKey.indexOf('beleg:')===0 || t.autoKey.indexOf('dup:')===0;
       if(tracked && !seen.has(t.autoKey)){ changed=true; return {...t, done:true, doneAt:new Date().toISOString(), autoResolved:true}; } return t; });
     return changed ? {...prev, todos:list} : prev;
