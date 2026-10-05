@@ -1352,6 +1352,8 @@ function App({session}) {
   const [resetTxt,setResetTxt]= useState('');          // Zurücksetzen: Bestätigungstext
   const [todoSelMode,setTodoSelMode]= useState(false); // To-do: Auswahl-Modus
   const [todoSel,setTodoSel]= useState([]);
+  const [packBusy,setPackBusy]= useState(false);       // Steuerberater-Paket wird gepackt
+  const [packY,setPackY]= useState(new Date().getFullYear()); const [packM,setPackM]= useState('');  // Zeitraum fürs Paket ('' = ganzes Jahr)
   const [taxDocY,setTaxDocY]= useState(null);        // Steuerunterlagen: gewähltes Jahr
   const [wiedF,setWiedF]= useState('alle');          // Wiederkehrend: Filter
   const [flyout,setFlyout]= useState(null);           // Overlay neben der Navigation {kind:'konten'|'mehr', top}
@@ -1505,6 +1507,7 @@ function App({session}) {
   const [botUsage,setBotUsage]= useState({input:0,output:0,cacheRead:0,cacheWrite:0,calls:0}); // Token-Verbrauch dieser Sitzung (live)
   const [botCost,setBotCost]= useState(0);              // geschätzte Kosten dieser Sitzung in USD
   const [botModel,setBotModel]= useState(DEFAULT_ASSISTANT_MODEL); // KI-Modell des Assistenten (in data.assistant.model gespeichert)
+  const addDraftsRef=useRef(null);                     // aktuelle addImportDrafts (für verzögerten Aufruf nach dem Import)
   const calcVatRef=useRef(null);                       // aktuelle UStVA-Berechnung (für Hintergrund-Erinnerung)
   const botCarryRef=useRef(null);                      // Datei bleibt für die Folgenachricht erhalten, wenn der Assistent mit Buttons/Formular zurückfragt
   const botAttachmentRef=useRef(null);                 // Datei der aktuellen Nachricht (für add_booking / extract_attachment_items)
@@ -2059,6 +2062,7 @@ function App({session}) {
         setToast((paid.length?paid.length+' offene Zahlung'+(paid.length>1?'en':'')+' im Kontoauszug gefunden – abgehakt. ':'')+(missing.length?missing.length+' Zahlung'+(missing.length>1?'en':'')+' nicht gefunden – To-do angelegt.':'')); }
     }catch(e){}
     return {total:flagged.length, added, skipped, dupBook}; };
+  addDraftsRef.current=addImportDrafts;
   const draftStatus = (d)=>{ if(d.ignored) return {key:'ignoriert',label:'Ignoriert',col:C.mut}; if(d.privat) return {key:'privat',label:'Privat',col:'#ABC4FF'}; if(d.confirmed) return {key:'zugeordnet',label:'Zugeordnet',col:C.grn}; if(d.openMatch) return {key:'beleg',label:'Beleg gefunden',col:C.pri}; if(d.isNew) return {key:'neu',label:'Neu',col:isDark?'#FFD27A':'#B8860B'}; return {key:'offen',label:'Offen',col:C.exp}; };
 
   /* ── Gmail-Integration ── */
@@ -2545,8 +2549,18 @@ function App({session}) {
       nd.recurInvoices=recs0;
       nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
       return nd; });
-    setToast('Import abgeschlossen: '+bel.length+' Belege, '+rec.length+' Rechnungen');
-    return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler, wiederkehrend:(payload.belege||[]).filter(r=>r.recur).length, serien:(payload.recurInvoices||[]).length };
+    // Kontoauszüge: Datei für den Steuerberater ablegen, Umsätze als Bank-Entwürfe (Abgleich mit den frisch importierten Belegen/Rechnungen)
+    const stmts=[]; let bankDrafts=[];
+    for(const b of (payload.bank||[])){ prog('Kontoauszug: '+b.name);
+      let rows=b.rows; if(!rows){ try{ const r=await aiExtractPosten(b.file); rows=(r.list||[]).map(p=>({name:p.name, amount:p.amount, kind:p.kind, datum:toISO(p.datum), belegnr:p.belegnr||'', note:p.note||'', category:p.category||'', netto:'', mwst:'', info:''})); }catch(e){ rows=[]; } }
+      rows=rows||[]; const dates=rows.map(r=>r.datum).filter(Boolean).sort(); const y=(dates[0]||new Date().toISOString().slice(0,10)).slice(0,4);
+      let path=null; try{ path=['Kontoauszüge',y,safeName(b.name)].join('/'); const {error}=await sb.storage.from('belege').upload(path, b.file, {upsert:true, contentType:b.file.type||'application/octet-stream'}); if(error) throw error; files++; }catch(e){ path=null; fehler++; }
+      stmts.push({id:uid(), fileName:b.name, path, year:+y, from:dates[0]||'', to:dates[dates.length-1]||'', count:rows.length, importedAt:new Date().toISOString()});
+      bankDrafts=bankDrafts.concat(rows.map(r=>({id:uid(), ...r}))); }
+    if(stmts.length) setData(prev=>({...prev, bankStatements:[...(prev.bankStatements||[]), ...stmts]}));
+    if(bankDrafts.length) setTimeout(()=>{ try{ addDraftsRef.current&&addDraftsRef.current(bankDrafts); }catch(e){} }, 1200);
+    setToast('Import abgeschlossen: '+bel.length+' Belege, '+rec.length+' Rechnungen'+(stmts.length?', '+stmts.length+' Kontoauszug/-auszüge':''));
+    return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler, kontoauszuege:stmts.length, bankUmsaetze:bankDrafts.length, wiederkehrend:(payload.belege||[]).filter(r=>r.recur).length, serien:(payload.recurInvoices||[]).length };
   };
   // ── P0: Nutzungsart (privat/geschäftlich/gemischt) + Bewirtungs-Rückfrage + automatischer Steuer-Tipp ──
   const belegDom = (dest)=> PROPS.includes(dest) ? 'immo' : (dest==='unterInc'||dest==='unterExp') ? 'unter' : null;
@@ -3596,6 +3610,24 @@ function App({session}) {
       const blob=await zip.generateAsync({type:'blob'}); dlBlob('DATEV_Export_'+year+'.zip',blob); setToast('DATEV-Paket erstellt ✓');
     }catch(e){ setToast('Export fehlgeschlagen: '+(e.message||e)); }
     setDatevBusy(false); };
+  /* Steuerberater-Paket: alles für einen Monat oder ein Jahr in einer ZIP – Buchungsliste, Belege, Rechnungs-PDFs, Kontoauszüge, UStVA-Kennzahlen */
+  const exportAdvisorPack = async (year, month)=>{ if(packBusy) return; setPackBusy(true); setToast('📦 Steuerberater-Paket wird gepackt…');
+    try{ await loadJSZip(); const zip=new window.JSZip(); const per=month==null?String(year):(year+'-'+String(month+1).padStart(2,'0')); const perLabel=month==null?('Jahr '+year):(MONTHS[month]+' '+year);
+      const rows=collectBizBookings(year, month); const used=new Set(); const seen={}; let nFiles=0;
+      const fetchFile=async(r)=>{ try{ if(r.fileDataRaw){ const m2=String(r.fileDataRaw).match(/^data:([^;]+);base64,(.*)$/); if(m2) return {payload:Uint8Array.from(atob(m2[2]),c=>c.charCodeAt(0)), ext:/pdf/.test(m2[1])?'pdf':'jpg'}; } else if(r.filePath){ const {data:dd}=await sb.storage.from('belege').createSignedUrl(r.filePath,3600); if(dd&&dd.signedUrl){ const resp=await fetch(dd.signedUrl); return {payload:await resp.arrayBuffer(), ext:(r.filePath.split('.').pop()||'pdf').toLowerCase()}; } } }catch(_){} return null; };
+      const put=(folder,base,ext,payload)=>{ const b=safeName(String(base||'Datei').slice(0,50))||'Datei'; let fn=b+'.'+ext, k=2; while(seen[folder+fn]){ fn=b+'_'+k+'.'+ext; k++; } seen[folder+fn]=1; zip.file(folder+fn, payload); nFiles++; };
+      zip.file('Buchungen_'+per+'.csv','﻿'+['Datum;Beleg-Nr;Name;Art;Konto;Kategorie;MwSt-Satz;Netto;Brutto;Beleg vorhanden',...rows.map(r=>[r.datum,r.belegnr,'"'+String(r.name).replace(/"/g,'""')+'"',r.kind==='ein'?'Einnahme':'Ausgabe',(names[r.account]||(r.account==='unter'?names.unternehmen:r.account)),r.category,(r.rate||0)+'%',deNum(r.netto),deNum(r.brutto),(r.hasBeleg?'ja':'nein')].join(';'))].join('\r\n'));
+      for(const r of rows){ const key=r.filePath||''; if(key&&used.has(key)) continue; const f=await fetchFile(r); if(!f) continue; if(key) used.add(key); put(r.kind==='ein'?'Einnahmen-Belege/':'Ausgaben-Belege/', [r.datum,r.belegnr||r.name].filter(Boolean).join('_'), f.ext, f.payload); }
+      const inP=(d)=>{ const iso=toISO(d); return iso && (month==null ? iso.slice(0,4)===String(year) : iso.slice(0,7)===per); };
+      for(const iv of (data.invoices||[]).filter(x=>x.pdfPath && inP(x.date) && !used.has(x.pdfPath))){ const f=await fetchFile({filePath:iv.pdfPath}); if(f){ used.add(iv.pdfPath); put('Rechnungen-Ausgang/', 'Rechnung_'+(iv.number||''), f.ext, f.payload); } }
+      const start=month==null?year+'-01-01':per+'-01', end=month==null?year+'-12-31':per+'-31';
+      for(const st of (data.bankStatements||[]).filter(s0=>s0.path && ((s0.from||s0.to)?(s0.from<=end && (s0.to||s0.from)>=start):String(s0.year)===String(year)))){ const f=await fetchFile({filePath:st.path}); if(f) put('Kontoauszuege/', st.fileName.replace(/\.[^.]+$/,''), f.ext, f.payload); }
+      const months=month==null?[...Array(12).keys()]:[month]; const vlines=[]; months.forEach(mm=>{ const v=calcVat(year,mm); if(v.rows.length) vlines.push(MONTHS[mm]+' '+year+': Kz 81 '+deNum(v.base19)+' · Kz 86 '+deNum(v.base7)+' · Kz 48 '+deNum(v.baseFree)+' · Kz 66 '+deNum(v.inputTax)+' · Kz 83 '+deNum(v.payableTax)+' EUR'); });
+      zip.file('UStVA_Kennzahlen_'+per+'.txt', ['Umsatzsteuer-Voranmeldung – Kennzahlen aus Buqo (Rechenhilfe, keine Steuerberatung)','',...(vlines.length?vlines:['Keine Buchungen im Zeitraum.'])].join('\r\n'));
+      zip.file('LIESMICH.txt',['Steuerberater-Paket · '+perLabel,'Erstellt mit Buqo am '+new Date().toLocaleDateString('de-DE'),'','Inhalt:','- Buchungen_'+per+'.csv – alle Einnahmen/Ausgaben des Zeitraums','- Einnahmen-Belege/, Ausgaben-Belege/ – zugehörige Dateien ('+nFiles+' Dateien insgesamt im Paket)','- Rechnungen-Ausgang/ – erstellte Rechnungen (PDF)','- Kontoauszuege/ – hochgeladene Kontoauszüge','- UStVA_Kennzahlen_'+per+'.txt – Umsatzsteuer-Kennzahlen je Monat','','Buchungen ohne Beleg sind in der CSV mit „nein" gekennzeichnet.'].join('\r\n'));
+      const blob=await zip.generateAsync({type:'blob'}); dlBlob('Steuerberater_'+per+'.zip',blob); setToast('Steuerberater-Paket erstellt ✓ ('+nFiles+' Dateien)');
+    }catch(e){ setToast('Paket fehlgeschlagen: '+(e.message||e)); }
+    setPackBusy(false); };
   // BWA-Bericht: KI ERKLÄRT die (fertig berechneten) Zahlen – sie rechnet nichts selbst
   const generateBwaReport = async (year, month, force)=>{ const key=year+'-'+String(month+1).padStart(2,'0');
     if(bwaBusy) return; if(!force && (data.bwaReports||{})[key]) return; setBwaBusy(true);
@@ -5834,6 +5866,17 @@ function App({session}) {
                 <div style={{marginBottom:16}}>
                   <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>Download</div>
                   <div style={{fontSize:13,color:C.sub,marginTop:3}}>Belege nach Bereich, Jahr und Monat – als ZIP herunterladen.</div>
+                </div>
+                <div style={{...SC,marginBottom:16,border:'1px solid '+hexA(C.pri,0.35)}}>
+                  <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+                    <div style={{flex:1,minWidth:240}}>
+                      <div style={{fontSize:15,fontWeight:800}}>Für den Steuerberater</div>
+                      <div style={{fontSize:12.5,color:C.sub,marginTop:3,lineHeight:1.5}}>Ein Paket mit Buchungsliste, Belegen, Rechnungs-PDFs, Kontoauszügen und UStVA-Kennzahlen – für einen Monat oder das ganze Jahr.{(data.bankStatements||[]).length?' Abgelegte Kontoauszüge: '+(data.bankStatements||[]).length+'.':' Noch keine Kontoauszüge abgelegt (Mehr → Umzug aus sevDesk).'}</div>
+                    </div>
+                    <select value={packY} onChange={e=>setPackY(+e.target.value)} style={{...SS,width:'auto'}}>{[0,1,2,3,4].map(i=>now.getFullYear()-i).map(y=><option key={y} value={y}>{y}</option>)}</select>
+                    <select value={packM} onChange={e=>setPackM(e.target.value)} style={{...SS,width:'auto'}}><option value="">Ganzes Jahr</option>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
+                    <button disabled={packBusy} onClick={()=>exportAdvisorPack(packY, packM===''?null:+packM)} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:13.5,fontWeight:700,cursor:packBusy?'default':'pointer',opacity:packBusy?0.6:1,fontFamily:'inherit'}}>{packBusy?'Packt…':'Paket (ZIP) laden'}</button>
+                  </div>
                 </div>
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:16}}>
                   <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',flex:1,minWidth:0}}>
