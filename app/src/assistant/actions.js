@@ -434,3 +434,34 @@ export function addTaxDoc(data, input, { id, today, account }) {
   return { data: { ...data, taxDocs: [d, ...(data.taxDocs || [])] }, doc: d };
 }
 export const taxDocView = t => ({ id: t.id, jahr: t.year, kategorie: t.category, titel: t.title, betrag: t.amount, notiz: t.note || '', konto: t.account });
+
+/* ── Umsatzsteuer-Voranmeldung: Zeiträume und Fristen ───────────────────────────────────────
+   Frist: der 10. nach Ende des Voranmeldungszeitraums (mit Dauerfristverlängerung einen Monat später).
+   Fällt der Tag auf Samstag/Sonntag, gilt der nächste Montag. Feiertage werden NICHT berücksichtigt –
+   ELSTER/Finanzamt sind maßgeblich. Ob monatlich oder vierteljährlich gemeldet wird, bestimmt das Finanzamt. */
+export function ustvaDeadline(year, lastMonth, { dauerfrist = false } = {}) {
+  let y = year, m = lastMonth + 1 + (dauerfrist ? 1 : 0); y += Math.floor(m / 12); m %= 12;
+  const d = new Date(Date.UTC(y, m, 10)); const wd = d.getUTCDay();
+  if (wd === 6) d.setUTCDate(12); else if (wd === 0) d.setUTCDate(11);
+  return d.toISOString().slice(0, 10);
+}
+// Letzter abgeschlossener Zeitraum zum Stichtag `today` (Date). mode: 'monat' | 'quartal' | 'aus'
+export function ustvaLastPeriod(today, mode = 'monat') {
+  if (mode === 'aus') return null;
+  const y = today.getFullYear(), m = today.getMonth();
+  if (mode === 'quartal') {
+    const q = Math.floor(m / 3) - 1; const qy = q < 0 ? y - 1 : y; const qq = q < 0 ? 3 : q;
+    return { key: 'ustva:' + qy + '-Q' + (qq + 1), year: qy, months: [qq * 3, qq * 3 + 1, qq * 3 + 2], label: 'Q' + (qq + 1) + ' ' + qy };
+  }
+  const py = m === 0 ? y - 1 : y, pm = m === 0 ? 11 : m - 1;
+  return { key: 'ustva:' + py + '-' + String(pm + 1).padStart(2, '0'), year: py, months: [pm], label: MONTHS[pm] + ' ' + py };
+}
+const sumVat = list => list.reduce((a, v) => ({ base19: a.base19 + v.base19, base7: a.base7 + v.base7, baseFree: a.baseFree + v.baseFree, salesTax: a.salesTax + v.salesTax, inputTax: a.inputTax + v.inputTax, payableTax: a.payableTax + v.payableTax, missingVat: a.missingVat + (v.missingVat || 0), missingBeleg: a.missingBeleg + (v.missingBeleg || 0) }), { base19: 0, base7: 0, baseFree: 0, salesTax: 0, inputTax: 0, payableTax: 0, missingVat: 0, missingBeleg: 0 });
+export function ustvaSummary(vats) { const t = sumVat(vats); Object.keys(t).forEach(k => { t[k] = Math.round(t[k] * 100) / 100; }); return t; }
+// To-do „UStVA abgeben" für den letzten abgeschlossenen Zeitraum (mit aktuellen Kennzahlen im Text)
+export function ustvaTodo(period, totals, { dauerfrist = false } = {}) {
+  const due = ustvaDeadline(period.year, period.months[period.months.length - 1], { dauerfrist });
+  const t = totals; const lines = ['Kz 81 – Umsätze 19 % (netto): ' + eur(t.base19), 'Kz 86 – Umsätze 7 % (netto): ' + eur(t.base7), 'Kz 48 – steuerfreie Umsätze: ' + eur(t.baseFree), 'Kz 66 – Vorsteuer: ' + eur(t.inputTax), 'Kz 83 – ' + (t.payableTax >= 0 ? 'Zahllast: ' : 'Erstattung: ') + eur(Math.abs(t.payableTax))];
+  const warn = (t.missingVat ? t.missingVat + ' Buchung(en) ohne MwSt-Angabe. ' : '') + (t.missingBeleg ? t.missingBeleg + ' Ausgabe(n) ohne Beleg.' : '');
+  return { key: period.key, title: 'UStVA ' + period.label + ' abgeben (Frist ' + due.split('-').reverse().join('.') + ')', note: lines.join('\n') + (warn ? '\n\n⚠ ' + warn.trim() : '') + '\n\nIm Bereich Steuern → Auswertungen → UStVA prüfen und auf elster.de übermitteln.', dueDate: due };
+}

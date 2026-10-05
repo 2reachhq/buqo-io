@@ -261,6 +261,26 @@ export const ASSISTANT_TOOLS = [
     input_schema: obj({ id: str('Aufgaben-id oder (Teil des) Titels.') }, ['id']),
   },
 
+  {
+    name: 'show_ustva',
+    description: 'Zeigt die Umsatzsteuer-Voranmeldung (Kennzahlen 81, 86, 48, 66, 83, Zahllast, Frist) als Karte im Chat – Standard: letzter abgeschlossener Zeitraum, optional ein bestimmter Monat. Die App übermittelt nichts ans Finanzamt; der Nutzer exportiert die Werte und trägt sie auf elster.de ein. Nutze das bei Fragen zu Umsatzsteuer, Voranmeldung, Zahllast, „was muss ich dem Finanzamt melden".',
+    input_schema: obj({ year: intT('Jahr (optional).'), month: intT('Monat 1–12 (optional, nur zusammen mit year).') }),
+  },
+  // ── Interaktion im Chat: Buttons und ausfüllbare Karten ───────────────────
+  {
+    name: 'ask_user',
+    description: 'Zeigt unter deiner Nachricht Antwort-Buttons (Ja/Nein oder Auswahl) statt eine Textfrage zu stellen. IMMER nutzen, wenn du den Nutzer etwas mit klaren Optionen fragst (anlegen? verbuchen? welches Konto? senden?). Schreib die Frage selbst als Text; die Buttons erscheinen darunter. Danach deine Antwort beenden und auf den Klick warten – ein Klick schickt den Wert als Nachricht.',
+    input_schema: obj({ options: { type: 'array', minItems: 2, maxItems: 6, description: 'Die Buttons.', items: obj({ label: str('Kurzer Button-Text.'), value: str('Antwort in Du-Form, die beim Klick als Nutzer-Nachricht gesendet wird, z. B. "Ja, leg das To-do an."') }, ['label', 'value']) } }, ['options']),
+  },
+  {
+    name: 'show_form',
+    description: 'Zeigt eine ausfüllbare Karte im Chat mit bereits vorbefüllten Feldern (Konto, Kunde, Betrag, Datum, Positionen …), die der Nutzer prüft, ändert und abschickt. Nutze sie, wenn mehrere Angaben gebraucht werden oder du etwas anlegen willst (Rechnung, Buchung, Zahlung). Befülle alles, was du aus Kontext oder Datei schon weißt. Danach deine Antwort beenden – die ausgefüllten Werte kommen als Nutzer-Nachricht zurück, dann führst du die Aktion aus. Rechnungspositionen als Textfeld, je Zeile "Beschreibung | Menge | Netto-Einzelpreis | MwSt".',
+    input_schema: obj({
+      title: str('Titel der Karte, z. B. "Rechnung für Müller".'),
+      submit_label: str('Text des Absende-Buttons, z. B. "Rechnung vorbereiten".'),
+      fields: { type: 'array', minItems: 1, maxItems: 12, description: 'Die Felder.', items: obj({ key: str('Interner Name (kurz, ohne Leerzeichen).'), label: str('Beschriftung.'), type: str('Feldart.', { enum: ['text', 'number', 'date', 'select', 'textarea'] }), value: str('Vorbelegter Wert (optional).'), options: { type: 'array', items: { type: 'string' }, description: 'Nur bei select: die Auswahl.' } }, ['key', 'label', 'type']) },
+    }, ['title', 'fields']),
+  },
   // ── Post / Briefe ─────────────────────────────────────────────────────────
   {
     name: 'save_letter',
@@ -352,7 +372,7 @@ export function stepLabel(step) {
     delete_invoice: 'Rechnung gelöscht', move_to_account: (r.moved != null ? r.moved + ' ' : '') + 'Posten umsortiert', send_invoice_email: 'E-Mail-Versand geöffnet', prepare_payment_reminder: 'Mahnung vorbereitet', create_recurring_invoice: 'Wiederkehrende Rechnung angelegt',
     add_booking: (inp.kind === 'ein' ? 'Einnahme' : 'Ausgabe') + ' gebucht' + (inp.name ? ': ' + inp.name : ''), update_booking: 'Buchung geändert', delete_booking: 'Buchung gelöscht',
     add_import_drafts: (r.added != null ? r.added + ' ' : '') + 'Umsätze in den Bank-Import gelegt', extract_attachment_items: 'Datei ausgelesen' + (r.count != null ? ' (' + r.count + ' Posten)' : ''),
-    save_payable: 'Offene Zahlung vermerkt' + (r.titel ? ': ' + r.titel : ''), file_tax_document: 'Steuerunterlage abgelegt', save_letter: 'Brief abgelegt' + (r.titel ? ': ' + r.titel : ''), search_letters: 'Briefe durchsucht', draft_email: 'E-Mail-Entwurf geöffnet',
+    show_ustva: 'Umsatzsteuer-Voranmeldung angezeigt', ask_user: 'Frage mit Buttons gestellt', show_form: 'Formular angezeigt', save_payable: 'Offene Zahlung vermerkt' + (r.titel ? ': ' + r.titel : ''), file_tax_document: 'Steuerunterlage abgelegt', save_letter: 'Brief abgelegt' + (r.titel ? ': ' + r.titel : ''), search_letters: 'Briefe durchsucht', draft_email: 'E-Mail-Entwurf geöffnet',
     create_todo: 'To-do angelegt', update_todo: 'To-do geändert', delete_todo: 'To-do gelöscht',
     update_settings: 'Einstellungen geändert (' + (inp.section || '') + ')', open_app_tab: 'Bereich geöffnet: ' + (inp.tab || ''), set_period: 'Zeitraum gewechselt', export_data: 'Daten exportiert',
   }[n] || n;
@@ -372,10 +392,12 @@ export function buildSystemPrompt(ctx) {
   lines.push('- Fakten NIE erfinden: Zahlen, Kunden, Rechnungen immer über Werkzeuge nachschlagen. Prüfe vor dem Anlegen eines Kunden mit list_customers, ob er schon existiert.');
   lines.push('- Rechnungen: create_invoice zeigt eine Vorschau mit Bestätigungs-Button; sag dem Nutzer nur kurz, dass er bestätigen soll. Bestätigt er per Text ("ja", "passt", "erstellen"), rufe confirm_invoice auf. book_now nur bei ausdrücklichem Wunsch.');
   lines.push('- Löschen (Kunde, Rechnung, Buchung): einmal kurz rückfragen, dann mit confirmed=true ausführen.');
-  lines.push('- Angehängte Dateien liest du selbst: Beleg/Quittung → add_booking (Konto erfragen, wenn unklar); Kontoauszug oder Plattform-Abrechnung → add_import_drafts (bei sehr vielen Umsätzen extract_attachment_items); Auftrags-/Leistungsdaten → create_invoice; Kundenliste → create_customer je Kunde; Brief/Schreiben (Finanzamt, Anwalt, Versicherung, Behörde, Hausverwaltung …) → save_letter (Frist, Schritte, ggf. fertiger Antwortentwurf) und danach in 2–3 Sätzen sagen, was drinsteht und was zu tun ist. Verlangt der Brief eine Antwort und ist eine E-Mail-Adresse bekannt, biete draft_email an – gesendet wird nur nach Klick des Nutzers. Für Fragen zu früheren Briefen erst search_letters, nie raten. Muss der Nutzer etwas überweisen (Eingangsrechnung, Bescheid mit Betrag, Mahnung) → save_payable im richtigen Konto (Konto aus Kontext/Absender ableiten, bei Unklarheit eine Rückfrage); der nächste Kontoauszug hakt es automatisch ab oder erinnert. Ist etwas für die Steuererklärung relevant (Spenden, Handwerker, Krankheitskosten, Versicherung, Bescheide …) → zusätzlich file_tax_document mit Jahr und Kategorie. Fasse kurz zusammen, was du aus der Datei gelesen hast.');
+  lines.push('- Angehängte Dateien liest du selbst: Beleg/Quittung → add_booking (Konto erfragen, wenn unklar); Kontoauszug oder Plattform-Abrechnung → add_import_drafts (bei sehr vielen Umsätzen extract_attachment_items); Auftrags-/Leistungsdaten → create_invoice; Kundenliste → create_customer je Kunde; Brief/Schreiben (Finanzamt, Anwalt, Versicherung, Behörde, Hausverwaltung …): ZUERST in 2–3 Sätzen sagen, was drinsteht (Absender, Anliegen, Frist, Betrag), dann per ask_user fragen, was passieren soll (Buttons z. B. „To-do anlegen“, „To-do + Antwort entwerfen“, „Als Zahlung vermerken“, „Verwerfen“); erst nach dem Klick save_letter bzw. save_payable (die Datei hängt in der Folgenachricht weiter an). Verlangt der Brief eine Antwort und ist eine E-Mail-Adresse bekannt, biete draft_email an – gesendet wird nur nach Klick des Nutzers. Für Fragen zu früheren Briefen erst search_letters, nie raten. Muss der Nutzer etwas überweisen (Eingangsrechnung, Bescheid mit Betrag, Mahnung) → save_payable im richtigen Konto (Konto aus Kontext/Absender ableiten, bei Unklarheit eine Rückfrage); der nächste Kontoauszug hakt es automatisch ab oder erinnert. Ist etwas für die Steuererklärung relevant (Spenden, Handwerker, Krankheitskosten, Versicherung, Bescheide …) → zusätzlich file_tax_document mit Jahr und Kategorie. Fasse kurz zusammen, was du aus der Datei gelesen hast.');
   lines.push('- Nach Aktionen: in einem Satz sagen, was erledigt ist (mit Nummern/Beträgen). Keine Wiederholung der Frage, keine Einleitungen.');
   lines.push('- Einstellungen: erst get_settings lesen, dann update_settings mit nur den geänderten Feldern.');
   lines.push('- Sortieren (z. B. „ordne alle Rechnungen richtig zu", Immobilie vs. Firma): Rechnungen mit list_invoices (limit hoch, z. B. 500) und Buchungen mit list_bookings lesen, anhand von Kunde, Leistung und Kontonamen entscheiden (Miete, Ferienwohnung, Airbnb, Nebenkosten → Immobilien-Konto; Dienstleistungen, Projekte → Firma), dann nur die falsch liegenden mit move_to_account verschieben. Unklare Fälle nicht raten, sondern am Ende kurz auflisten und nachfragen.');
+  lines.push('- Rückfragen mit klaren Optionen (Ja/Nein, anlegen?, verbuchen?, welches Konto?, senden?) stellst du NICHT nur als Text, sondern mit ask_user (Buttons). Fehlen mehrere Angaben oder soll etwas angelegt werden (Rechnung, Buchung, Zahlung), zeig mit show_form eine vorbefüllte Karte zum Prüfen und Absenden. Nach ask_user/show_form beendest du deine Antwort sofort und wartest auf die Antwort des Nutzers.');
+  lines.push('- Umsatzsteuer/Voranmeldung: show_ustva zeigt die Kennzahlen als Karte. Du reichst nichts beim Finanzamt ein, kannst es auch nicht – der Nutzer überträgt die Werte selbst in ELSTER. Steuerliche Auskünfte sind Rechenhilfe, keine Steuerberatung; bei Unsicherheit auf Steuerberater oder Finanzamt verweisen.');
   lines.push('- Werkzeug-Ergebnisse mit ok=false sind Fehler: erkläre kurz und schlage den nächsten Schritt vor.');
   lines.push('');
   lines.push('STIL');

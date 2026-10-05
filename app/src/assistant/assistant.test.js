@@ -212,3 +212,18 @@ test('Offene Zahlung: anlegen, im Kontoauszug abhaken, sonst nachfragen; Steueru
   assert.throws(() => addPayable({}, { payee: 'x', amount: 0 }, { id: 'a', todoId: 'b', today: '2026-01-01' }));
   const t = addTaxDoc({}, { title: 'Spendenquittung', year: 2025, category: 'Spenden', amount: 50 }, { id: 'D1', today: '2026-09-29' }); assert.equal(t.doc.category, 'Spenden'); assert.equal(t.data.taxDocs.length, 1);
 });
+
+import { ustvaDeadline, ustvaLastPeriod, ustvaSummary, ustvaTodo } from './actions.js';
+test('UStVA: Fristen, Zeitraum, To-do', () => {
+  assert.equal(ustvaDeadline(2026, 7), '2026-09-10');             // Aug → 10.09. (Donnerstag)
+  assert.equal(ustvaDeadline(2026, 8), '2026-10-12');             // Sep → 10.10. ist Samstag → Montag 12.10.
+  assert.equal(ustvaDeadline(2026, 11), '2027-01-11');            // Dez → 10.01.2027 ist Sonntag → Montag
+  assert.equal(ustvaDeadline(2026, 8, { dauerfrist: true }), '2026-11-10');
+  assert.deepEqual(ustvaLastPeriod(new Date(2026, 9, 5), 'monat'), { key: 'ustva:2026-09', year: 2026, months: [8], label: 'September 2026' });
+  assert.equal(ustvaLastPeriod(new Date(2026, 0, 3), 'monat').key, 'ustva:2025-12');
+  const q = ustvaLastPeriod(new Date(2026, 9, 5), 'quartal'); assert.equal(q.key, 'ustva:2026-Q3'); assert.deepEqual(q.months, [6, 7, 8]);
+  assert.equal(ustvaLastPeriod(new Date(2026, 9, 5), 'aus'), null);
+  const t = ustvaSummary([{ base19: 100, base7: 0, baseFree: 0, salesTax: 19, inputTax: 5, payableTax: 14 }, { base19: 50, base7: 10, baseFree: 0, salesTax: 10.2, inputTax: 1, payableTax: 9.2 }]);
+  assert.equal(t.base19, 150); assert.equal(t.payableTax, 23.2);
+  const td = ustvaTodo(ustvaLastPeriod(new Date(2026, 9, 5), 'monat'), t); assert.match(td.title, /UStVA September 2026 abgeben \(Frist 12\.10\.2026\)/); assert.match(td.note, /Kz 83 – Zahllast: 23,20 €/); assert.equal(td.dueDate, '2026-10-12');
+});
