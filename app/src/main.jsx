@@ -1505,6 +1505,7 @@ function App({session}) {
   const [botUsage,setBotUsage]= useState({input:0,output:0,cacheRead:0,cacheWrite:0,calls:0}); // Token-Verbrauch dieser Sitzung (live)
   const [botCost,setBotCost]= useState(0);              // geschätzte Kosten dieser Sitzung in USD
   const [botModel,setBotModel]= useState(DEFAULT_ASSISTANT_MODEL); // KI-Modell des Assistenten (in data.assistant.model gespeichert)
+  const botCarryRef=useRef(null);                      // Datei bleibt für die Folgenachricht erhalten, wenn der Assistent mit Buttons/Formular zurückfragt
   const botAttachmentRef=useRef(null);                 // Datei der aktuellen Nachricht (für add_booking / extract_attachment_items)
   const turnActionRef=useRef(null);                    // UI-Aktion (Buttons) für die Antwort der aktuellen Runde
   const botRestoredRef=useRef(false);                  // Verlauf aus data.assistantChat übernommen?
@@ -3263,6 +3264,8 @@ function App({session}) {
       case 'delete_booking': { need(input.confirmed===true,'Löschen braucht die ausdrückliche Bestätigung des Nutzers (confirmed=true).'); const res=mutate(d=>ACT.deleteBooking(d, input.id)); return { ok:true, geloescht:res.item.name, betrag:res.item.amount }; }
       case 'add_import_drafts': { const list=(input.items||[]).map(p=>{ const nm=String(p.name||'Umsatz').slice(0,70); const note=String(p.note||''); return { id:uid(), name:nm, amount:Math.abs(num(p.amount)), kind:(p.kind==='ein'?'ein':'aus'), belegnr:String(p.belegnr||''), datum:ACT.toISO(p.date)||'', category:(String(p.category||'')||guessCategory(nm+' '+note)), note, netto:'', mwst:'', info:'' }; }).filter(p=>p.amount>0); need(list.length,'Keine gültigen Umsätze übergeben.'); addImportDrafts(list); setTab('import'); setImportTab('bank'); return { ok:true, added:list.length, hinweis:'Im Bank-Import zur Zuordnung – Dubletten und Zahlungseingänge werden dort automatisch markiert.' }; }
       case 'extract_attachment_items': { const file=botAttachmentRef.current; need(file,'Es hängt keine Datei an der aktuellen Nachricht.'); const {quelle,list}=await aiExtractPosten(file); if(input.import!==false && list.length){ addImportDrafts(list); setTab('import'); setImportTab('bank'); } return { ok:true, quelle, count:list.length, importiert:input.import!==false&&list.length>0, posten:list.slice(0,80).map(p=>({name:p.name, betrag:p.amount, art:p.kind, datum:p.datum, kategorie:p.category})) }; }
+      case 'ask_user': { const opts=(Array.isArray(input.options)?input.options:[]).filter(o=>o&&o.label).slice(0,6).map(o=>({label:String(o.label).slice(0,40), value:String(o.value||o.label)})); need(opts.length>=2,'Mindestens zwei Optionen nötig.'); turnActionRef.current={ type:'options', options:opts }; return { ok:true, hinweis:'Buttons werden angezeigt. Beende deine Antwort jetzt und warte auf den Klick.' }; }
+      case 'show_form': { const fields=(Array.isArray(input.fields)?input.fields:[]).filter(f=>f&&f.key&&f.label).slice(0,12).map(f=>({ key:String(f.key).replace(/[^a-zA-Z0-9_]/g,'').slice(0,30)||'feld', label:String(f.label).slice(0,60), type:['text','number','date','select','textarea'].includes(f.type)?f.type:'text', value:f.value==null?'':String(f.value), options:Array.isArray(f.options)?f.options.map(String).slice(0,20):[] })); need(fields.length,'Keine Felder übergeben.'); turnActionRef.current={ type:'form', title:String(input.title||'Angaben').slice(0,80), submitLabel:String(input.submit_label||'Absenden').slice(0,40), fields }; return { ok:true, hinweis:'Karte wird angezeigt. Beende deine Antwort jetzt – die ausgefüllten Werte kommen als Nutzer-Nachricht.' }; }
       case 'save_letter': { const file=botAttachmentRef.current; let fileInfo=null;
         if(file){ try{ let f=file; try{ f=await imageToPdfFile(file); }catch(e){ f=file; } const d0=ACT.toISODate(input.letter_date)||today; const nm=f.name||file.name||'brief.pdf'; const ext=(nm.match(/\.[a-z0-9]+$/i)||['.pdf'])[0]; const fname=safeName([input.kind||'Brief', input.sender||'', d0].filter(Boolean).join('_')+ext); const path=['Briefe',d0.slice(0,4),fname].map(safeName).join('/'); const {error}=await sb.storage.from('belege').upload(path, f, {upsert:true, contentType:f.type||'application/octet-stream'}); if(error) throw new Error(error.message); fileInfo={path,fname}; }catch(e){ fileInfo={error:String(e.message||e)}; } }
         const id=uid(), todoId=uid(); const res=mutate(d=>ACT.addLetter(d, { ...input, filePath:(fileInfo&&fileInfo.path)||'', fileName:(fileInfo&&fileInfo.fname)||'' }, { id, todoId, today }));
@@ -3390,16 +3393,16 @@ function App({session}) {
   // Verlauf pro Konto in der App speichern (data.assistantChat) – ohne Dateien, nur Text + Aktionen
   useEffect(()=>{ if(!ready) return; const stored=(data.assistantChat||[]); if(stored.length && botMsgs.length<=1 && !botRestoredRef.current){ botRestoredRef.current=true; setBotMsgs(stored.map(m=>({role:m.role, content:m.content||'', steps:m.steps||undefined, attachmentName:m.attachmentName||undefined}))); botSeenRef.current=stored.length; } else botRestoredRef.current=true; },[ready]);
   useEffect(()=>{ if(!ready || !botRestoredRef.current) return; const slim=botMsgs.slice(-60).map(m=>({role:m.role, content:String(m.content||'').slice(0,6000), ...(m.steps&&m.steps.length?{steps:m.steps.map(s=>({name:s.name,label:s.label,result:{ok:!(s.result&&s.result.ok===false)}}))}:{}), ...(m.attachmentName?{attachmentName:m.attachmentName}:{})})); const cur=JSON.stringify(data.assistantChat||[]); if(cur===JSON.stringify(slim)) return; setData(prev=>({...prev, assistantChat:slim})); },[botMsgs, ready]);
-  const botReset = ()=>{ if(botBusy) return; setPending(null); setBotMsgs([BOT_WELCOME()]); botSeenRef.current=1; };
+  const botReset = ()=>{ botCarryRef.current=null; if(botBusy) return; setPending(null); setBotMsgs([BOT_WELCOME()]); botSeenRef.current=1; };
   const chooseBotModel = (v)=>{ if(!ASSISTANT_MODELS.some(m=>m.id===v)) return; setBotModel(v); setData(prev=>({...prev, assistant:{...(prev.assistant||{}), model:v}})); };
   useEffect(()=>{ if(!ready) return; const mm=(data.assistant||{}).model; if(mm && ASSISTANT_MODELS.some(x=>x.id===mm)) setBotModel(mm); },[ready]);
-  const botSend = async (text)=>{ const q=(text!=null?text:botInput).trim(); const file=botFile; if(botBusy) return; if(!q && !file) return; if(botRecOn){ try{ botRecRef.current&&botRecRef.current.stop(); }catch(_){ } setBotRecOn(false); }
+  const botSend = async (text)=>{ const q=(text!=null?text:botInput).trim(); const file=botFile; const useFile=file||botCarryRef.current||null; if(botBusy) return; if(!q && !file) return; if(botRecOn){ try{ botRecRef.current&&botRecRef.current.stop(); }catch(_){ } setBotRecOn(false); }
     const userMsg={role:'user',content:q||'', attachmentName:file?file.name:undefined};
     const history=[...botMsgs, userMsg];
     setBotMsgs(m=>[...m,userMsg]); setBotInput(''); setBotFile(null); setBotBusy(true); setBotSteps([]); { const ta=document.querySelector('#botInputArea'); if(ta){ta.style.height='auto';} }
-    turnActionRef.current=null; botAttachmentRef.current=file||null;
+    turnActionRef.current=null; botAttachmentRef.current=useFile;
     try{
-      const attachment = file ? await attachmentFromFile(file, fileToB64) : null;
+      const attachment = useFile ? await attachmentFromFile(useFile, fileToB64) : null;
       const system = buildSystemBlocks(buildAssistantContext(attachment));
       const messages = buildApiMessages(history, { maxMessages:18, attachment });
       const modelInfo = ASSISTANT_MODELS.find(m=>m.id===botModel) || ASSISTANT_MODELS[0];
@@ -3408,6 +3411,7 @@ function App({session}) {
       const act=turnActionRef.current||null; const shown=cleanMd(answer)||answer; // Updater läuft erst beim Rendern – Werte vorher festhalten
       setBotMsgs(m=>[...m,{role:'assistant',content:shown, steps:stepsSlim.length?stepsSlim:undefined, action:act}]);
     }catch(e){ setBotMsgs(m=>[...m,{role:'assistant',content:'Sorry, das hat gerade nicht geklappt ('+(e.message||e)+'). Versuch es bitte gleich nochmal.'}]); }
+    { const ta0=turnActionRef.current; botCarryRef.current=(useFile && ta0 && (ta0.type==='options'||ta0.type==='form'))?useFile:null; }
     botAttachmentRef.current=null; turnActionRef.current=null; setBotBusy(false); setBotSteps([]);
   };
   const analyzeTax = async () => {
@@ -7119,6 +7123,18 @@ function App({session}) {
                 ); })()}
                 {a && a.type==='letterTodo' && (()=>{ const td=(data.todos||[]).find(x=>x.id===a.todoId); return <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>{ if(td){ setTab('aufgaben'); setBotOpen(false); setTodoDetail(td); } }} style={primBot}>To-do öffnen</button>{a.hasReply && <button onClick={()=>openLetterReply(a.todoId)} style={ghostBot}>Antwort per E-Mail</button>}</div>; })()}
                 {a && a.type==='showInvoice' && (()=>{ const iv=(data.invoices||[]).find(x=>x.id===a.invId); if(!iv) return null; return <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>setInvView(iv)} style={primBot}>Ansehen</button><button onClick={()=>openMailCompose(iv)} style={ghostBot}>Senden</button><button onClick={()=>downloadInvoicePDF(iv)} style={ghostBot}>PDF</button></div>; })()}
+                {a && isLast && a.type==='form' && (()=>{ const fs0={background:C.surf2,border:'1px solid '+C.bdr,borderRadius:9,color:C.txt,padding:'9px 11px',fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box'}; const submit=()=>{ const lines=(a.fields||[]).map(f=>{ const el=document.getElementById('botForm'+i+'_'+f.key); return f.label+': '+((el&&el.value)||'').trim(); }); setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botSend('Angaben zu „'+a.title+'":\n'+lines.join('\n')); }; return (
+                  <div style={{width:'92%',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 13px',display:'flex',flexDirection:'column',gap:9}}>
+                    <div style={{fontSize:13,fontWeight:800,color:C.txt}}>{a.title}</div>
+                    {(a.fields||[]).map(f=>(
+                      <label key={f.key} style={{display:'flex',flexDirection:'column',gap:4}}>
+                        <span style={{fontSize:11.5,fontWeight:600,color:C.sub}}>{f.label}</span>
+                        {f.type==='select' ? <select id={'botForm'+i+'_'+f.key} defaultValue={f.value} style={fs0}>{(f.options||[]).map(o=><option key={o} value={o}>{o}</option>)}{f.value&&!(f.options||[]).includes(f.value)&&<option value={f.value}>{f.value}</option>}</select>
+                        : f.type==='textarea' ? <textarea id={'botForm'+i+'_'+f.key} defaultValue={f.value} rows={3} style={{...fs0,resize:'vertical'}}/>
+                        : <input id={'botForm'+i+'_'+f.key} type={f.type==='date'?'date':'text'} inputMode={f.type==='number'?'decimal':undefined} defaultValue={f.value} style={fs0}/>}
+                      </label>))}
+                    <div style={{display:'flex',gap:7}}><button onClick={submit} style={primBot}>{a.submitLabel||'Absenden'}</button><button onClick={()=>setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x))} style={ghostBot}>Abbrechen</button></div>
+                  </div>); })()}
                 {a && isLast && a.type==='options' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>{(a.options||[]).map((o,oi)=><button key={oi} onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botSend(o.value); }} style={ghostBot}>{o.label}</button>)}</div>}
                 {a && isLast && a.type==='navTab' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>{(a.options||[]).map((o,oi)=><button key={oi} onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); setBotOpen(false); setTab(o.tab); }} style={ghostBot}>{o.label}</button>)}</div>}
                 {a && isLast && a.type==='mahnungOffer' && (()=>{ const inv=(data.invoices||[]).find(x=>x.id===a.invId); if(!inv) return null; return (
