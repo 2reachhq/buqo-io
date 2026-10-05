@@ -20,6 +20,7 @@ export default function SevdeskImport(props) {
   const [acct, setAcct] = useState((accounts[0] || {}).key || 'unter');
   const [rowAcct, setRowAcct] = useState({});
   const [skip, setSkip] = useState({});
+  const [notes, setNotes] = useState({});           // Notiz je Zeile (für den KI-Steuerberater), Schlüssel k+idx
   const [confirmed, setConfirmed] = useState(true);
   const [bank, setBank] = useState([]);           // Kontoauszüge: [{file, name, kind:'csv'|'datei', rows?}]
   const [recurOff, setRecurOff] = useState({}); // erkannte Wiederkehrend-Gruppen, die der Nutzer abgewählt hat
@@ -105,8 +106,8 @@ export default function SevdeskImport(props) {
       const payload = {
         confirmed, minCust,
         bank: bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })),
-        belege: belegeGo.map(r => { const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
-        rechnungen: rechGo.map(r => ({ ...r, dest: acctOf('r', r), file: fileFor(zipR, r.file) })),
+        belege: belegeGo.map(r => { const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
+        rechnungen: rechGo.map(r => ({ ...r, taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file) })),
         // laufende Rechnungs-Serien: ab dem Folgemonat automatisch weiter erzeugen
         recurInvoices: recurActive(recurR, rechGo, 'r').filter(g => g.ongoing && g.idxs.includes(g.last.idx) && rechGo.some(r => r.idx === g.last.idx)).map(g => ({ name: g.last.name, dest: acctOf('r', g.last), netto: g.last.netto, mwst: g.last.mwst, beschreibung: g.last.beschreibung, adresse: g.last.adresse, lastY: g.to.y, lastM: g.to.m })),
       };
@@ -198,7 +199,7 @@ export default function SevdeskImport(props) {
           </div>
           {!zipB && <div style={{ fontSize: 12, color: C.amb, marginTop: 8 }}>Ohne ZIP werden die Belege ohne Datei angelegt – du kannst die PDFs später einzeln nachladen. Besser: jetzt das ZIP dazulegen.</div>}
           <Mapping ui={ui} src={belege} setSrc={setBelege} k="b" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
-          <Table ui={ui} X={B} k="b" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
+          <Table ui={ui} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Belege" zip={zipB} X={B} k="b" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
         </div>
       )}
       {R && (
@@ -208,7 +209,7 @@ export default function SevdeskImport(props) {
             <Stat l="Importierbar" v={rechGo.length} c={C.grn} /><Stat l="Schon vorhanden" v={R.sum.dup} c={C.amb} /><Stat l="Davon offen" v={rechGo.filter(r => r.status === 'offen').length} /><Stat l="Summe brutto" v={fmt(rechGo.reduce((s, r) => s + r.brutto, 0))} /><Stat l="PDF zugeordnet" v={(R.filesMatched) + (zipR ? ' / ' + zipR.entries.length : '')} c={zipR ? C.txt : C.mut} />
           </div>
           <Mapping ui={ui} src={rech} setSrc={setRech} k="r" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
-          <Table ui={ui} X={R} k="r" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
+          <Table ui={ui} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Rechnungen" zip={zipR} X={R} k="r" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
         </div>
       )}
 
@@ -267,16 +268,26 @@ function Mapping({ ui, src, setSrc, k, mapOpen, setMapOpen, isMobile }) {
     </div>
   );
 }
-function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, accounts, acctOf, ai, onlyUnsure }) {
+function Table({ ui, X, k, title, zip, year, setYear, years, notes, setNotes, withAcct, skip, setSkip, rowAcct, setRowAcct, accounts, acctOf, ai, onlyUnsure }) {
   const { C, SS, NUM, fmt, hexA } = ui;
   const [sort, setSort] = useState('name');        // Sortierung: nach Name (Standard), Datum oder Betrag
   const [grouped, setGrouped] = useState({});      // Namen, für die die Sammel-Zuordnung schon einmal gemacht wurde
   const [note, setNote] = useState('');
+  const [big, setBig] = useState(false);          // Vollbild-Ansicht der Tabelle
+  const [view, setView] = useState(null);          // Index der Zeile mit geöffnetem Beleg
+  const [pv, setPv] = useState(null);               // {url, isPdf} des geöffneten Belegs
     if (!X) return null;
     const aiOf = (r) => (ai && ai[k + r.idx]) || null;
     const nkey = (r) => String(r.name || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
     const cmpName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'de', { sensitivity: 'base' }) || String(a.datum || '').localeCompare(String(b.datum || ''));
-    const rows = X.rows.filter(r => r.inYear && (!onlyUnsure || (aiOf(r) && !aiOf(r).sure && !rowAcct[k + r.idx]))).sort(sort === 'datum' ? (a, b) => String(a.datum || '').localeCompare(String(b.datum || '')) : sort === 'betrag' ? (a, b) => (b.brutto || 0) - (a.brutto || 0) : cmpName).slice(0, 300);
+    const rows = X.rows.filter(r => r.inYear && (!onlyUnsure || (aiOf(r) && !aiOf(r).sure && !rowAcct[k + r.idx]))).sort(sort === 'datum' ? (a, b) => String(a.datum || '').localeCompare(String(b.datum || '')) : sort === 'betrag' ? (a, b) => (b.brutto || 0) - (a.brutto || 0) : cmpName).slice(0, big ? 3000 : 300);
+    const closeView = () => { if (pv && pv.url) { try { URL.revokeObjectURL(pv.url); } catch (e) { /* egal */ } } setPv(null); setView(null); };
+    const openView = async (i) => {
+      const r = rows[i]; if (!r) return; if (pv && pv.url) { try { URL.revokeObjectURL(pv.url); } catch (e) { /* egal */ } }
+      setView(i); setPv({ loading: true });
+      try { const e = zip && zip.entries.find(x => x.name === r.file); if (!e) { setPv({ missing: true }); return; } const bytes = await e.data(); const isPdf = /\.pdf$/i.test(r.file); const ext = (r.file.split('.').pop() || '').toLowerCase(); const blob = new Blob([bytes], { type: isPdf ? 'application/pdf' : ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg' }); setPv({ url: URL.createObjectURL(blob), isPdf }); }
+      catch (e) { setPv({ missing: true }); }
+    };
     const nameCount = {}; X.rows.filter(r => r.inYear).forEach(r => { const n = nkey(r); nameCount[n] = (nameCount[n] || 0) + 1; });
     // Erste Konto-Änderung bei einem Namen gilt für alle Zeilen dieses Namens (die noch nicht von Hand geändert wurden);
     // danach ändert jede Auswahl nur die einzelne Zeile.
@@ -290,15 +301,19 @@ function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, account
     const th = { textAlign: 'left', fontSize: 11, fontWeight: 700, color: C.mut, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '8px 8px', borderBottom: '1px solid ' + C.bdr, whiteSpace: 'nowrap' };
     const td = { fontSize: 13, padding: '7px 8px', borderBottom: '1px solid ' + C.sep, verticalAlign: 'top' };
     return (
-      <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+      <div style={big ? { position: 'fixed', inset: 0, zIndex: 140, background: C.bg, padding: 16, overflow: 'auto' } : undefined}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: big ? 0 : 12 }}>
+        {big && <span style={{ fontSize: 17, fontWeight: 800, marginRight: 6 }}>{title}</span>}
+        <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Jahr</span>
+        <select value={year} onChange={e => setYear(e.target.value)} style={{ ...SS, width: 'auto', fontSize: 12.5, padding: '5px 8px' }}><option value="alle">Alle Jahre</option>{(years || []).map(y => <option key={y} value={String(y)}>{y}</option>)}</select>
         <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Sortieren nach</span>
         <select value={sort} onChange={e => setSort(e.target.value)} style={{ ...SS, width: 'auto', fontSize: 12.5, padding: '5px 8px' }}><option value="name">Name (Abbuchung/Kunde)</option><option value="datum">Datum</option><option value="betrag">Betrag</option></select>
         <span style={{ fontSize: 11.5, color: C.mut, flex: 1, minWidth: 220 }}>{note || 'Tipp: Die erste Konto-Änderung bei einem Namen gilt für alle Zeilen mit diesem Namen, danach nur für die einzelne Zeile.'}</span>
+        <button onClick={() => setBig(b => !b)} style={{ background: big ? C.txt : C.surf2, color: big ? C.bg : C.txt, border: '1px solid ' + (big ? C.txt : C.bdr), borderRadius: 9, padding: '6px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{big ? 'Schließen' : 'Vergrößern'}</button>
       </div>
-      <div style={{ overflowX: 'auto', marginTop: 8, maxHeight: 420, overflowY: 'auto', border: '1px solid ' + C.bdr, borderRadius: 12 }}>
+      <div style={{ overflowX: 'auto', marginTop: 8, maxHeight: big ? 'calc(100vh - 90px)' : 420, overflowY: 'auto', border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
-          <thead><tr><th style={th}></th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Nummer</th><th style={th}>Kategorie</th><th style={{ ...th, textAlign: 'right' }}>Brutto</th><th style={th}>MwSt</th>{withAcct && <th style={th}>Konto</th>}<th style={th}>PDF</th><th style={th}>Hinweis</th></tr></thead>
+          <thead><tr><th style={th}></th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Nummer</th><th style={th}>Kategorie</th><th style={{ ...th, textAlign: 'right' }}>Brutto</th><th style={th}>MwSt</th>{withAcct && <th style={th}>Konto</th>}<th style={th}>PDF</th><th style={th}>Notiz für den Steuerberater</th><th style={th}>Hinweis</th></tr></thead>
           <tbody>
             {rows.map(r => { const off = r.dup || r.cancelled || !(r.brutto > 0 && r.datum); const sk = !!skip[k + r.idx]; const dim = off || sk; return (
               <tr key={r.idx} style={{ opacity: dim ? 0.5 : 1, background: dim ? 'transparent' : (r.kind === 'ein' ? hexA(C.grn, 0.04) : 'transparent') }}>
@@ -310,14 +325,31 @@ function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, account
                 <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', color: r.kind === 'ein' ? C.grn : C.txt, fontWeight: 600 }}>{r.kind === 'ein' ? '+' : '−'}{fmt(r.brutto)}</td>
                 <td style={{ ...td, ...NUM }}>{r.mwst} %</td>
                 {withAcct && (() => { const s = aiOf(r); const manual = !!rowAcct[k + r.idx]; const unsure = s && !s.sure && !manual; return <td style={td}><select value={acctOf(k, r)} onChange={e => assign(r, e.target.value)} style={{ ...SS, fontSize: 12, padding: '4px 6px', width: 150, border: '1px solid ' + (unsure ? C.amb : 'transparent') }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>{s && <div title={s.why} style={{ fontSize: 11, marginTop: 3, color: manual ? C.mut : unsure ? C.amb : C.sub, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{manual ? 'von dir gewählt' : (unsure ? '? ' : 'KI: ') + (s.why || '')}</div>}</td>; })()}
-                <td style={td}>{r.file ? <span title={r.file} style={{ color: C.grn, fontWeight: 700 }}>✓</span> : <span style={{ color: C.mut }}>—</span>}</td>
+                <td style={td}>{r.file ? <button onClick={() => openView(rows.indexOf(r))} title={'Beleg ansehen: ' + r.file} style={{ background: C.surf3, border: '1px solid ' + C.bdr, color: C.txt, borderRadius: 8, padding: '3px 9px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Ansehen</button> : <span style={{ color: C.mut }}>—</span>}</td>
+                <td style={{ ...td, minWidth: big ? 280 : 170 }}><input value={(notes && notes[k + r.idx]) || ''} onChange={e => setNotes(n => ({ ...n, [k + r.idx]: e.target.value }))} placeholder="z. B. Material Wohnung 2" disabled={off} style={{ ...SS, width: '100%', fontSize: 12, padding: '5px 8px', textAlign: 'left', boxSizing: 'border-box' }} /></td>
                 <td style={{ ...td, fontSize: 12, color: r.dup ? C.amb : (r.cancelled ? C.mut : C.exp) }}>{r.dup ? 'schon vorhanden' : r.cancelled ? 'storniert/Entwurf' : r.warn.join(', ')}</td>
               </tr>
             ); })}
           </tbody>
         </table>
-        {X.rows.filter(r => r.inYear).length > 300 && <div style={{ fontSize: 12, color: C.mut, padding: 8 }}>… nur die ersten 300 Zeilen werden angezeigt, importiert werden alle.</div>}
+        {!big && X.rows.filter(r => r.inYear).length > 300 && <div style={{ fontSize: 12, color: C.mut, padding: 8 }}>… nur die ersten 300 Zeilen werden angezeigt (mit „Vergrößern" siehst du alle), importiert werden alle.</div>}
       </div>
-      </>
+      {view != null && rows[view] && (() => { const r = rows[view]; const money = fmt(r.brutto); return (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 160, background: 'rgba(8,8,10,0.92)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: C.surf, borderBottom: '1px solid ' + C.bdr, flexWrap: 'wrap' }}>
+            <button onClick={() => view > 0 && openView(view - 1)} disabled={view === 0} style={{ background: C.surf2, border: '1px solid ' + C.bdr, color: C.txt, borderRadius: 9, padding: '7px 12px', cursor: view === 0 ? 'default' : 'pointer', opacity: view === 0 ? 0.4 : 1, fontFamily: 'inherit', fontWeight: 700 }}>‹ Zurück</button>
+            <button onClick={() => view < rows.length - 1 && openView(view + 1)} disabled={view >= rows.length - 1} style={{ background: C.surf2, border: '1px solid ' + C.bdr, color: C.txt, borderRadius: 9, padding: '7px 12px', cursor: view >= rows.length - 1 ? 'default' : 'pointer', opacity: view >= rows.length - 1 ? 0.4 : 1, fontFamily: 'inherit', fontWeight: 700 }}>Weiter ›</button>
+            <div style={{ flex: 1, minWidth: 200 }}><div style={{ fontSize: 15, fontWeight: 800, color: C.txt }}>{r.name || '—'} · {money}</div><div style={{ fontSize: 12, color: C.sub }}>{r.datum ? r.datum.split('-').reverse().join('.') : '—'}{r.nummer ? ' · Nr. ' + r.nummer : ''}{r.kategorie ? ' · ' + r.kategorie : ''} · {r.mwst} % MwSt · Zeile {view + 1} von {rows.length}</div></div>
+            {withAcct && <select value={acctOf(k, r)} onChange={e => assign(r, e.target.value)} style={{ ...SS, width: 'auto', fontSize: 13 }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>}
+            <input value={(notes && notes[k + r.idx]) || ''} onChange={e => setNotes(n => ({ ...n, [k + r.idx]: e.target.value }))} placeholder="Notiz für den Steuerberater" style={{ ...SS, width: 260, fontSize: 13, textAlign: 'left' }} />
+            <button onClick={closeView} style={{ background: C.txt, color: C.bg, border: 'none', borderRadius: 9, padding: '8px 14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Schließen</button>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+            {pv && pv.loading && <div style={{ color: '#fff' }}>Beleg wird geladen…</div>}
+            {pv && pv.missing && <div style={{ color: '#fff' }}>Datei nicht gefunden.</div>}
+            {pv && pv.url && (pv.isPdf ? <iframe title="Beleg" src={pv.url} style={{ width: '100%', height: '100%', border: 'none', background: '#fff', borderRadius: 10 }} /> : <img alt="Beleg" src={pv.url} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 10 }} />)}
+          </div>
+        </div>); })()}
+      </div>
     );
 }
