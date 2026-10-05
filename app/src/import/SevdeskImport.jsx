@@ -9,8 +9,16 @@ const { useState, useMemo } = React;
 const MAP_FIELDS = [['datum','Datum'],['nummer','Nummer'],['name','Name / Kontakt'],['beschreibung','Beschreibung'],['brutto','Brutto'],['netto','Netto'],['mwst','MwSt-Satz'],['kategorie','Kategorie'],['status','Status'],['zahldatum','Zahldatum'],['faellig','Fällig']];
 const isDoc = (n) => /\.(pdf|jpe?g|png|webp|heic)$/i.test(n);
 
+
+// Zwischenspeicher: Dateien (CSV/ZIP/Kontoauszüge) und Arbeitsstand bleiben im Browser (IndexedDB) erhalten
+const idbOpen = () => new Promise((res, rej) => { try { const q = indexedDB.open('buqo_import_draft', 1); q.onupgradeneeded = () => q.result.createObjectStore('kv'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); } catch (e) { rej(e); } });
+const idbGet = async (k) => { const d = await idbOpen(); return new Promise((res, rej) => { const r = d.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); };
+const idbSet = async (k, v) => { const d = await idbOpen(); return new Promise((res, rej) => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); };
+const idbDel = async (k) => { const d = await idbOpen(); return new Promise((res, rej) => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').delete(k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); };
+const normN = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
+
 export default function SevdeskImport(props) {
-  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify } = props;
+  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc } = props;
   const { C, SC, SS, NUM, fmt, Ic, P, hexA, AI_GRADIENT, MONTHS } = ui;
   const [belege, setBelege] = useState(null);      // {fileName, parsed, format, mapping, kind}
   const [rech, setRech] = useState(null);
@@ -33,15 +41,22 @@ export default function SevdeskImport(props) {
   const [ai, setAi] = useState({});             // KI-Sortierung: {b12|r3: {acct, sure, why}}
   const [aiBusy, setAiBusy] = useState(false);
   const [aiProg, setAiProg] = useState('');
+  const [ocr, setOcr] = useState({});               // KI-Lesung der PDFs: {b12|r3: {name, datum, nummer, brutto, netto, mwst, kategorie, beschreibung} | {error}}
+  const [ocrOff, setOcrOff] = useState({});         // Zeilen, bei denen die KI-Änderungen abgeschaltet sind
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrProg, setOcrProg] = useState('');
+  const ocrCancel = React.useRef(false);
+  const restored = React.useRef(false);
+  const [draftInfo, setDraftInfo] = useState(null); // {savedAt} – Zwischenstand vorhanden
   const [hint, setHint] = useState('');         // Hinweise für die KI, z. B. „Mieter Müller = Sylt"
   const [onlyUnsure, setOnlyUnsure] = useState(false);
 
   const readCsv = async (file, kind, setter) => {
-    try { const buf = await file.arrayBuffer(); const parsed = parseCSV(decodeText(new Uint8Array(buf))); if (!parsed.header.length || !parsed.rows.length) throw new Error('Die Datei enthält keine Tabelle.'); const format = detectFormat(parsed); setter({ fileName: file.name, parsed, format, mapping: autoMap(parsed.header), kind: format === 'datev' ? 'auto' : kind }); setResult(null); setErr(''); }
+    try { const buf = await file.arrayBuffer(); const parsed = parseCSV(decodeText(new Uint8Array(buf))); if (!parsed.header.length || !parsed.rows.length) throw new Error('Die Datei enthält keine Tabelle.'); const format = detectFormat(parsed); setter({ fileName: file.name, file, parsed, format, mapping: autoMap(parsed.header), kind: format === 'datev' ? 'auto' : kind }); setResult(null); setErr(''); }
     catch (e) { setErr('CSV konnte nicht gelesen werden: ' + (e.message || e)); }
   };
   const readZip = async (file, setter) => {
-    try { const buf = await file.arrayBuffer(); const entries = readZipEntries(buf).filter(e => isDoc(e.name)); if (!entries.length) throw new Error('Keine PDF/Bild-Dateien im ZIP gefunden.'); setter({ fileName: file.name, entries }); setResult(null); setErr(''); }
+    try { const buf = await file.arrayBuffer(); const entries = readZipEntries(buf).filter(e => isDoc(e.name)); if (!entries.length) throw new Error('Keine PDF/Bild-Dateien im ZIP gefunden.'); setter({ fileName: file.name, file, entries }); setResult(null); setErr(''); }
     catch (e) { setErr('ZIP konnte nicht gelesen werden: ' + (e.message || e)); }
   };
 
@@ -55,6 +70,58 @@ export default function SevdeskImport(props) {
     }
     if (list.length) { setBank(b => [...b, ...list]); setResult(null); }
   };
+  // Wirksame Zeile: Original + KI-Korrekturen (Name, Kategorie, Beschreibung, Nummer wenn leer, MwSt nur wenn der Brutto-Betrag im PDF übereinstimmt).
+  // Betrag und Datum werden NIE automatisch geändert – Abweichungen erscheinen nur als Hinweis.
+  const eff = (k, r) => {
+    const o = ocr[k + r.idx]; if (!o || o.error || ocrOff[k + r.idx]) return r;
+    const out = { ...r };
+    if (o.name && normN(o.name) !== normN(r.name)) out.name = String(o.name).slice(0, 90);
+    if (o.kategorie && CATS.includes(o.kategorie) && r.kind === 'aus') out.kategorie = o.kategorie;
+    if (o.beschreibung) out.beschreibung = String(o.beschreibung).slice(0, 120);
+    if (o.nummer && !r.nummer) out.nummer = String(o.nummer).slice(0, 40);
+    if ([0, 7, 19].includes(o.mwst) && o.brutto != null && Math.abs(o.brutto - r.brutto) < 0.02 && o.mwst !== r.mwst) { out.mwst = o.mwst; out.netto = Math.round(r.brutto / (1 + o.mwst / 100) * 100) / 100; }
+    return out;
+  };
+  const ocrDiff = (k, r) => { const o = ocr[k + r.idx]; if (!o || o.error) return []; const w = []; if (o.brutto != null && Math.abs(o.brutto - r.brutto) > 0.02) w.push('PDF: Betrag ' + fmt(o.brutto)); if (o.datum && r.datum && o.datum !== r.datum) w.push('PDF: Datum ' + o.datum.split('-').reverse().join('.')); return w; };
+
+  // ── Zwischenspeicher: beim Öffnen wiederherstellen, bei Änderungen speichern ──
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const f = await idbGet('files'); const s = await idbGet('state'); if (!alive) return;
+        const map = (s && s.mappings) || {};
+        if (f) {
+          if (f.belege) await readCsv(f.belege.file, f.belege.kind, o => setBelege(map.belege ? { ...o, mapping: map.belege } : o));
+          if (f.rech) await readCsv(f.rech.file, f.rech.kind, o => setRech(map.rech ? { ...o, mapping: map.rech } : o));
+          if (f.zipB) await readZip(f.zipB, setZipB);
+          if (f.zipR) await readZip(f.zipR, setZipR);
+          if (f.bank && f.bank.length) await addBank(f.bank.map(x => x.file));
+        }
+        if (s && s.state) { const st = s.state; setYear(st.year); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setConfirmed(st.confirmed !== false); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setOcr(st.ocr || {}); setOcrOff(st.ocrOff || {}); setHint(st.hint || ''); setDraftInfo({ savedAt: s.savedAt }); }
+      } catch (e) { /* kein Zwischenspeicher (z. B. privater Modus) */ }
+      restored.current = true;
+    })();
+    return () => { alive = false; };
+  }, []);
+  React.useEffect(() => {
+    if (!restored.current) return;
+    const t = setTimeout(() => {
+      if (!belege && !rech && !zipB && !zipR && !bank.length) { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setDraftInfo(null); return; }
+      idbSet('files', { belege: belege && { file: belege.file, kind: belege.kind }, rech: rech && { file: rech.file, kind: rech.kind }, zipB: zipB && zipB.file, zipR: zipR && zipR.file, bank: bank.map(b => ({ file: b.file })) }).catch(() => {});
+    }, 500);
+    return () => clearTimeout(t);
+  }, [belege && belege.file, rech && rech.file, zipB && zipB.file, zipR && zipR.file, bank]);
+  React.useEffect(() => {
+    if (!restored.current) return;
+    const t = setTimeout(() => {
+      if (!belege && !rech && !zipB && !zipR && !bank.length) return;
+      const savedAt = Date.now();
+      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, ocr, ocrOff, hint } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
+    }, 700);
+    return () => clearTimeout(t);
+  }, [year, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, ocr, ocrOff, hint, belege && belege.mapping, rech && rech.mapping]);
+  const discardDraft = () => { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setBelege(null); setRech(null); setZipB(null); setZipR(null); setBank([]); setRowAcct({}); setSkip({}); setNotes({}); setAi({}); setOcr({}); setOcrOff({}); setRecurOff({}); setDraftInfo(null); setResult(null); };
   const build = (src, zip, exist) => {
     if (!src) return null;
     let recs = normalizeRows(src.parsed, src.mapping, { kind: src.kind, year: year !== 'alle' ? +year : null });
@@ -70,6 +137,22 @@ export default function SevdeskImport(props) {
 
   const willImport = (X, key) => X ? X.rows.filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum && !skip[key + r.idx]) : [];
   const belegeGo = willImport(B, 'b'), rechGo = willImport(R, 'r');
+  const runOcr = async () => {
+    if (!aiReadDoc || ocrBusy) return;
+    const targets = [...belegeGo.map(r => ['b', r, zipB]), ...rechGo.map(r => ['r', r, zipR])].filter(([k, r, z]) => r.file && z && !ocr[k + r.idx]);
+    if (!targets.length) return;
+    ocrCancel.current = false; setOcrBusy(true); let done = 0, i = 0;
+    const worker = async () => {
+      while (i < targets.length && !ocrCancel.current) {
+        const [k, r, z] = targets[i++];
+        try { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); const bytes = await e.data(); const res = await aiReadDoc(bytes, r.file, { kind: r.kind, name: r.name, brutto: r.brutto }); setOcr(p => ({ ...p, [k + r.idx]: res })); }
+        catch (err) { setOcr(p => ({ ...p, [k + r.idx]: { error: String(err.message || err).slice(0, 80) } })); }
+        done++; setOcrProg(done + ' / ' + targets.length + ' PDFs gelesen');
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    setOcrBusy(false); setOcrProg(ocrCancel.current ? 'Abgebrochen – bisherige Ergebnisse bleiben erhalten.' : 'Fertig.');
+  };
   // Wiederkehrendes: über ALLE Jahre erkennen (Lauf reißt nicht an der Jahresgrenze ab), gesetzt wird es nur bei importierten Zeilen
   const recurB = useMemo(() => B ? detectRecurring(B.rows.filter(r => !r.dup).map(r => r)) : [], [B]);
   const recurR = useMemo(() => R ? detectRecurring(R.rows.filter(r => !r.dup).map(r => r)) : [], [R]);
@@ -106,8 +189,8 @@ export default function SevdeskImport(props) {
       const payload = {
         confirmed, minCust,
         bank: bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })),
-        belege: belegeGo.map(r => { const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
-        rechnungen: rechGo.map(r => ({ ...r, taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file) })),
+        belege: belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
+        rechnungen: rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file) }); }),
         // laufende Rechnungs-Serien: ab dem Folgemonat automatisch weiter erzeugen
         recurInvoices: recurActive(recurR, rechGo, 'r').filter(g => g.ongoing && g.idxs.includes(g.last.idx) && rechGo.some(r => r.idx === g.last.idx)).map(g => ({ name: g.last.name, dest: acctOf('r', g.last), netto: g.last.netto, mwst: g.last.mwst, beschreibung: g.last.beschreibung, adresse: g.last.adresse, lastY: g.to.y, lastM: g.to.m })),
       };
@@ -143,6 +226,11 @@ export default function SevdeskImport(props) {
       </div>
     </div>
 
+    {draftInfo && (belege || rech || zipB || zipR || bank.length > 0) && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: hexA(C.grn, 0.08), border: '1px solid ' + hexA(C.grn, 0.35), borderRadius: 12, padding: '10px 14px', fontSize: 12.5, color: C.txt, marginBottom: 14 }}>
+        <span style={{ flex: 1, minWidth: 220 }}>💾 Zwischengespeichert ({new Date(draftInfo.savedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}): geladene Dateien, Kontozuordnungen, Notizen und KI-Ergebnisse bleiben erhalten, auch wenn du die Seite schließt.</span>
+        <button onClick={() => { if (window.confirm('Zwischenstand wirklich verwerfen? Geladene Dateien und alle Zuordnungen hier werden entfernt (bereits importierte Buchungen bleiben).')) discardDraft(); }} style={{ background: 'none', border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 999, padding: '6px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5 }}>Zwischenstand verwerfen</button>
+      </div>)}
     <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12, marginBottom: 14 }}>
       {slot('Belege · CSV oder DATEV', 'sevDesk → Belege → Exportieren → CSV', '.csv,.txt,text/csv', belege, f => readCsv(f, 'aus', setBelege), belege && (belege.parsed.rows.length + ' Zeilen · ' + FORMAT_LABEL[belege.format]))}
       {slot('Belege · ZIP mit PDFs', 'sevDesk → Belege → Exportieren → ZIP (Dateien)', '.zip,application/zip', zipB, f => readZip(f, setZipB), zipB && (zipB.entries.length + ' Dateien'))}
@@ -199,7 +287,7 @@ export default function SevdeskImport(props) {
           </div>
           {!zipB && <div style={{ fontSize: 12, color: C.amb, marginTop: 8 }}>Ohne ZIP werden die Belege ohne Datei angelegt – du kannst die PDFs später einzeln nachladen. Besser: jetzt das ZIP dazulegen.</div>}
           <Mapping ui={ui} src={belege} setSrc={setBelege} k="b" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
-          <Table ui={ui} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Belege" zip={zipB} X={B} k="b" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
+          <Table ui={ui} eff={eff} ocr={ocr} ocrOff={ocrOff} setOcrOff={setOcrOff} ocrDiff={ocrDiff} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Belege" zip={zipB} X={B} k="b" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
         </div>
       )}
       {R && (
@@ -209,9 +297,33 @@ export default function SevdeskImport(props) {
             <Stat l="Importierbar" v={rechGo.length} c={C.grn} /><Stat l="Schon vorhanden" v={R.sum.dup} c={C.amb} /><Stat l="Davon offen" v={rechGo.filter(r => r.status === 'offen').length} /><Stat l="Summe brutto" v={fmt(rechGo.reduce((s, r) => s + r.brutto, 0))} /><Stat l="PDF zugeordnet" v={(R.filesMatched) + (zipR ? ' / ' + zipR.entries.length : '')} c={zipR ? C.txt : C.mut} />
           </div>
           <Mapping ui={ui} src={rech} setSrc={setRech} k="r" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
-          <Table ui={ui} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Rechnungen" zip={zipR} X={R} k="r" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
+          <Table ui={ui} eff={eff} ocr={ocr} ocrOff={ocrOff} setOcrOff={setOcrOff} ocrDiff={ocrDiff} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Rechnungen" zip={zipR} X={R} k="r" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
         </div>
       )}
+
+      {aiReadDoc && (B || R) && (belegeGo.length + rechGo.length) > 0 && (() => {
+        const withFile = [...belegeGo.map(r => ['b', r]), ...rechGo.map(r => ['r', r])].filter(([k, r]) => r.file);
+        const done = withFile.filter(([k, r]) => ocr[k + r.idx] && !ocr[k + r.idx].error).length, errs = withFile.filter(([k, r]) => ocr[k + r.idx] && ocr[k + r.idx].error).length;
+        const changed = withFile.filter(([k, r]) => { const e = eff(k, r); return e !== r && (e.name !== r.name || e.kategorie !== r.kategorie || e.nummer !== r.nummer || e.mwst !== r.mwst || e.beschreibung !== r.beschreibung); }).length;
+        const warns = withFile.filter(([k, r]) => ocrDiff(k, r).length).length;
+        return (
+          <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.35) }}>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <span style={{ width: 44, height: 44, borderRadius: 13, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.spark} sz={20} col="#fff" /></span>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>PDFs von der KI lesen lassen</div>
+                <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>Die KI öffnet jedes zugeordnete PDF und korrigiert Name, Kategorie, Beschreibung, Nummer und MwSt-Satz. Geänderte Felder siehst du in der Tabelle mit „KI"-Markierung (Mauszeiger darauf: vorher). <b>Betrag und Datum ändert sie nie</b> – weicht das PDF ab, steht ein Hinweis in der Zeile. Das verbraucht KI-Guthaben pro PDF; es wirkt auf die Zeilen, die gerade importiert werden (Jahr oben wählen).</div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+                  <button onClick={runOcr} disabled={ocrBusy || done + errs >= withFile.length} style={{ ...btnP, background: AI_GRADIENT, color: '#fff', opacity: (ocrBusy || done + errs >= withFile.length) ? 0.55 : 1 }}><Ic p={P.spark} sz={15} col="#fff" /> {ocrBusy ? 'Liest…' : (done ? 'Restliche PDFs lesen' : withFile.length + ' PDFs mit KI prüfen')}</button>
+                  {ocrBusy && <button onClick={() => { ocrCancel.current = true; }} style={{ background: 'none', border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 999, padding: '9px 14px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>Abbrechen</button>}
+                  {(done > 0 || errs > 0) && <button onClick={() => { setOcr({}); setOcrOff({}); setOcrProg(''); }} disabled={ocrBusy} style={{ background: 'none', border: 'none', color: C.mut, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5 }}>KI-Ergebnisse verwerfen</button>}
+                  <span style={{ fontSize: 12.5, color: C.sub }}>{ocrProg}{!ocrProg && done ? '' : ''}</span>
+                </div>
+                {(done > 0 || errs > 0) && <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 12 }}><Stat l="Gelesen" v={done} c={C.grn} /><Stat l="Mit Korrekturen" v={changed} c={C.pri} /><Stat l="PDF weicht ab" v={warns} c={warns ? C.amb : C.sub} />{errs > 0 && <Stat l="Fehler" v={errs} c={C.red} />}</div>}
+              </div>
+            </div>
+          </div>);
+      })()}
 
       {(recurB.length + recurR.length > 0) && (() => {
         const M = (f) => ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'][f.m] + ' ' + f.y;
@@ -268,7 +380,7 @@ function Mapping({ ui, src, setSrc, k, mapOpen, setMapOpen, isMobile }) {
     </div>
   );
 }
-function Table({ ui, X, k, title, zip, year, setYear, years, notes, setNotes, withAcct, skip, setSkip, rowAcct, setRowAcct, accounts, acctOf, ai, onlyUnsure }) {
+function Table({ ui, eff, ocr, ocrOff, setOcrOff, ocrDiff, X, k, title, zip, year, setYear, years, notes, setNotes, withAcct, skip, setSkip, rowAcct, setRowAcct, accounts, acctOf, ai, onlyUnsure }) {
   const { C, SS, NUM, fmt, hexA } = ui;
   const [sort, setSort] = useState('name');        // Sortierung: nach Name (Standard), Datum oder Betrag
   const [ask, setAsk] = useState(null);            // Rückfrage beim Konto-Wechsel: {r, val, count}
@@ -329,19 +441,19 @@ function Table({ ui, X, k, title, zip, year, setYear, years, notes, setNotes, wi
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
           <thead><tr><th style={th}></th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Nummer</th><th style={th}>Kategorie</th><th style={{ ...th, textAlign: 'right' }}>Brutto</th><th style={th}>MwSt</th>{withAcct && <th style={th}>Konto</th>}<th style={th}>PDF</th><th style={th}>Notiz für den Steuerberater</th><th style={th}>Hinweis</th></tr></thead>
           <tbody>
-            {rows.map(r => { const off = r.dup || r.cancelled || !(r.brutto > 0 && r.datum); const sk = !!skip[k + r.idx]; const dim = off || sk; return (
+            {rows.map(r => { const off = r.dup || r.cancelled || !(r.brutto > 0 && r.datum); const sk = !!skip[k + r.idx]; const dim = off || sk; const e = eff(k, r); const o = ocr[k + r.idx]; const kiOn = !!o && !o.error && !ocrOff[k + r.idx]; const chg = (f) => kiOn && e[f] !== r[f]; const odiff = ocrDiff(k, r); return (
               <tr key={r.idx} style={{ opacity: dim ? 0.5 : 1, background: dim ? 'transparent' : (r.kind === 'ein' ? hexA(C.grn, 0.04) : 'transparent') }}>
                 <td style={td}><input type="checkbox" checked={!off && !sk} disabled={off} onChange={e => setSkip(s => ({ ...s, [k + r.idx]: !e.target.checked }))} /></td>
                 <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{r.datum ? r.datum.split('-').reverse().join('.') : '—'}</td>
-                <td style={{ ...td, maxWidth: 240 }}><div style={{ fontWeight: 600, color: C.txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}{nameCount[nkey(r)] > 1 && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: C.sub, background: C.surf3, borderRadius: 6, padding: '1px 6px' }}>×{nameCount[nkey(r)]}</span>}</div>{r.beschreibung && r.beschreibung !== r.name && <div style={{ fontSize: 11.5, color: C.mut, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{r.beschreibung}</div>}</td>
-                <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{r.nummer || '—'}</td>
-                <td style={td}>{r.kategorie || <span style={{ color: C.mut }}>—</span>}</td>
+                <td style={{ ...td, maxWidth: 240 }}><div style={{ fontWeight: 600, color: C.txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name || '—'}{chg('name') && <span title={'vorher: ' + (r.name || '—')} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: C.pri, background: hexA(C.pri, 0.14), borderRadius: 6, padding: '1px 5px' }}>KI</span>}{nameCount[nkey(r)] > 1 && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: C.sub, background: C.surf3, borderRadius: 6, padding: '1px 6px' }}>×{nameCount[nkey(r)]}</span>}</div>{e.beschreibung && e.beschreibung !== e.name && <div title={chg('beschreibung') ? 'vorher: ' + (r.beschreibung || '—') : undefined} style={{ fontSize: 11.5, color: chg('beschreibung') ? C.pri : C.mut, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{e.beschreibung}</div>}</td>
+                <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{e.nummer || '—'}{chg('nummer') && <span title="von der KI aus dem PDF ergänzt" style={{ marginLeft: 4, fontSize: 10, fontWeight: 800, color: C.pri }}>KI</span>}</td>
+                <td style={td}>{e.kategorie ? <span title={chg('kategorie') ? 'vorher: ' + (r.kategorie || '—') : undefined} style={{ color: chg('kategorie') ? C.pri : C.txt, fontWeight: chg('kategorie') ? 700 : 400 }}>{e.kategorie}{chg('kategorie') ? ' ·KI' : ''}</span> : <span style={{ color: C.mut }}>—</span>}</td>
                 <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', color: r.kind === 'ein' ? C.grn : C.txt, fontWeight: 600 }}>{r.kind === 'ein' ? '+' : '−'}{fmt(r.brutto)}</td>
-                <td style={{ ...td, ...NUM }}>{r.mwst} %</td>
+                <td style={{ ...td, ...NUM, color: chg('mwst') ? C.pri : undefined, fontWeight: chg('mwst') ? 700 : undefined }} title={chg('mwst') ? 'vorher: ' + r.mwst + ' %' : undefined}>{e.mwst} %</td>
                 {withAcct && (() => { const s = aiOf(r); const manual = !!rowAcct[k + r.idx]; const unsure = s && !s.sure && !manual; return <td style={td}><select value={acctOf(k, r)} onChange={e => assign(r, e.target.value)} style={{ ...SS, fontSize: 12, padding: '4px 6px', width: 150, border: '1px solid ' + (unsure ? C.amb : 'transparent') }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>{s && <div title={s.why} style={{ fontSize: 11, marginTop: 3, color: manual ? C.mut : unsure ? C.amb : C.sub, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{manual ? 'von dir gewählt' : (unsure ? '? ' : 'KI: ') + (s.why || '')}</div>}</td>; })()}
                 <td style={{ ...td, whiteSpace: 'nowrap' }}>{r.file ? <><button onClick={() => openTab(r)} title={'Beleg in neuem Tab öffnen: ' + r.file} style={{ background: C.surf3, border: '1px solid ' + C.bdr, color: C.txt, borderRadius: 8, padding: '3px 9px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Ansehen ↗</button> <button onClick={() => openView(rows.indexOf(r))} title="Beleg neben Konto und Notiz prüfen (blättern)" style={{ background: 'none', border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 8, padding: '3px 7px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>⇆</button></> : <span style={{ color: C.mut }}>—</span>}</td>
                 <td style={{ ...td, minWidth: big ? 280 : 170 }}><input value={(notes && notes[k + r.idx]) || ''} onChange={e => setNotes(n => ({ ...n, [k + r.idx]: e.target.value }))} placeholder="z. B. Material Wohnung 2" disabled={off} style={{ ...SS, width: '100%', fontSize: 12, padding: '5px 8px', textAlign: 'left', boxSizing: 'border-box' }} /></td>
-                <td style={{ ...td, fontSize: 12, color: r.dup ? C.amb : (r.cancelled ? C.mut : C.exp) }}>{r.dup ? 'schon vorhanden' : r.cancelled ? 'storniert/Entwurf' : r.warn.join(', ')}</td>
+                <td style={{ ...td, fontSize: 12, color: r.dup ? C.amb : (r.cancelled ? C.mut : C.exp) }}>{r.dup ? 'schon vorhanden' : r.cancelled ? 'storniert/Entwurf' : r.warn.join(', ')}{odiff.length > 0 && <div style={{ color: C.amb, fontWeight: 700 }}>{odiff.join(' · ')}</div>}{o && !o.error && (e !== r || odiff.length > 0) && <button onClick={() => setOcrOff(p => ({ ...p, [k + r.idx]: !p[k + r.idx] }))} style={{ marginTop: 3, background: 'none', border: 'none', color: C.mut, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', padding: 0, textDecoration: 'underline' }}>{ocrOff[k + r.idx] ? 'KI-Korrektur wieder an' : 'KI-Korrektur aus'}</button>}{o && o.error && <div style={{ color: C.red }}>KI: {o.error}</div>}</td>
               </tr>
             ); })}
           </tbody>
