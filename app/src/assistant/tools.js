@@ -261,6 +261,11 @@ export const ASSISTANT_TOOLS = [
     input_schema: obj({ id: str('Aufgaben-id oder (Teil des) Titels.') }, ['id']),
   },
 
+  {
+    name: 'show_ustva',
+    description: 'Zeigt die Umsatzsteuer-Voranmeldung (Kennzahlen 81, 86, 48, 66, 83, Zahllast, Frist) als Karte im Chat – Standard: letzter abgeschlossener Zeitraum, optional ein bestimmter Monat. Die App übermittelt nichts ans Finanzamt; der Nutzer exportiert die Werte und trägt sie auf elster.de ein. Nutze das bei Fragen zu Umsatzsteuer, Voranmeldung, Zahllast, „was muss ich dem Finanzamt melden".',
+    input_schema: obj({ year: intT('Jahr (optional).'), month: intT('Monat 1–12 (optional, nur zusammen mit year).') }),
+  },
   // ── Interaktion im Chat: Buttons und ausfüllbare Karten ───────────────────
   {
     name: 'ask_user',
@@ -367,7 +372,7 @@ export function stepLabel(step) {
     delete_invoice: 'Rechnung gelöscht', move_to_account: (r.moved != null ? r.moved + ' ' : '') + 'Posten umsortiert', send_invoice_email: 'E-Mail-Versand geöffnet', prepare_payment_reminder: 'Mahnung vorbereitet', create_recurring_invoice: 'Wiederkehrende Rechnung angelegt',
     add_booking: (inp.kind === 'ein' ? 'Einnahme' : 'Ausgabe') + ' gebucht' + (inp.name ? ': ' + inp.name : ''), update_booking: 'Buchung geändert', delete_booking: 'Buchung gelöscht',
     add_import_drafts: (r.added != null ? r.added + ' ' : '') + 'Umsätze in den Bank-Import gelegt', extract_attachment_items: 'Datei ausgelesen' + (r.count != null ? ' (' + r.count + ' Posten)' : ''),
-    ask_user: 'Frage mit Buttons gestellt', show_form: 'Formular angezeigt', save_payable: 'Offene Zahlung vermerkt' + (r.titel ? ': ' + r.titel : ''), file_tax_document: 'Steuerunterlage abgelegt', save_letter: 'Brief abgelegt' + (r.titel ? ': ' + r.titel : ''), search_letters: 'Briefe durchsucht', draft_email: 'E-Mail-Entwurf geöffnet',
+    show_ustva: 'Umsatzsteuer-Voranmeldung angezeigt', ask_user: 'Frage mit Buttons gestellt', show_form: 'Formular angezeigt', save_payable: 'Offene Zahlung vermerkt' + (r.titel ? ': ' + r.titel : ''), file_tax_document: 'Steuerunterlage abgelegt', save_letter: 'Brief abgelegt' + (r.titel ? ': ' + r.titel : ''), search_letters: 'Briefe durchsucht', draft_email: 'E-Mail-Entwurf geöffnet',
     create_todo: 'To-do angelegt', update_todo: 'To-do geändert', delete_todo: 'To-do gelöscht',
     update_settings: 'Einstellungen geändert (' + (inp.section || '') + ')', open_app_tab: 'Bereich geöffnet: ' + (inp.tab || ''), set_period: 'Zeitraum gewechselt', export_data: 'Daten exportiert',
   }[n] || n;
@@ -392,6 +397,7 @@ export function buildSystemPrompt(ctx) {
   lines.push('- Einstellungen: erst get_settings lesen, dann update_settings mit nur den geänderten Feldern.');
   lines.push('- Sortieren (z. B. „ordne alle Rechnungen richtig zu", Immobilie vs. Firma): Rechnungen mit list_invoices (limit hoch, z. B. 500) und Buchungen mit list_bookings lesen, anhand von Kunde, Leistung und Kontonamen entscheiden (Miete, Ferienwohnung, Airbnb, Nebenkosten → Immobilien-Konto; Dienstleistungen, Projekte → Firma), dann nur die falsch liegenden mit move_to_account verschieben. Unklare Fälle nicht raten, sondern am Ende kurz auflisten und nachfragen.');
   lines.push('- Rückfragen mit klaren Optionen (Ja/Nein, anlegen?, verbuchen?, welches Konto?, senden?) stellst du NICHT nur als Text, sondern mit ask_user (Buttons). Fehlen mehrere Angaben oder soll etwas angelegt werden (Rechnung, Buchung, Zahlung), zeig mit show_form eine vorbefüllte Karte zum Prüfen und Absenden. Nach ask_user/show_form beendest du deine Antwort sofort und wartest auf die Antwort des Nutzers.');
+  lines.push('- Umsatzsteuer/Voranmeldung: show_ustva zeigt die Kennzahlen als Karte. Du reichst nichts beim Finanzamt ein, kannst es auch nicht – der Nutzer überträgt die Werte selbst in ELSTER. Steuerliche Auskünfte sind Rechenhilfe, keine Steuerberatung; bei Unsicherheit auf Steuerberater oder Finanzamt verweisen.');
   lines.push('- Werkzeug-Ergebnisse mit ok=false sind Fehler: erkläre kurz und schlage den nächsten Schritt vor.');
   lines.push('');
   lines.push('STIL');

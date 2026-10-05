@@ -1505,6 +1505,7 @@ function App({session}) {
   const [botUsage,setBotUsage]= useState({input:0,output:0,cacheRead:0,cacheWrite:0,calls:0}); // Token-Verbrauch dieser Sitzung (live)
   const [botCost,setBotCost]= useState(0);              // geschätzte Kosten dieser Sitzung in USD
   const [botModel,setBotModel]= useState(DEFAULT_ASSISTANT_MODEL); // KI-Modell des Assistenten (in data.assistant.model gespeichert)
+  const calcVatRef=useRef(null);                       // aktuelle UStVA-Berechnung (für Hintergrund-Erinnerung)
   const botCarryRef=useRef(null);                      // Datei bleibt für die Folgenachricht erhalten, wenn der Assistent mit Buttons/Formular zurückfragt
   const botAttachmentRef=useRef(null);                 // Datei der aktuellen Nachricht (für add_booking / extract_attachment_items)
   const turnActionRef=useRef(null);                    // UI-Aktion (Buttons) für die Antwort der aktuellen Runde
@@ -3264,6 +3265,9 @@ function App({session}) {
       case 'delete_booking': { need(input.confirmed===true,'Löschen braucht die ausdrückliche Bestätigung des Nutzers (confirmed=true).'); const res=mutate(d=>ACT.deleteBooking(d, input.id)); return { ok:true, geloescht:res.item.name, betrag:res.item.amount }; }
       case 'add_import_drafts': { const list=(input.items||[]).map(p=>{ const nm=String(p.name||'Umsatz').slice(0,70); const note=String(p.note||''); return { id:uid(), name:nm, amount:Math.abs(num(p.amount)), kind:(p.kind==='ein'?'ein':'aus'), belegnr:String(p.belegnr||''), datum:ACT.toISO(p.date)||'', category:(String(p.category||'')||guessCategory(nm+' '+note)), note, netto:'', mwst:'', info:'' }; }).filter(p=>p.amount>0); need(list.length,'Keine gültigen Umsätze übergeben.'); addImportDrafts(list); setTab('import'); setImportTab('bank'); return { ok:true, added:list.length, hinweis:'Im Bank-Import zur Zuordnung – Dubletten und Zahlungseingänge werden dort automatisch markiert.' }; }
       case 'extract_attachment_items': { const file=botAttachmentRef.current; need(file,'Es hängt keine Datei an der aktuellen Nachricht.'); const {quelle,list}=await aiExtractPosten(file); if(input.import!==false && list.length){ addImportDrafts(list); setTab('import'); setImportTab('bank'); } return { ok:true, quelle, count:list.length, importiert:input.import!==false&&list.length>0, posten:list.slice(0,80).map(p=>({name:p.name, betrag:p.amount, art:p.kind, datum:p.datum, kategorie:p.category})) }; }
+      case 'show_ustva': { const st=ustvaSettings; let per; if(input.year && input.month){ per={year:+input.year, months:[Math.min(12,Math.max(1,+input.month))-1], label:MONTHS[Math.min(12,Math.max(1,+input.month))-1]+' '+(+input.year)}; per.key='ustva:'+per.year+'-'+String(per.months[0]+1).padStart(2,'0'); } else per=ACT.ustvaLastPeriod(new Date(), st.mode==='aus'?'monat':st.mode);
+        const vats=per.months.map(mm=>calcVat(per.year,mm)); const tot=ACT.ustvaSummary(vats); const due=ACT.ustvaDeadline(per.year, per.months[per.months.length-1], {dauerfrist:!!st.dauerfrist});
+        turnActionRef.current={ type:'ustva', label:per.label, year:per.year, months:per.months, tot, due }; return { ok:true, zeitraum:per.label, frist:due, kz81_umsaetze19_netto:tot.base19, kz86_umsaetze7_netto:tot.base7, kz48_steuerfrei:tot.baseFree, kz66_vorsteuer:tot.inputTax, kz83_zahllast:tot.payableTax, buchungenOhneMwSt:tot.missingVat, ausgabenOhneBeleg:tot.missingBeleg, hinweis:'Karte mit Kennzahlen, Export- und ELSTER-Button wird angezeigt. Übermittelt wird nichts – der Nutzer trägt die Werte auf elster.de ein.' }; }
       case 'ask_user': { const opts=(Array.isArray(input.options)?input.options:[]).filter(o=>o&&o.label).slice(0,6).map(o=>({label:String(o.label).slice(0,40), value:String(o.value||o.label)})); need(opts.length>=2,'Mindestens zwei Optionen nötig.'); turnActionRef.current={ type:'options', options:opts }; return { ok:true, hinweis:'Buttons werden angezeigt. Beende deine Antwort jetzt und warte auf den Klick.' }; }
       case 'show_form': { const fields=(Array.isArray(input.fields)?input.fields:[]).filter(f=>f&&f.key&&f.label).slice(0,12).map(f=>({ key:String(f.key).replace(/[^a-zA-Z0-9_]/g,'').slice(0,30)||'feld', label:String(f.label).slice(0,60), type:['text','number','date','select','textarea'].includes(f.type)?f.type:'text', value:f.value==null?'':String(f.value), options:Array.isArray(f.options)?f.options.map(String).slice(0,20):[] })); need(fields.length,'Keine Felder übergeben.'); turnActionRef.current={ type:'form', title:String(input.title||'Angaben').slice(0,80), submitLabel:String(input.submit_label||'Absenden').slice(0,40), fields }; return { ok:true, hinweis:'Karte wird angezeigt. Beende deine Antwort jetzt – die ausgefüllten Werte kommen als Nutzer-Nachricht.' }; }
       case 'save_letter': { const file=botAttachmentRef.current; let fileInfo=null;
@@ -3366,8 +3370,12 @@ function App({session}) {
     if(dupCount) parts.push(dupCount+(dupCount===1?' Buchung könnte':' Buchungen könnten')+' doppelt erfasst sein');
     if(overdue.length===1){ const c=invCustomer(overdue[0]); parts.push((c.name||'Ein Kunde')+' hat Rechnung '+overdue[0].number+' noch nicht bezahlt und ist überfällig'); }
     else if(overdue.length) parts.push(overdue.length+' Rechnungen sind überfällig');
+    const todayS=new Date().toISOString().slice(0,10); const in7=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+    const dueSoon=(data.todos||[]).filter(t=>!t.done && t.dueDate && t.dueDate<=in7);
+    if(dueSoon.length){ const late=dueSoon.filter(t=>t.dueDate<todayS).length; parts.push(dueSoon.length+(dueSoon.length===1?' To-do hat':' To-dos haben')+' eine Frist in den nächsten 7 Tagen'+(late?' ('+late+' schon überschritten)':'')+': '+dueSoon.slice(0,3).map(t=>t.title.replace(/\s*\(Frist[^)]*\)/,'')).join(' · ')+(dueSoon.length>3?' …':'')); }
     if(!parts.length) return;
     const opts=[];
+    if(dueSoon.length) opts.push({label:'Fristen ansehen', tab:'aufgaben'});
     if(openCount) opts.push({label:'Offene Belege ansehen', tab:'belege'});
     if(dupCount) opts.push({label:'Dubletten prüfen', tab:'import'});
     if(overdue.length>1) opts.push({label:'Überfällige Rechnungen ansehen', tab:'rechnung'});
@@ -3390,6 +3398,22 @@ function App({session}) {
     const t=setInterval(()=>{ syncAutoTodos(); }, 60000);
     return ()=>clearInterval(t);
   }, [ready]);
+  // UStVA-Erinnerung: für den letzten abgeschlossenen Zeitraum ein To-do mit Frist und aktuellen Kennzahlen (einmal je Zeitraum)
+  const ustvaSettings = data.ustvaSettings || {mode:'monat', dauerfrist:false};
+  useEffect(()=>{
+    if(!ready) return;
+    const run=()=>{ try{ const st=(dataRef.current&&dataRef.current.ustvaSettings)||{mode:'monat',dauerfrist:false}; const per=ACT.ustvaLastPeriod(new Date(), st.mode); if(!per||!calcVatRef.current) return;
+      const tot=ACT.ustvaSummary(per.months.map(mm=>calcVatRef.current(per.year,mm))); const td=ACT.ustvaTodo(per, tot, {dauerfrist:!!st.dauerfrist});
+      setData(prev=>{ if((prev.dismissedAuto||[]).includes(td.key)) return prev; const list=prev.todos||[]; const ex=list.find(t=>t.autoKey===td.key);
+        if(!ex){ // ohne jede Buchung im Zeitraum keine Erinnerung erzeugen
+          if(!tot.base19 && !tot.base7 && !tot.baseFree && !tot.inputTax) return prev;
+          return {...prev, todos:[{id:uid(), autoKey:td.key, source:'ustva', done:false, createdAt:new Date().toISOString(), ref:null, title:td.title, note:td.note, dueDate:td.dueDate, comments:[]}, ...list]}; }
+        if(ex.done || (ex.title===td.title && ex.note===td.note && ex.dueDate===td.dueDate)) return prev;
+        return {...prev, todos:list.map(t=>t.id===ex.id?{...t,title:td.title,note:td.note,dueDate:td.dueDate}:t)}; });
+    }catch(e){} };
+    const t0=setTimeout(run,1500); const iv=setInterval(run, 10*60*1000);
+    return ()=>{ clearTimeout(t0); clearInterval(iv); };
+  }, [ready, ustvaSettings.mode, ustvaSettings.dauerfrist, yr, mo]);
   // Verlauf pro Konto in der App speichern (data.assistantChat) – ohne Dateien, nur Text + Aktionen
   useEffect(()=>{ if(!ready) return; const stored=(data.assistantChat||[]); if(stored.length && botMsgs.length<=1 && !botRestoredRef.current){ botRestoredRef.current=true; setBotMsgs(stored.map(m=>({role:m.role, content:m.content||'', steps:m.steps||undefined, attachmentName:m.attachmentName||undefined}))); botSeenRef.current=stored.length; } else botRestoredRef.current=true; },[ready]);
   useEffect(()=>{ if(!ready || !botRestoredRef.current) return; const slim=botMsgs.slice(-60).map(m=>({role:m.role, content:String(m.content||'').slice(0,6000), ...(m.steps&&m.steps.length?{steps:m.steps.map(s=>({name:s.name,label:s.label,result:{ok:!(s.result&&s.result.ok===false)}}))}:{}), ...(m.attachmentName?{attachmentName:m.attachmentName}:{})})); const cur=JSON.stringify(data.assistantChat||[]); if(cur===JSON.stringify(slim)) return; setData(prev=>({...prev, assistantChat:slim})); },[botMsgs, ready]);
@@ -3473,6 +3497,10 @@ function App({session}) {
       taxBoxes:{ '81':base19, '86':base7, '48':baseFree, '66':inputTax, '83':payableTax },
       missingVat:rows.filter(r=>!r.hasVatInfo).length, missingBeleg:rows.filter(r=>isA(r)&&!r.hasBeleg).length };
   };
+  calcVatRef.current=calcVat;
+  const exportUstvaSum=(label,v)=>{ const lines=['Umsatzsteuer-Voranmeldung '+label,'',
+      'Kz 81 – Steuerpflichtige Umsätze 19 % (netto): '+deNum(v.base19)+' EUR','Kz 86 – Steuerpflichtige Umsätze 7 % (netto): '+deNum(v.base7)+' EUR','Kz 48 – Steuerfreie Umsätze: '+deNum(v.baseFree)+' EUR','Kz 66 – Vorsteuerbeträge: '+deNum(v.inputTax)+' EUR','Kz 83 – Zahllast / Erstattung: '+deNum(v.payableTax)+' EUR','','Diese Werte auf elster.de in die UStVA übertragen. Rechenhilfe – keine Steuerberatung.'];
+    dlText('UStVA_'+String(label).replace(/[^0-9A-Za-z]+/g,'_')+'.txt',lines.join('\r\n'),'text/plain;charset=utf-8'); setToast('UStVA-Kennzahlen exportiert – zum Übertragen in ELSTER.'); };
   // 2) EÜR je Jahr (Netto-Betrachtung; USt/Vorsteuer laufen über die UStVA)
   const calcEUR = (year)=>{ const rows=collectBizBookings(year,null);
     const revenue=r2(rows.filter(r=>r.kind==='ein').reduce((s,r)=>s+r.netto,0));
@@ -5489,6 +5517,7 @@ function App({session}) {
                             {t.title}
                             {t.source==='ai' && <span style={{fontSize:10,fontWeight:800,color:C.pri,background:hexA(C.pri,0.14),borderRadius:6,padding:'2px 7px'}}>KI</span>}
                             {t.source==='brief' && <span style={{fontSize:10,fontWeight:800,color:C.txt,background:C.surf3,borderRadius:6,padding:'2px 7px'}}>Brief</span>}
+                            {t.source==='ustva' && <span style={{fontSize:10,fontWeight:800,color:C.txt,background:C.surf3,borderRadius:6,padding:'2px 7px'}}>Steuer</span>}
                             {t.source==='payable' && <span style={{fontSize:10,fontWeight:800,color:C.txt,background:C.surf3,borderRadius:6,padding:'2px 7px'}}>Zahlung</span>}
                             {t.source==='bank' && <span style={{fontSize:10,fontWeight:800,color:C.txt,background:C.surf3,borderRadius:6,padding:'2px 7px'}}>Bank</span>}
                             {t.dueDate && !t.done && (()=>{ const days=Math.ceil((new Date(t.dueDate)-new Date(new Date().toISOString().slice(0,10)))/86400000); const col=days<0?C.red:days<=7?C.amb:C.sub; return <span style={{fontSize:10.5,fontWeight:800,color:col,background:hexA(col,0.14),borderRadius:6,padding:'2px 7px'}}>{days<0?('Frist überschritten · '+t.dueDate.split('-').reverse().join('.')):days===0?'Frist heute':('Frist '+t.dueDate.split('-').reverse().join('.')+(days<=14?' · '+days+' Tg.':''))}</span>; })()}
@@ -6160,6 +6189,12 @@ function App({session}) {
 
               {steuernTab==='ustva' && (()=>{ const v=calcVat(stY,stM); return (<>
                 {secHead('Umsatzsteuervoranmeldung · '+MONTHS[stM]+' '+stY, monthSel)}
+                <div style={{...SC,marginBottom:12,padding:'12px 14px',display:'flex',gap:14,flexWrap:'wrap',alignItems:'center'}}>
+                  <span style={{fontSize:13,fontWeight:700}}>Voranmeldung</span>
+                  <select value={ustvaSettings.mode} onChange={e=>setData(prev=>({...prev,ustvaSettings:{...(prev.ustvaSettings||{dauerfrist:false}),mode:e.target.value}}))} style={{...SS,width:'auto'}}><option value="monat">monatlich</option><option value="quartal">vierteljährlich</option><option value="aus">nicht erforderlich (z. B. Kleinunternehmer)</option></select>
+                  <label style={{display:'flex',alignItems:'center',gap:7,fontSize:13,color:C.txt,cursor:'pointer'}}><input type="checkbox" checked={!!ustvaSettings.dauerfrist} onChange={e=>setData(prev=>({...prev,ustvaSettings:{...(prev.ustvaSettings||{mode:'monat'}),dauerfrist:e.target.checked}}))}/> Dauerfristverlängerung (Frist +1 Monat)</label>
+                  <span style={{fontSize:11.5,color:C.mut,flex:1,minWidth:200}}>Frist: 10. nach Ende des Zeitraums, bei Wochenende der nächste Montag (Feiertage nicht berücksichtigt). Welcher Rhythmus gilt, legt das Finanzamt fest.</span>
+                </div>
                 <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:14}}>
                   {kpi('Umsatzsteuer',fmt(v.salesTax),C.txt,'19 %: '+fmt(v.salesTax19)+' · 7 %: '+fmt(v.salesTax7))}
                   {kpi('Vorsteuer',fmt(v.inputTax),C.txt,'19 %: '+fmt(v.inputTax19)+' · 7 %: '+fmt(v.inputTax7))}
@@ -7134,6 +7169,19 @@ function App({session}) {
                         : <input id={'botForm'+i+'_'+f.key} type={f.type==='date'?'date':'text'} inputMode={f.type==='number'?'decimal':undefined} defaultValue={f.value} style={fs0}/>}
                       </label>))}
                     <div style={{display:'flex',gap:7}}><button onClick={submit} style={primBot}>{a.submitLabel||'Absenden'}</button><button onClick={()=>setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x))} style={ghostBot}>Abbrechen</button></div>
+                  </div>); })()}
+                {a && a.type==='ustva' && (()=>{ const t=a.tot; const rows=[['81','Umsätze 19 % (netto)',t.base19],['86','Umsätze 7 % (netto)',t.base7],['48','Steuerfreie Umsätze',t.baseFree],['66','Vorsteuer',t.inputTax],['83',t.payableTax>=0?'Zahllast':'Erstattung',Math.abs(t.payableTax)]]; return (
+                  <div style={{width:'92%',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'12px 13px'}}>
+                    <div style={{fontSize:13,fontWeight:800,color:C.txt}}>UStVA {a.label}</div>
+                    <div style={{fontSize:11.5,color:C.sub,margin:'2px 0 8px'}}>Frist: {a.due.split('-').reverse().join('.')}</div>
+                    {rows.map(([kz,l,v])=><div key={kz} style={{display:'flex',gap:8,fontSize:13,padding:'5px 0',borderTop:'1px solid '+C.sep}}><span style={{width:30,fontWeight:700,color:C.sub}}>{kz}</span><span style={{flex:1}}>{l}</span><span style={{fontWeight:700,...NUM}}>{fmt(v)}</span></div>)}
+                    {(t.missingVat>0||t.missingBeleg>0) && <div style={{fontSize:11.5,color:C.amb,marginTop:6}}>⚠ {t.missingVat>0?t.missingVat+' Buchung(en) ohne MwSt-Angabe. ':''}{t.missingBeleg>0?t.missingBeleg+' Ausgabe(n) ohne Beleg.':''}</div>}
+                    <div style={{display:'flex',gap:7,flexWrap:'wrap',marginTop:10}}>
+                      <button onClick={()=>exportUstvaSum(a.label,t)} style={primBot}>Als Datei exportieren</button>
+                      <button onClick={()=>window.open('https://www.elster.de','_blank','noopener')} style={ghostBot}>ELSTER öffnen</button>
+                      <button onClick={()=>{ setStY(a.year); setStM(a.months[0]); setSteuernTab('ustva'); setTab('steuern'); if(isMobile) setBotOpen(false); }} style={ghostBot}>Details</button>
+                    </div>
+                    <div style={{fontSize:11,color:C.mut,marginTop:8,lineHeight:1.45}}>Rechenhilfe, keine Steuerberatung. Du trägst die Werte selbst auf elster.de ein und bleibst für die Angaben verantwortlich.</div>
                   </div>); })()}
                 {a && isLast && a.type==='options' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>{(a.options||[]).map((o,oi)=><button key={oi} onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); botSend(o.value); }} style={ghostBot}>{o.label}</button>)}</div>}
                 {a && isLast && a.type==='navTab' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}>{(a.options||[]).map((o,oi)=><button key={oi} onClick={()=>{ setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x)); setBotOpen(false); setTab(o.tab); }} style={ghostBot}>{o.label}</button>)}</div>}
