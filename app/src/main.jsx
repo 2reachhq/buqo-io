@@ -1507,6 +1507,8 @@ function App({session}) {
   const [botUsage,setBotUsage]= useState({input:0,output:0,cacheRead:0,cacheWrite:0,calls:0}); // Token-Verbrauch dieser Sitzung (live)
   const [botCost,setBotCost]= useState(0);              // geschätzte Kosten dieser Sitzung in USD
   const [botModel,setBotModel]= useState(DEFAULT_ASSISTANT_MODEL); // KI-Modell des Assistenten (in data.assistant.model gespeichert)
+  const startKiJobsRef=useRef(null); const kiRunRef=useRef(false); const kiCancelRef=useRef(false);
+  const [kiJob,setKiJob]=useState(null);               // Hintergrund-KI nach dem Import: {total,done,errs,changed,running}
   const addDraftsRef=useRef(null);                     // aktuelle addImportDrafts (für verzögerten Aufruf nach dem Import)
   const calcVatRef=useRef(null);                       // aktuelle UStVA-Berechnung (für Hintergrund-Erinnerung)
   const botCarryRef=useRef(null);                      // Datei bleibt für die Folgenachricht erhalten, wenn der Assistent mit Buttons/Formular zurückfragt
@@ -2511,6 +2513,39 @@ function App({session}) {
     }catch(e){ setToast('Speichern fehlgeschlagen: '+(e.message||e)); }
     setBelegBusy(false);
   };
+  /* ── KI liest importierte PDFs im Hintergrund und verbessert Name/Kategorie/Beschreibung/Nummer/MwSt. Betrag und Datum bleiben unverändert (Abweichung → To-do) ── */
+  const startKiJobs = async (jobs)=>{
+    if(kiRunRef.current){ setToast('Die KI liest noch – bitte kurz warten.'); return; }
+    kiRunRef.current=true; kiCancelRef.current=false;
+    let done=0, errs=0, changed=0; const mism=[]; let idx=0;
+    setKiJob({total:jobs.length, done:0, errs:0, changed:0, running:true});
+    const patchItem=(id,fn)=>{ const walk=(o)=>{ if(Array.isArray(o)){ for(const it of o){ if(it&&typeof it==='object'&&it.id===id&&('amount' in it)){ fn(it); return true; } if(walk(it)) return true; } } else if(o&&typeof o==='object'){ for(const k of Object.keys(o)){ if(walk(o[k])) return true; } } return false; }; return walk; };
+    const worker=async()=>{
+      while(idx<jobs.length && !kiCancelRef.current){
+        const j=jobs[idx++]; const r=j.r;
+        try{
+          const bytes=await r.file.data(); const o=await aiReadDoc(bytes, r.file.name, {kind:j.kind==='r'?'ein':r.kind, name:r.name, brutto:r.brutto});
+          const diff=[]; if(o.brutto!=null && Math.abs(o.brutto-r.brutto)>0.02) diff.push('Betrag laut PDF '+fmt(o.brutto)+' statt '+fmt(r.brutto)); if(o.datum && r.datum && o.datum!==r.datum) diff.push('Datum laut PDF '+o.datum.split('-').reverse().join('.')+' statt '+r.datum.split('-').reverse().join('.'));
+          if(diff.length) mism.push({name:r.name||'Beleg', nummer:r.nummer||'', diff});
+          let ch=false;
+          setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const M=nd[r.y]&&nd[r.y][r.m]; if(!M) return prev; let hit=false;
+            patchItem(j.id, it=>{ hit=true; if(j.kind==='b'){ if(o.name && normName(o.name)!==normName(it.name)){ it.name=String(o.name).slice(0,90); ch=true; } if(o.kategorie && r.kind==='aus' && CATS.includes(o.kategorie) && o.kategorie!==it.category){ it.category=o.kategorie; ch=true; } if(o.mwst!=null && o.brutto!=null && Math.abs(o.brutto-r.brutto)<0.02 && o.mwst!==it.mwst){ it.mwst=o.mwst; it.netto=Math.round(r.brutto/(1+o.mwst/100)*100)/100; ch=true; } }
+              if(o.nummer && !it.belegnr){ it.belegnr=String(o.nummer).slice(0,40); ch=true; }
+              if(o.beschreibung && !String(it.note||'').includes(o.beschreibung)){ it.note=[o.beschreibung.slice(0,120), it.note].filter(Boolean).join(' · '); ch=true; }
+              if(diff.length){ it.note=[it.note, '⚠ '+diff.join('; ')].filter(Boolean).join(' · '); } })(M);
+            return hit?nd:prev; });
+          if(ch) changed++;
+        }catch(e){ errs++; }
+        done++; setKiJob({total:jobs.length, done, errs, changed, running:true});
+      }
+    };
+    await Promise.all([worker(),worker(),worker()]);
+    kiRunRef.current=false;
+    if(mism.length){ const key='ki-'+Date.now(); setData(prev=>({...prev, todos:[{id:uid(), done:false, source:'ki', key, createdAt:new Date().toISOString(), ref:null, title:mism.length+' Beleg(e): PDF weicht von der Buchung ab', note:mism.slice(0,15).map(m=>'• '+m.name+(m.nummer?' ('+m.nummer+')':'')+': '+m.diff.join('; ')).join('\n')+(mism.length>15?'\n… und '+(mism.length-15)+' weitere':''), comments:[]}, ...(prev.todos||[])]})); }
+    setKiJob({total:jobs.length, done, errs, changed, running:false, cancelled:kiCancelRef.current, mism:mism.length});
+    setTimeout(()=>setKiJob(j=>j&&!j.running?null:j), 9000);
+  };
+  startKiJobsRef.current=startKiJobs;
   /* ── Umzug aus sevDesk: Buchungen, Rechnungen, Kunden anlegen und PDFs ablegen (Payload aus SevdeskImport) ── */
   const sevdeskExisting = ()=>({
     belege: existingBookings().map(b=>({nummer:b.it.belegnr||'', brutto:num(b.it.amount), name:b.it.name||'', datum:toISO(b.it.datum)||''})),
@@ -2525,20 +2560,20 @@ function App({session}) {
     let files=0, fehler=0;
     const up=async(path,file)=>{ try{ const bytes=await file.data(); const {error}=await sb.storage.from('belege').upload(path, new Blob([bytes],{type:mime(file.name)}), {upsert:true, contentType:mime(file.name)}); if(error) throw error; files++; return path; }catch(e){ fehler++; return null; } };
     const bel=[]; let i=0;
-    for(const r of payload.belege){ i++; prog('Belege: '+i+' / '+payload.belege.length+(r.file?' · '+r.file.name:'')); const acct=destAcct(r.dest); const dk=destKeyFor(acct,r.kind); let filePath=null; if(r.file){ filePath=await up([...folderFor(dk), String(r.y), monthFolder(r.m), belegFileName(r.name, r.nummer, r.file.name)].map(safeName).join('/'), r.file); } bel.push({...r, acct, filePath, fileName:r.file?r.file.name:''}); }
+    for(const r of payload.belege){ i++; prog('Belege: '+i+' / '+payload.belege.length+(r.file?' · '+r.file.name:'')); const acct=destAcct(r.dest); const dk=destKeyFor(acct,r.kind); let filePath=null; if(r.file){ filePath=await up([...folderFor(dk), String(r.y), monthFolder(r.m), belegFileName(r.name, r.nummer, r.file.name)].map(safeName).join('/'), r.file); } bel.push({...r, _id:uid(), acct, filePath, fileName:r.file?r.file.name:''}); }
     const rec=[]; i=0;
-    for(const r of payload.rechnungen){ i++; prog('Rechnungen: '+i+' / '+payload.rechnungen.length); let pdfPath=null; if(r.file){ pdfPath=await up(['Rechnungen',String(r.y),'Rechnung_'+safeName(r.nummer||r.name||'Import')+'.pdf'].map(safeName).join('/'), r.file); } const acct=(r.dest==='privat'||PROPS.includes(r.dest))?r.dest:'unter'; rec.push({...r, pdfPath, acct}); }
+    for(const r of payload.rechnungen){ i++; prog('Rechnungen: '+i+' / '+payload.rechnungen.length); let pdfPath=null; if(r.file){ pdfPath=await up(['Rechnungen',String(r.y),'Rechnung_'+safeName(r.nummer||r.name||'Import')+'.pdf'].map(safeName).join('/'), r.file); } const acct=(r.dest==='privat'||PROPS.includes(r.dest))?r.dest:'unter'; rec.push({...r, _id:uid(), pdfPath, acct}); }
     const minCust=Math.max(1,+payload.minCust||1); const perName={}; rec.forEach(r=>{ const n=normName(r.name||'Kunde'); perName[n]=(perName[n]||0)+1; }); const wantCust=(nm)=>perName[normName(nm)]>=minCust; const knownNames=new Set(customers.map(c=>normName(c.name))); const newNames=new Set(); rec.forEach(r=>{ const n=normName(r.name||'Kunde'); if(!knownNames.has(n) && wantCust(r.name||'Kunde')) newNames.add(n); });
     setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const now2=new Date().toISOString();
       bel.forEach(r=>{ if(!nd[r.y]) nd[r.y]={}; if(!nd[r.y][r.m]) nd[r.y][r.m]=emptyMonth(); const done=payload.confirmed||r.status==='bezahlt';
-        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), ...(r.recur?{recurring:true, from:r.recur.from, until:r.recur.until}:{}), amount:r.brutto, netto:r.netto, mwst:r.mwst, category:r.kategorie||'', note:[r.taxNote,(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
+        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), id:r._id, ...(r.recur?{recurring:true, from:r.recur.from, until:r.recur.until}:{}), amount:r.brutto, netto:r.netto, mwst:r.mwst, category:r.kategorie||'', note:[r.taxNote,(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
         _bookKind(nd[r.y][r.m], r.acct, r.kind, item); });
       const custs=[...(nd.customers||[])]; const invs=[...(nd.invoices||[])];
       rec.forEach(r=>{ const nm=(r.name||'Kunde').trim(); let c=custs.find(x=>normName(x.name)===normName(nm)); if(!c && wantCust(nm)){ const nums=custs.filter(x=>(x.domain||'unter')===r.acct).map(x=>parseInt(x.custNo,10)).filter(n=>!isNaN(n)); c={id:uid(), name:nm, company:nm, firstName:'', lastName:'', anrede:'', address:String(r.adresse||'').replace(/,\s*/,'\n'), email:'', phone:'', website:'', custNo:String(r.kdnr||(nums.length?Math.max(...nums)+1:1001)), domain:r.acct, imported:'sevdesk'}; custs.push(c); }
         const invId=uid(); const paid=r.status==='bezahlt';
         invs.push({ id:invId, number:r.nummer||('IMP-'+r.datum), domain:r.acct, account:r.acct, customerId:c?c.id:'', custName:nm, custAddress:String(r.adresse||'').replace(/,\s*/,'\n'), custEmail:'', date:r.datum, due:r.faellig||'', items:[{desc:r.beschreibung||'Leistung laut Rechnung', qty:1, price:r.netto, mwst:r.mwst}], note:'Import aus sevDesk', total:r.brutto, paid, paidDate:paid?(r.zahldatum||r.datum):'', pdfPath:r.pdfPath, sentDate:r.datum, booked:true, imported:'sevdesk', importedAt:now2 });
         if(!nd[r.y]) nd[r.y]={}; if(!nd[r.y][r.m]) nd[r.y][r.m]=emptyMonth();
-        const item={...newItem(('Rechnung '+(r.nummer||'')+' · '+nm).slice(0,90)), amount:r.brutto, netto:r.netto, mwst:r.mwst, belegnr:r.nummer||'', datum:r.datum, category:'Allgemein', note:[r.taxNote,'Rechnung · Import aus sevDesk'].filter(Boolean).join(' · '), invId, customerId:c?c.id:'', custName:nm, paid, status:paid?'bezahlt':'offen', bankConfirmed:paid, filePath:r.pdfPath, fileName:r.pdfPath?('Rechnung_'+(r.nummer||'')+'.pdf'):'', imported:'sevdesk', importedAt:now2 };
+        const item={...newItem(('Rechnung '+(r.nummer||'')+' · '+nm).slice(0,90)), id:r._id, amount:r.brutto, netto:r.netto, mwst:r.mwst, belegnr:r.nummer||'', datum:r.datum, category:'Allgemein', note:[r.taxNote,'Rechnung · Import aus sevDesk'].filter(Boolean).join(' · '), invId, customerId:c?c.id:'', custName:nm, paid, status:paid?'bezahlt':'offen', bankConfirmed:paid, filePath:r.pdfPath, fileName:r.pdfPath?('Rechnung_'+(r.nummer||'')+'.pdf'):'', imported:'sevdesk', importedAt:now2 };
         _bookKind(nd[r.y][r.m], r.acct, 'ein', item); });
       nd.customers=custs; nd.invoices=invs;
       // Laufende Rechnungs-Serien (aus dem Import erkannt): ab dem Folgemonat automatisch weiter erzeugen
@@ -2559,6 +2594,9 @@ function App({session}) {
       bankDrafts=bankDrafts.concat(rows.map(r=>({id:uid(), ...r}))); }
     if(stmts.length) setData(prev=>({...prev, bankStatements:[...(prev.bankStatements||[]), ...stmts]}));
     if(bankDrafts.length) setTimeout(()=>{ try{ addDraftsRef.current&&addDraftsRef.current(bankDrafts); }catch(e){} }, 1200);
+    // KI-Lesung der markierten PDFs: läuft nach dem Import im Hintergrund (Fortschritt unten rechts)
+    const kiJobs=[...bel.filter(r=>r.ki&&r.file).map(r=>({id:r._id,kind:'b',r})), ...rec.filter(r=>r.ki&&r.file).map(r=>({id:r._id,kind:'r',r}))];
+    if(kiJobs.length) setTimeout(()=>{ try{ startKiJobsRef.current&&startKiJobsRef.current(kiJobs); }catch(e){} }, 300);
     setToast('Import abgeschlossen: '+bel.length+' Belege, '+rec.length+' Rechnungen'+(stmts.length?', '+stmts.length+' Kontoauszug/-auszüge':''));
     return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler, kontoauszuege:stmts.length, bankUmsaetze:bankDrafts.length, wiederkehrend:(payload.belege||[]).filter(r=>r.recur).length, serien:(payload.recurInvoices||[]).length };
   };
@@ -7296,6 +7334,18 @@ function App({session}) {
           </div>
         </div>
       );})()}
+
+      {kiJob && (
+        <div style={{position:'fixed',bottom:toast?84:20,right:20,width:300,zIndex:129,background:C.surf2,border:'1px solid '+C.bdrM,color:C.txt,padding:'12px 14px',borderRadius:12,fontSize:12.5,boxShadow:'0 8px 24px rgba(0,0,0,0.12)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+            <span style={{fontWeight:700,flex:1}}>{kiJob.running?'KI liest Belege…':kiJob.cancelled?'KI abgebrochen':'KI fertig'}</span>
+            <span style={{color:C.sub}}>{kiJob.done} / {kiJob.total}</span>
+            {kiJob.running?<button onClick={()=>{kiCancelRef.current=true;}} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>Abbrechen</button>:<button onClick={()=>setKiJob(null)} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:14,fontFamily:'inherit'}}>×</button>}
+          </div>
+          <div style={{height:6,borderRadius:99,background:C.surf3,overflow:'hidden'}}><div style={{height:'100%',width:(kiJob.total?Math.round(kiJob.done/kiJob.total*100):0)+'%',background:AI_GRADIENT,transition:'width .3s'}}/></div>
+          <div style={{marginTop:7,color:C.sub}}>{kiJob.changed} korrigiert{kiJob.errs?' · '+kiJob.errs+' Fehler':''}{!kiJob.running&&kiJob.mism?' · '+kiJob.mism+' Abweichung(en) als To-do':''}</div>
+        </div>
+      )}
 
       {toast && (
         <div style={{position:'fixed',bottom:20,right:20,maxWidth:340,zIndex:130,
