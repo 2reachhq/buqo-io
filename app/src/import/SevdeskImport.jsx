@@ -2,7 +2,7 @@
 // Alles wird lokal gelesen und in einer Vorschau gezeigt; erst „Jetzt importieren" schreibt Buchungen,
 // Rechnungen, Kunden und lädt die PDFs in den Beleg-Speicher (übernimmt die App über onImport).
 import React from 'react';
-import { decodeText, parseCSV, autoMap, detectFormat, FORMAT_LABEL, normalizeRows, matchFiles, markDuplicates, summarize, detectRecurring, CATS } from './sevdesk.js';
+import { decodeText, parseCSV, autoMap, detectFormat, FORMAT_LABEL, normalizeRows, matchFiles, markDuplicates, summarize, detectRecurring, bankRowsFromCsv, CATS } from './sevdesk.js';
 import { readZipEntries, baseName } from './zip.js';
 
 const { useState, useMemo } = React;
@@ -21,6 +21,7 @@ export default function SevdeskImport(props) {
   const [rowAcct, setRowAcct] = useState({});
   const [skip, setSkip] = useState({});
   const [confirmed, setConfirmed] = useState(true);
+  const [bank, setBank] = useState([]);           // Kontoauszüge: [{file, name, kind:'csv'|'datei', rows?}]
   const [recurOff, setRecurOff] = useState({}); // erkannte Wiederkehrend-Gruppen, die der Nutzer abgewählt hat
   const [minCust, setMinCust] = useState(2); // Kunden nur anlegen, wenn er mind. so viele Rechnungen hat (1 = alle)
   const [mapOpen, setMapOpen] = useState({});
@@ -43,6 +44,16 @@ export default function SevdeskImport(props) {
     catch (e) { setErr('ZIP konnte nicht gelesen werden: ' + (e.message || e)); }
   };
 
+  const addBank = async (files) => {
+    const list = [];
+    for (const f of files) {
+      try {
+        if (/\.(csv|txt)$/i.test(f.name) || /csv|text/.test(f.type || '')) { const parsed = parseCSV(decodeText(new Uint8Array(await f.arrayBuffer()))); const rows = bankRowsFromCsv(parsed, autoMap(parsed.header)); if (!rows.length) throw new Error('Keine Umsätze erkannt (Spalten Datum/Betrag fehlen?)'); list.push({ file: f, name: f.name, kind: 'csv', rows }); }
+        else list.push({ file: f, name: f.name, kind: 'datei' });
+      } catch (e) { setErr('Kontoauszug „' + f.name + '": ' + (e.message || e)); }
+    }
+    if (list.length) { setBank(b => [...b, ...list]); setResult(null); }
+  };
   const build = (src, zip, exist) => {
     if (!src) return null;
     let recs = normalizeRows(src.parsed, src.mapping, { kind: src.kind, year: year !== 'alle' ? +year : null });
@@ -88,11 +99,12 @@ export default function SevdeskImport(props) {
   const fileFor = (zip, name) => { if (!zip || !name) return null; const e = zip.entries.find(x => x.name === name); return e ? { name: baseName(e.name), data: e.data } : null; };
 
   const run = async () => {
-    if (busy || (!belegeGo.length && !rechGo.length)) return;
+    if (busy || (!belegeGo.length && !rechGo.length && !bank.length)) return;
     setBusy(true); setErr(''); setResult(null);
     try {
       const payload = {
         confirmed, minCust,
+        bank: bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })),
         belege: belegeGo.map(r => { const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
         rechnungen: rechGo.map(r => ({ ...r, dest: acctOf('r', r), file: fileFor(zipR, r.file) })),
         // laufende Rechnungs-Serien: ab dem Folgemonat automatisch weiter erzeugen
@@ -136,6 +148,15 @@ export default function SevdeskImport(props) {
       {slot('Rechnungen · CSV', 'sevDesk → Rechnungen → Exportieren → CSV', '.csv,.txt,text/csv', rech, f => readCsv(f, 'ein', setRech), rech && (rech.parsed.rows.length + ' Zeilen · ' + FORMAT_LABEL[rech.format]))}
       {slot('Rechnungen · ZIP mit PDFs', 'sevDesk → Rechnungen → Exportieren → ZIP (PDF)', '.zip,application/zip', zipR, f => readZip(f, setZipR), zipR && (zipR.entries.length + ' Dateien'))}
     </div>
+    <label style={{ display: 'flex', alignItems: 'center', gap: 12, background: bank.length ? hexA(C.grn, 0.08) : C.surf2, border: '1.5px ' + (bank.length ? 'solid ' + hexA(C.grn, 0.5) : 'dashed ' + C.bdrM), borderRadius: 14, padding: '13px 14px', cursor: 'pointer', marginBottom: 14 }}>
+      <span style={{ width: 38, height: 38, borderRadius: 11, background: bank.length ? C.grn : C.surf3, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={bank.length ? P.check : P.bank} sz={17} col={bank.length ? '#fff' : C.sub} /></span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: C.txt }}>Kontoauszüge · CSV, PDF oder Foto (mehrere möglich)</span>
+        <span style={{ display: 'block', fontSize: 12, color: C.sub, marginTop: 2 }}>{bank.length ? bank.map(b => b.name + (b.rows ? ' (' + b.rows.length + ' Umsätze)' : ' (wird gelesen)')).join(' · ') : 'Die Umsätze werden mit deinen Belegen und Rechnungen abgeglichen; die Datei wird für den Steuerberater abgelegt.'}</span>
+      </span>
+      {bank.length > 0 && <button onClick={e => { e.preventDefault(); setBank([]); }} style={{ background: 'none', border: 'none', color: C.mut, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit' }}>Entfernen</button>}
+      <input type="file" multiple accept=".csv,.txt,.pdf,image/*,text/csv" onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ''; if (fs.length) addBank(fs); }} style={{ display: 'none' }} />
+    </label>
     {err && <div style={{ background: hexA(C.red, 0.08), border: '1px solid ' + hexA(C.red, 0.35), borderRadius: 12, padding: '10px 14px', fontSize: 13, color: C.red, marginBottom: 14 }}>{err}</div>}
 
     {(B || R) && (<>
@@ -217,12 +238,12 @@ export default function SevdeskImport(props) {
           <div style={{ fontSize: 15, fontWeight: 700 }}>{belegeGo.length} Belege und {rechGo.length} Rechnungen{year !== 'alle' ? ' für ' + year : ''} importieren</div>
           <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>{progress || (busy ? 'Läuft…' : 'Buchungen kommen in den jeweiligen Monat, PDFs in den Beleg-Speicher, Kunden und Rechnungen in den Rechnungsbereich.')}</div>
         </div>
-        <button onClick={run} disabled={busy || (!belegeGo.length && !rechGo.length)} style={{ ...btnP, opacity: (busy || (!belegeGo.length && !rechGo.length)) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Importiert…' : 'Jetzt importieren'}</button>
+        <button onClick={run} disabled={busy || (!belegeGo.length && !rechGo.length && !bank.length)} style={{ ...btnP, opacity: (busy || (!belegeGo.length && !rechGo.length && !bank.length)) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Importiert…' : 'Jetzt importieren'}</button>
       </div>
       {busy && <div className="prog" style={{ marginBottom: 14 }} />}
       {result && (
         <div style={{ ...card, marginBottom: 14, background: hexA(C.grn, 0.07), border: '1px solid ' + hexA(C.grn, 0.35) }}>
-          <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>Fertig – {result.belege} Belege, {result.rechnungen} Rechnungen, {result.kunden} neue Kunden, {result.dateien} Dateien abgelegt{result.wiederkehrend ? ' · ' + result.wiederkehrend + ' Belege als wiederkehrend markiert' : ''}{result.serien ? ' · ' + result.serien + ' laufende Rechnungs-Serie(n) angelegt' : ''}</div>
+          <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>Fertig – {result.belege} Belege, {result.rechnungen} Rechnungen, {result.kunden} neue Kunden, {result.dateien} Dateien abgelegt{result.wiederkehrend ? ' · ' + result.wiederkehrend + ' Belege als wiederkehrend markiert' : ''}{result.serien ? ' · ' + result.serien + ' laufende Rechnungs-Serie(n) angelegt' : ''}{result.kontoauszuege ? ' · ' + result.kontoauszuege + ' Kontoauszug/-auszüge abgelegt (' + result.bankUmsaetze + ' Umsätze zum Abgleich im Bereich Bank)' : ''}</div>
           <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.6 }}>{result.fehler ? result.fehler + ' Datei(en) konnten nicht hochgeladen werden, die Buchungen sind trotzdem da. ' : ''}Schau jetzt in die Konten oder direkt in die Steuerprognose {year !== 'alle' ? year : ''} – dort sind die Zahlen sofort drin. Einen erneuten Import mit denselben Dateien erkennt Buqo als Dubletten.</div>
         </div>
       )}
@@ -248,13 +269,34 @@ function Mapping({ ui, src, setSrc, k, mapOpen, setMapOpen, isMobile }) {
 }
 function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, accounts, acctOf, ai, onlyUnsure }) {
   const { C, SS, NUM, fmt, hexA } = ui;
+  const [sort, setSort] = useState('name');        // Sortierung: nach Name (Standard), Datum oder Betrag
+  const [grouped, setGrouped] = useState({});      // Namen, für die die Sammel-Zuordnung schon einmal gemacht wurde
+  const [note, setNote] = useState('');
     if (!X) return null;
     const aiOf = (r) => (ai && ai[k + r.idx]) || null;
-    const rows = X.rows.filter(r => r.inYear && (!onlyUnsure || (aiOf(r) && !aiOf(r).sure && !rowAcct[k + r.idx]))).slice(0, 300);
+    const nkey = (r) => String(r.name || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
+    const cmpName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'de', { sensitivity: 'base' }) || String(a.datum || '').localeCompare(String(b.datum || ''));
+    const rows = X.rows.filter(r => r.inYear && (!onlyUnsure || (aiOf(r) && !aiOf(r).sure && !rowAcct[k + r.idx]))).sort(sort === 'datum' ? (a, b) => String(a.datum || '').localeCompare(String(b.datum || '')) : sort === 'betrag' ? (a, b) => (b.brutto || 0) - (a.brutto || 0) : cmpName).slice(0, 300);
+    const nameCount = {}; X.rows.filter(r => r.inYear).forEach(r => { const n = nkey(r); nameCount[n] = (nameCount[n] || 0) + 1; });
+    // Erste Konto-Änderung bei einem Namen gilt für alle Zeilen dieses Namens (die noch nicht von Hand geändert wurden);
+    // danach ändert jede Auswahl nur die einzelne Zeile.
+    const assign = (r, val) => {
+      const n = nkey(r); const same = X.rows.filter(x => x.inYear && !x.dup && !x.cancelled && nkey(x) === n);
+      if (!grouped[n] && same.length > 1) {
+        setRowAcct(a => { const nx = { ...a }; same.forEach(g => { if (g.idx === r.idx || !a[k + g.idx]) nx[k + g.idx] = val; }); return nx; });
+        setGrouped(g => ({ ...g, [n]: true })); setNote('„' + String(r.name).slice(0, 40) + '": ' + same.length + ' Zeilen auf einmal zugeordnet – weitere Änderungen gelten nur für die einzelne Zeile.');
+      } else { setRowAcct(a => ({ ...a, [k + r.idx]: val })); setNote(''); }
+    };
     const th = { textAlign: 'left', fontSize: 11, fontWeight: 700, color: C.mut, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '8px 8px', borderBottom: '1px solid ' + C.bdr, whiteSpace: 'nowrap' };
     const td = { fontSize: 13, padding: '7px 8px', borderBottom: '1px solid ' + C.sep, verticalAlign: 'top' };
     return (
-      <div style={{ overflowX: 'auto', marginTop: 12, maxHeight: 420, overflowY: 'auto', border: '1px solid ' + C.bdr, borderRadius: 12 }}>
+      <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+        <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Sortieren nach</span>
+        <select value={sort} onChange={e => setSort(e.target.value)} style={{ ...SS, width: 'auto', fontSize: 12.5, padding: '5px 8px' }}><option value="name">Name (Abbuchung/Kunde)</option><option value="datum">Datum</option><option value="betrag">Betrag</option></select>
+        <span style={{ fontSize: 11.5, color: C.mut, flex: 1, minWidth: 220 }}>{note || 'Tipp: Die erste Konto-Änderung bei einem Namen gilt für alle Zeilen mit diesem Namen, danach nur für die einzelne Zeile.'}</span>
+      </div>
+      <div style={{ overflowX: 'auto', marginTop: 8, maxHeight: 420, overflowY: 'auto', border: '1px solid ' + C.bdr, borderRadius: 12 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
           <thead><tr><th style={th}></th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Nummer</th><th style={th}>Kategorie</th><th style={{ ...th, textAlign: 'right' }}>Brutto</th><th style={th}>MwSt</th>{withAcct && <th style={th}>Konto</th>}<th style={th}>PDF</th><th style={th}>Hinweis</th></tr></thead>
           <tbody>
@@ -262,12 +304,12 @@ function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, account
               <tr key={r.idx} style={{ opacity: dim ? 0.5 : 1, background: dim ? 'transparent' : (r.kind === 'ein' ? hexA(C.grn, 0.04) : 'transparent') }}>
                 <td style={td}><input type="checkbox" checked={!off && !sk} disabled={off} onChange={e => setSkip(s => ({ ...s, [k + r.idx]: !e.target.checked }))} /></td>
                 <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{r.datum ? r.datum.split('-').reverse().join('.') : '—'}</td>
-                <td style={{ ...td, maxWidth: 240 }}><div style={{ fontWeight: 600, color: C.txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}</div>{r.beschreibung && r.beschreibung !== r.name && <div style={{ fontSize: 11.5, color: C.mut, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{r.beschreibung}</div>}</td>
+                <td style={{ ...td, maxWidth: 240 }}><div style={{ fontWeight: 600, color: C.txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}{nameCount[nkey(r)] > 1 && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: C.sub, background: C.surf3, borderRadius: 6, padding: '1px 6px' }}>×{nameCount[nkey(r)]}</span>}</div>{r.beschreibung && r.beschreibung !== r.name && <div style={{ fontSize: 11.5, color: C.mut, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{r.beschreibung}</div>}</td>
                 <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{r.nummer || '—'}</td>
                 <td style={td}>{r.kategorie || <span style={{ color: C.mut }}>—</span>}</td>
                 <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', color: r.kind === 'ein' ? C.grn : C.txt, fontWeight: 600 }}>{r.kind === 'ein' ? '+' : '−'}{fmt(r.brutto)}</td>
                 <td style={{ ...td, ...NUM }}>{r.mwst} %</td>
-                {withAcct && (() => { const s = aiOf(r); const manual = !!rowAcct[k + r.idx]; const unsure = s && !s.sure && !manual; return <td style={td}><select value={acctOf(k, r)} onChange={e => setRowAcct(a => ({ ...a, [k + r.idx]: e.target.value }))} style={{ ...SS, fontSize: 12, padding: '4px 6px', width: 150, border: '1px solid ' + (unsure ? C.amb : 'transparent') }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>{s && <div title={s.why} style={{ fontSize: 11, marginTop: 3, color: manual ? C.mut : unsure ? C.amb : C.sub, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{manual ? 'von dir gewählt' : (unsure ? '? ' : 'KI: ') + (s.why || '')}</div>}</td>; })()}
+                {withAcct && (() => { const s = aiOf(r); const manual = !!rowAcct[k + r.idx]; const unsure = s && !s.sure && !manual; return <td style={td}><select value={acctOf(k, r)} onChange={e => assign(r, e.target.value)} style={{ ...SS, fontSize: 12, padding: '4px 6px', width: 150, border: '1px solid ' + (unsure ? C.amb : 'transparent') }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>{s && <div title={s.why} style={{ fontSize: 11, marginTop: 3, color: manual ? C.mut : unsure ? C.amb : C.sub, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{manual ? 'von dir gewählt' : (unsure ? '? ' : 'KI: ') + (s.why || '')}</div>}</td>; })()}
                 <td style={td}>{r.file ? <span title={r.file} style={{ color: C.grn, fontWeight: 700 }}>✓</span> : <span style={{ color: C.mut }}>—</span>}</td>
                 <td style={{ ...td, fontSize: 12, color: r.dup ? C.amb : (r.cancelled ? C.mut : C.exp) }}>{r.dup ? 'schon vorhanden' : r.cancelled ? 'storniert/Entwurf' : r.warn.join(', ')}</td>
               </tr>
@@ -276,5 +318,6 @@ function Table({ ui, X, k, withAcct, skip, setSkip, rowAcct, setRowAcct, account
         </table>
         {X.rows.filter(r => r.inYear).length > 300 && <div style={{ fontSize: 12, color: C.mut, padding: 8 }}>… nur die ersten 300 Zeilen werden angezeigt, importiert werden alle.</div>}
       </div>
+      </>
     );
 }

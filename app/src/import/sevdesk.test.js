@@ -85,3 +85,11 @@ test('Wiederkehrendes erkennen: gleicher Name+Betrag in ≥3 Monaten, Lücke üb
   assert.equal(g.length, 1); assert.equal(g[0].name, 'VW Leasing GmbH'); assert.equal(g[0].months, 4); assert.equal(g[0].ongoing, true); assert.deepEqual(g[0].to, { y: 2026, m: 8 }); assert.equal(g[0].idxs.length, 4);
   assert.equal(detectRecurring(rows, { today: new Date('2027-06-01') })[0].ongoing, false);
 });
+
+import { bankRowsFromCsv } from './sevdesk.js';
+test('Kontoauszug-CSV: Eingang/Abbuchung nach Vorzeichen, Bank-Spaltennamen', () => {
+  const csv = 'Buchungstag;Valuta;Auftraggeber/Empfänger;Verwendungszweck;Betrag\n05.09.2026;05.09.2026;VW Leasing GmbH;Vertrag 1165849;-228,63\n07.09.2026;07.09.2026;Intensiv 4 you UG;RE-1482;722,25\n';
+  const p = parseCSV(csv); const out = bankRowsFromCsv(p);
+  assert.equal(out.length, 2); assert.equal(out[0].kind, 'aus'); assert.equal(out[0].amount, 228.63); assert.equal(out[0].name, 'VW Leasing GmbH'); assert.equal(out[0].datum, '2026-09-05');
+  assert.equal(out[1].kind, 'ein'); assert.equal(out[1].amount, 722.25); assert.match(out[1].note, /RE-1482/);
+});

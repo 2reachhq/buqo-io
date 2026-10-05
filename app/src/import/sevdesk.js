@@ -66,11 +66,11 @@ export function parseDate(v, fallbackYear) {
 /* ── Spalten erkennen ── */
 export const norm = (s) => String(s || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z0-9%\/]/g, '');
 export const FIELDS = [
-  ['datum',        ['belegdatum','rechnungsdatum','datum','date','voucherdate','invoicedate','buchungsdatum','erstelltam','ausgestelltam']],
+  ['datum',        ['belegdatum','rechnungsdatum','datum','date','voucherdate','invoicedate','buchungsdatum','buchungstag','bookingdate','erstelltam','ausgestelltam']],
   ['nummer',       ['belegnummer','belegnr','rechnungsnummer','rechnungsnr','belegfeld1','nummer','number','invoicenumber','vouchernumber','dokumentnummer','referenz']],
-  ['name',         ['lieferant','kontakt','kunde','kreditor','debitor','geschaeftspartner','kontaktname','supplier','customer','contact','firma','organisation','name']],
+  ['name',         ['lieferant','kontakt','kunde','kreditor','debitor','geschaeftspartner','kontaktname','supplier','customer','contact','firma','organisation','name','beguenstigter/zahlungspflichtiger','zahlungspflichtiger','beguenstigter','empfaenger','auftraggeber','auftraggeber/empfaenger','namezahlungsbeteiligter','zahlungsbeteiligter']],
   ['beschreibung', ['beschreibung','buchungstext','betreff','verwendungszweck','kopfzeile','titel','bezeichnung','description','text','positionen','leistung']],
-  ['brutto',       ['bruttobetrag','betragbrutto','brutto','gesamtbetrag','summebrutto','sumgross','umsatzohnesoll/habenkz','endbetrag','gesamt','betrag','amount','total','umsatz']],
+  ['brutto',       ['bruttobetrag','betragbrutto','brutto','gesamtbetrag','summebrutto','sumgross','umsatzohnesoll/habenkz','endbetrag','gesamt','betrag','amount','total','umsatz','betrageur','betrag(eur)']],
   ['netto',        ['nettobetrag','betragnetto','netto','summenetto','sumnet','net']],
   ['steuerbetrag', ['steuerbetrag','umsatzsteuerbetrag','mwstbetrag','ustbetrag','sumtax','taxamount']],
   ['mwst',         ['steuersatz','mwstsatz','ustsatz','mwst','ust','umsatzsteuer','taxrate','steuersatzin%','steuer%','steuersatzprozent']],
@@ -167,7 +167,7 @@ export function normalizeRows(parsed, mapping, opts = {}) {
     } else if (typ) {
       if (/ausgangsrechnung|rechnung an|einnahme|erl(ö|oe)s|gutschrift an|revenue|income|credit/.test(typ) && !/eingangs|lieferant/.test(typ)) kind = 'ein';
       else if (/eingangsrechnung|beleg|ausgabe|aufwand|expense|debit|lieferant/.test(typ)) kind = 'aus';
-    } else if (opts.kind === 'auto' && brutto < 0) kind = 'aus';
+    } else if (opts.kind === 'auto') kind = brutto < 0 ? 'aus' : 'ein';
     if (brutto < 0) { brutto = Math.abs(brutto); netto = Math.abs(netto); }
     const skr = map.datevKonto != null ? (isBankAcct(get(row, 'datevKonto')) ? get(row, 'gegenkonto') : get(row, 'datevKonto')) : '';
     let kategorie = mapCategory(get(row, 'kategorie'), skr) || mapCategory(beschreibung) || mapCategory(name);
@@ -252,4 +252,10 @@ export function detectRecurring(rows, { minMonths = 3, tolerance = 0.02, today =
     });
   });
   return out.sort((a, b) => (Number(b.ongoing) - Number(a.ongoing)) || (b.months - a.months));
+}
+
+/* ── Kontoauszug-CSV → Bank-Entwürfe (Name, Betrag, Datum, Verwendungszweck; + = Eingang, − = Abbuchung) ── */
+export function bankRowsFromCsv(parsed, mapping) {
+  const rows = normalizeRows(parsed, mapping || autoMap(parsed.header), { kind: 'auto' });
+  return rows.filter(r => r.datum && r.brutto > 0).map(r => ({ name: String(r.name || r.beschreibung || 'Umsatz').slice(0, 70), amount: r.brutto, kind: r.kind, datum: r.datum, belegnr: r.nummer || '', note: r.beschreibung && r.beschreibung !== r.name ? r.beschreibung : '', category: '', netto: '', mwst: '', info: '' }));
 }
