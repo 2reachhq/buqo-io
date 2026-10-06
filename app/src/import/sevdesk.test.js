@@ -93,3 +93,13 @@ test('Kontoauszug-CSV: Eingang/Abbuchung nach Vorzeichen, Bank-Spaltennamen', ()
   assert.equal(out.length, 2); assert.equal(out[0].kind, 'aus'); assert.equal(out[0].amount, 228.63); assert.equal(out[0].name, 'VW Leasing GmbH'); assert.equal(out[0].datum, '2026-09-05');
   assert.equal(out[1].kind, 'ein'); assert.equal(out[1].amount, 722.25); assert.match(out[1].note, /RE-1482/);
 });
+
+test('Rechnungs-CSV ohne Namensspalte: Name aus Adresse, Brutto/Netto nicht vertauscht, Land nie als Name', async () => {
+  const sv = await import('./sevdesk.js');
+  const csv = '"Rechnungs-Nr.";"Rechnungs-Datum";"Betreff";"Gesamtbetrag-Netto";"Gesamtbetrag-Brutto";"Empfänger-KdNr";"Empfänger-Adresse";"Empfänger-Land"\n' +
+    'RE-1;21.09.2026;Rechnung;800,00;952,00;1068;FK Growth GmbH Thalmannsdorf 2 86567 Hilgertshausen;Deutschland\n' +
+    'RE-2;22.09.2026;Rechnung;79,44;85,00;1072;Veerle Schmitz Korte koningsdwarsstraat 7 1011GB Amsterdam;Deutschland\n';
+  const p = sv.parseCSV(csv); const rows = sv.normalizeRows(p, sv.autoMap(p.header), { kind: 'ein' });
+  assert.equal(rows[0].name, 'FK Growth GmbH'); assert.equal(rows[0].brutto, 952); assert.equal(rows[0].netto, 800); assert.equal(rows[0].mwst, 19);
+  assert.equal(rows[1].name, 'Veerle Schmitz Korte'); assert.notEqual(rows[1].name, 'Deutschland');
+});

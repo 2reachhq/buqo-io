@@ -86,16 +86,34 @@ export const FIELDS = [
   ['adresse',      ['adresse','anschrift','empfaengeradresse']],
   ['kdnr',         ['kundennummer','kdnr','empfaengerkdnr']],
 ];
+// Unscharfe Treffer (Präfix/enthält) dürfen nie auf Spalten fallen, die erkennbar etwas anderes sind
+// (z. B. „Empfänger-Land" als Name oder „Gesamtbetrag-Netto" als Brutto).
+const FUZZY_BAD = {
+  name: /land|iban|bic|kdnr|kundennr|adresse|anschrift|strasse|plz|ort$|mail|telefon|nr$/,
+  brutto: /netto|steuer|offen|ust|mwst/,
+  netto: /brutto/,
+};
 export function autoMap(header) {
   const hs = header.map(norm); const used = new Set(); const map = {};
   const take = (field, i) => { map[field] = i; used.add(i); };
   // Pass 1: exakte Treffer über alle Felder, Pass 2: Präfix, Pass 3: enthält (nur Kernfelder, längere Synonyme)
   for (const [field, syns] of FIELDS) { for (const syn of syns) { const i = hs.findIndex((h, idx) => !used.has(idx) && h === syn); if (i >= 0) { take(field, i); break; } } }
-  for (const [field, syns] of FIELDS) { if (map[field] != null) continue; for (const syn of syns) { if (syn.length < 4) continue; const i = hs.findIndex((h, idx) => !used.has(idx) && h.startsWith(syn)); if (i >= 0) { take(field, i); break; } } }
-  for (const [field, syns] of FIELDS) { if (map[field] != null || !['datum','nummer','name','brutto','netto','kategorie'].includes(field)) continue; for (const syn of syns) { if (syn.length < 5) continue; const i = hs.findIndex((h, idx) => !used.has(idx) && h.includes(syn)); if (i >= 0) { take(field, i); break; } } }
+  for (const [field, syns] of FIELDS) { if (map[field] != null) continue; for (const syn of syns) { if (syn.length < 4) continue; const i = hs.findIndex((h, idx) => !used.has(idx) && h.startsWith(syn) && !(FUZZY_BAD[field] && FUZZY_BAD[field].test(h))); if (i >= 0) { take(field, i); break; } } }
+  for (const [field, syns] of FIELDS) { if (map[field] != null || !['datum','nummer','name','brutto','netto','kategorie'].includes(field)) continue; for (const syn of syns) { if (syn.length < 5) continue; const i = hs.findIndex((h, idx) => !used.has(idx) && h.includes(syn) && !(FUZZY_BAD[field] && FUZZY_BAD[field].test(h))); if (i >= 0) { take(field, i); break; } } }
   // DATEV: „Konto" ist dort das Sachkonto (Kategorie), „Belegfeld 1" die Nummer, „Umsatz" der Betrag
   if (map.sh != null || map.gegenkonto != null) { const k = hs.findIndex(h => h === 'konto'); if (k >= 0) { if (map.kategorie === k) delete map.kategorie; map.datevKonto = k; } }
   return map;
+}
+// Manche Exporte (z. B. sevDesk-Rechnungen) haben keine Namensspalte, nur „Empfänger-Adresse" („Name Straße Nr PLZ Ort").
+// Der Name wird daraus geschätzt: bis zur Rechtsform, sonst bis zur Straße/Hausnummer.
+export function nameFromAddress(addr) {
+  const t = String(addr || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean); if (!t.length) return '';
+  const LEGAL = /^(gmbh|mbh|ug|ag|kg|ohg|gbr|se|ltd|inc|llc|e\.?k\.?|e\.?v\.?|co\.?|kgaa|b\.?v\.?)[,.]?$/i;
+  for (let i = 0; i < Math.min(t.length, 8); i++) if (LEGAL.test(t[i])) { let e = i + 1; if (/^&$|^co\.?$/i.test(t[e] || '')) e += 2; return t.slice(0, e).join(' ').replace(/,$/, ''); }
+  const STREET = /(stra(ß|ss)e|str\.|weg|platz|allee|gasse|ring|damm|ufer|chaussee|steig|pfad|straat|laan|dwarsstraat)$/i;
+  const START = /^(am|an|im|in|zum|zur|auf|bei|hinter|unter|obere|untere|alte|neue)$/i;
+  for (let i = 1; i < t.length; i++) if (STREET.test(t[i]) || /^\d/.test(t[i]) || (i >= 2 && START.test(t[i]))) return t.slice(0, i).join(' ');
+  return t.slice(0, 3).join(' ');
 }
 export function detectFormat(parsed) {
   const hs = (parsed.header || []).map(norm);
@@ -142,7 +160,8 @@ export function normalizeRows(parsed, mapping, opts = {}) {
     const warn = [];
     const datum = parseDate(get(row, 'datum'), year);
     const nummer = get(row, 'nummer');
-    const name = get(row, 'name') || get(row, 'beschreibung') || '';
+    const nameCol = get(row, 'name'); const nameGuess = !nameCol && !!get(row, 'adresse');
+    const name = nameCol || (nameGuess ? nameFromAddress(get(row, 'adresse')) : '') || get(row, 'beschreibung') || '';
     const beschreibung = get(row, 'beschreibung');
     let brutto = parseNumber(get(row, 'brutto'));
     let netto = parseNumber(get(row, 'netto'));
@@ -178,6 +197,7 @@ export function normalizeRows(parsed, mapping, opts = {}) {
     if (!datum) warn.push('kein Datum');
     if (!brutto) warn.push('kein Betrag');
     if (cancelled) warn.push('storniert/Entwurf');
+    if (nameGuess) warn.push('Name aus Adresse geschätzt');
     const y = datum ? +datum.slice(0, 4) : null, m = datum ? (+datum.slice(5, 7) - 1) : null;
     out.push({ idx, adresse: get(row, 'adresse'), kdnr: get(row, 'kdnr'), kind, datum, y, m, nummer, name: name.slice(0, 90), beschreibung, brutto, netto, mwst: rate, kategorie, status: paid ? 'bezahlt' : 'offen', cancelled, zahldatum, faellig: parseDate(get(row, 'faellig'), year), waehrung: (get(row, 'waehrung') || 'EUR').toUpperCase().slice(0, 3), skr, warn });
   });
