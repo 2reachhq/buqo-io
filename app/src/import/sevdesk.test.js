@@ -150,3 +150,18 @@ test('Kontoauszug-Suche: findet Raten zu Name und Gesamtbetrag aus dem Kommentar
   assert.equal(r.hits.length, 6); assert.equal(r.total, 6000);
   assert.deepEqual(parseAmounts('1.130,50 und 350 im Jahr 2025'), [1130.5, 350]);
 });
+
+test('Import-KI-Helfer: Filter, Gruppen-Kontext und Aktionen prüfen', async () => {
+  const { groupContext, parseBotJson, matchFilter, normalizeActions } = await import('./importBot.js');
+  const U = [
+    { key: 'b1', kind: 'aus', datum: '2025-03-10', name: 'Bauhaus Köln', brutto: 50, kategorie: 'Material', konto: 'unter', cls: 'passt', hasFile: true, src: 'csv' },
+    { key: 'b2', kind: 'aus', datum: '2025-04-12', name: 'BAUHAUS', brutto: 80, kategorie: 'Allgemein', konto: 'unter', cls: 'fehlt', hasFile: false, src: 'bank' },
+    { key: 'b3', kind: 'aus', datum: '2025-04-13', name: 'Telekom', brutto: 49.99, kategorie: 'Software', konto: 'unter', cls: 'passt', hasFile: true, src: 'csv' },
+  ];
+  assert.equal(U.filter(u => matchFilter(u, { name: 'bauhaus', von: '2025-04-01' })).length, 1);
+  assert.equal(U.filter(u => matchFilter(u, { name: 'bauhaus', ohneBeleg: true })).length, 1);
+  const ctx = groupContext(U); assert.ok(ctx.length === 3 || ctx.length === 2);
+  const p = parseBotJson('```json\n{"antwort":"ok","aktionen":[{"typ":"setzen","filter":{"name":"bauhaus"},"setzen":{"kategorie":"material","konto":"Immobilie 1","mwst":19,"notiz":"Renovierung"}},{"typ":"löschen"}]}\n```');
+  const a = normalizeActions(p.aktionen, { cats: ['Material', 'Software'], accounts: [{ key: 'unter', label: 'Firma' }, { key: 'p1', label: 'Immobilie 1' }] });
+  assert.equal(a.length, 1); assert.equal(a[0].set.kategorie, 'Material'); assert.equal(a[0].set.konto, 'p1'); assert.equal(a[0].set.mwst, 19);
+});
