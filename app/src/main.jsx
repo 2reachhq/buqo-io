@@ -7,6 +7,7 @@ import TaxCockpit from './tax/TaxCockpit.jsx';
 import { YEARS as TAX_YEARS, berechneSteuer } from './tax/estg.js';
 import SevdeskImport from './import/SevdeskImport.jsx';
 import { classifyRows } from './import/classify.js';
+import { parseDatev, compareDatev } from './import/datevCompare.js';
 import * as ACT from './assistant/actions.js';
 import { ASSISTANT_TOOLS, ASSISTANT_MODELS, DEFAULT_ASSISTANT_MODEL, buildSystemPrompt, buildSystemBlocks, toolsWithCache, usageCost, addUsage, stepLabel } from './assistant/tools.js';
 import { runAssistantTurn, buildApiMessages, attachmentFromFile } from './assistant/agent.js';
@@ -1509,6 +1510,7 @@ function App({session}) {
   const [botModel,setBotModel]= useState(DEFAULT_ASSISTANT_MODEL); // KI-Modell des Assistenten (in data.assistant.model gespeichert)
   const startKiJobsRef=useRef(null); const kiRunRef=useRef(false); const kiCancelRef=useRef(false);
   const [showRevDone,setShowRevDone]=useState(false);
+  const [datevCkBusy,setDatevCkBusy]=useState(false); const [datevCkMsg,setDatevCkMsg]=useState('');
   const [kiJob,setKiJob]=useState(null);               // Hintergrund-KI nach dem Import: {total,done,errs,changed,running}
   const addDraftsRef=useRef(null);                     // aktuelle addImportDrafts (für verzögerten Aufruf nach dem Import)
   const calcVatRef=useRef(null);                       // aktuelle UStVA-Berechnung (für Hintergrund-Erinnerung)
@@ -2533,6 +2535,35 @@ function App({session}) {
             { const rv=(nd.importReview=nd.importReview||[]); let ex=rv.find(x=>x.itemId===j.id); const add=[]; if(chs.length||diff.length) add.push('KI: '+[...chs,...diff].join('; ')); if(o.storno) add.push('PDF ist Storno/Gutschrift/Korrektur – keine echte Doppelung'); if(add.length||ex||o.urteil){ if(!ex){ ex={id:uid(), inv:j.kind==='r', itemId:j.id, y:r.y, m:r.m, acct:r.acct, kind:j.kind==='r'?'ein':r.kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:[], path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:new Date().toISOString()}; rv.push(ex); } const have=new Set(ex.reasons||[]); const fresh=add.filter(x=>!have.has(x)); ex.reasons=[...(ex.reasons||[]),...fresh]; if(fresh.length) ex.done=false; if(o.urteil) ex.verdict=String(o.urteil).slice(0,300); ex.storno=!!o.storno; ex.checkedAt=new Date().toISOString(); } }
             return nd; });
     return {ch, diff};
+  };
+  // DATEV-Datei (Steuerberater) gegen die Buqo-Buchungen prüfen; Abweichungen landen in „Zu prüfen", die KI fasst Fehlermuster zusammen
+  const runDatevCheck = async (file)=>{
+    if(!file||datevCkBusy) return;
+    setDatevCkBusy(true); setDatevCkMsg('Datei wird gelesen …');
+    try{
+      const rows=parseDatev(await file.arrayBuffer());
+      const bookings=existingBookings().map(b=>({id:b.it.id,y:b.y,m:b.m,kind:b.kind,acct:b.acct,name:b.it.name||'',amount:num(b.it.amount),datum:b.it.datum||'',nummer:b.it.belegnr||'',category:b.it.category||'',mwst:b.it.mwst,item:b.it}));
+      const res=compareDatev(rows,bookings);
+      const now2=new Date().toISOString();
+      const mk=(o)=>({id:uid(), inv:false, itemId:null, y:null, m:null, acct:'', kind:'aus', name:'', datum:'', brutto:0, nummer:'', reasons:[], path:null, fileName:'', done:false, createdAt:now2, source:'datev', ...o});
+      const entries=[
+        ...res.diffs.slice(0,300).map(x=>mk({itemId:x.b.id, y:x.b.y, m:x.b.m, acct:x.b.acct, kind:x.b.kind, name:x.b.name, datum:x.b.datum, brutto:Math.abs(x.b.amount), nummer:x.b.nummer, path:x.b.item.filePath||null, fileName:x.b.item.fileName||'', reasons:x.why.map(w=>'DATEV: '+w)})),
+        ...res.missing.slice(0,200).map(d=>mk({key:'dm|'+d.datum+'|'+d.brutto+'|'+d.nummer, kind:d.kind, name:d.name||d.beschreibung||'Posten', datum:d.datum, brutto:d.brutto, nummer:d.nummer||'', reasons:['DATEV: steht in der DATEV-Datei, aber nicht in Buqo gebucht (Buchung fehlt?)']})),
+        ...res.extra.slice(0,200).map(b=>mk({itemId:b.id, y:b.y, m:b.m, acct:b.acct, kind:b.kind, name:b.name, datum:b.datum, brutto:Math.abs(b.amount), nummer:b.nummer, path:b.item.filePath||null, fileName:b.item.fileName||'', reasons:['DATEV: in Buqo gebucht, aber nicht in der DATEV-Datei (falsch gebucht, anderer Zeitraum oder doppelt?)']})),
+      ];
+      setDatevCkMsg('KI wertet die Abweichungen aus …');
+      let summary='';
+      try{
+        const lines=[...res.diffs.slice(0,40).map(x=>'ABWEICHUNG '+x.b.name+' '+fmt(Math.abs(x.b.amount))+' · '+x.why.join('; ')), ...res.missing.slice(0,25).map(d=>'FEHLT IN BUQO '+(d.name||'')+' '+fmt(d.brutto)+' '+d.datum), ...res.extra.slice(0,25).map(b=>'NUR IN BUQO '+b.name+' '+fmt(Math.abs(b.amount))+' '+(b.datum||''))].join('\n');
+        const prompt='Du bist Assistent für die Buchhaltung eines deutschen Unternehmers. Die DATEV-Datei (Zeitraum '+res.range[0]+' bis '+res.range[1]+') wurde mit den Buchungen in Buqo verglichen. Treffer: '+res.matched.length+', Abweichungen: '+res.diffs.length+', fehlen in Buqo: '+res.missing.length+', nur in Buqo: '+res.extra.length+'.\nBeispiele:\n'+lines+'\n\nFasse in höchstens 8 kurzen Stichpunkten (Deutsch) die wahrscheinlichsten Fehlermuster zusammen (z. B. falsche Kategorie bei bestimmten Lieferanten, falscher MwSt-Satz, falscher Monat, Stornobuchungen, doppelte Buchungen) und sage, was zuerst geprüft werden sollte. Erfinde nichts, was nicht in den Beispielen steht.';
+        const {data:resp}=await aiInvoke({body:{model:'claude-sonnet-4-6',max_tokens:900,messages:[{role:'user',content:prompt}]}});
+        summary=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'';
+      }catch(e){ summary=''; }
+      setData(prev=>{ const rv=[...(prev.importReview||[])]; entries.forEach(e=>{ const ex=e.itemId?rv.find(x=>x.itemId===e.itemId):rv.find(x=>x.key&&x.key===e.key); if(ex){ const have=new Set(ex.reasons||[]); const fresh=e.reasons.filter(r=>!have.has(r)); if(fresh.length){ ex.reasons=[...(ex.reasons||[]),...fresh]; ex.done=false; } } else rv.push(e); });
+        return {...prev, importReview:rv, datevChecks:[...(prev.datevChecks||[]), {ts:now2, file:file.name, rows:rows.length, matched:res.matched.length, diffs:res.diffs.length, missing:res.missing.length, extra:res.extra.length, summary}]}; });
+      setDatevCkMsg('Fertig: '+res.matched.length+' passen, '+res.diffs.length+' weichen ab, '+res.missing.length+' fehlen in Buqo, '+res.extra.length+' nur in Buqo – siehe „Zu prüfen".');
+    }catch(e){ setDatevCkMsg('DATEV-Abgleich fehlgeschlagen: '+(e.message||e)); }
+    setDatevCkBusy(false);
   };
   // „Zu prüfen": PDF erneut von der KI lesen lassen, mit deinem Hinweis. Betrag/Datum bleiben unverändert.
   const [revBusy,setRevBusy]=useState({});
@@ -4888,6 +4919,20 @@ function App({session}) {
                     existing={sevdeskExisting()} onImport={runSevdeskImport}
                     aiReadDoc={aiReadDoc} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
                 )}
+
+                {importTab==='sevdesk' && (()=>{ const dc=(data.datevChecks||[]).slice(-1)[0]; return (
+                  <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:16,padding:'16px 18px',marginTop:16}}>
+                    <div style={{fontSize:17,fontWeight:800}}>DATEV-Abgleich mit KI</div>
+                    <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>Lade die DATEV-Datei (Buchungsstapel, CSV), die an den Steuerberater ging oder von ihm kommt. Buqo vergleicht sie mit deinen Buchungen und findet falsche Kategorien, MwSt-Sätze, Monate sowie fehlende oder überzählige Buchungen. Die KI fasst die typischen Fehler zusammen; alle Abweichungen stehen danach unten in „Zu prüfen". Es wird nichts verändert.</div>
+                    <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
+                      <label style={{display:'inline-flex',alignItems:'center',gap:8,background:AI_GRADIENT,color:'#fff',borderRadius:10,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:datevCkBusy?'default':'pointer',opacity:datevCkBusy?0.6:1}}>
+                        {datevCkBusy?'Läuft …':'DATEV-Datei wählen'}
+                        <input type="file" accept=".csv,.txt,text/csv" disabled={datevCkBusy} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=''; if(f) runDatevCheck(f); }} style={{display:'none'}}/>
+                      </label>
+                      <span style={{fontSize:12.5,color:C.sub}}>{datevCkMsg}</span>
+                    </div>
+                    {dc && dc.summary && <div style={{marginTop:12,fontSize:13,lineHeight:1.55,color:C.txt,whiteSpace:'pre-wrap',background:C.surf3,borderRadius:10,padding:'10px 12px'}}><b>🤖 Auswertung der KI ({dc.file})</b>{'\n'}{dc.summary}</div>}
+                  </div>); })()}
 
                 {importTab==='sevdesk' && (data.importReview||[]).length>0 && (()=>{ const rv=data.importReview||[]; const open=rv.filter(x=>!x.done); const shown=showRevDone?rv:open;
                   const setRevHint=(id,v)=>setData(prev=>({...prev, importReview:(prev.importReview||[]).map(x=>x.id===id?{...x,hint:v}:x)}));
