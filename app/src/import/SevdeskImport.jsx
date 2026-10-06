@@ -44,6 +44,7 @@ export default function SevdeskImport(props) {
   const [ocr, setOcr] = useState({});               // KI-Lesung der PDFs: {b12|r3: {name, datum, nummer, brutto, netto, mwst, kategorie, beschreibung} | {error}}
   const [ocrOff, setOcrOff] = useState({});         // Zeilen, bei denen die KI-Änderungen abgeschaltet sind
   const [kiRows, setKiRows] = useState({});         // Zeilen, die die KI beim Import im Hintergrund lesen soll (k+idx)
+  const [importMsg, setImportMsg] = useState('');     // Hinweis nach dem Laden eines Buqo-Exports
   const [kiAll, setKiAll] = useState(false);        // alle PDFs beim Import von der KI lesen lassen
   const restored = React.useRef(false);
   const [draftInfo, setDraftInfo] = useState(null); // {savedAt} – Zwischenstand vorhanden
@@ -51,7 +52,21 @@ export default function SevdeskImport(props) {
   const [onlyUnsure, setOnlyUnsure] = useState(false);
 
   const readCsv = async (file, kind, setter) => {
-    try { const buf = await file.arrayBuffer(); const parsed = parseCSV(decodeText(new Uint8Array(buf))); if (!parsed.header.length || !parsed.rows.length) throw new Error('Die Datei enthält keine Tabelle.'); const format = detectFormat(parsed); setter({ fileName: file.name, file, parsed, format, mapping: autoMap(parsed.header), kind: format === 'datev' ? 'auto' : kind }); setResult(null); setErr(''); }
+    try { const buf = await file.arrayBuffer(); const parsed = parseCSV(decodeText(new Uint8Array(buf))); if (!parsed.header.length || !parsed.rows.length) throw new Error('Die Datei enthält keine Tabelle.'); const format = detectFormat(parsed); setter({ fileName: file.name, file, parsed, format, mapping: autoMap(parsed.header), kind: format === 'datev' ? 'auto' : kind }); setResult(null); setErr('');
+      // Eigener Buqo-Export (Tabelle als CSV geladen)? Dann Konto, Notiz, KI-Haken und Überspringen wiederherstellen.
+      const hs = parsed.header.map(normN); const ix = (n) => hs.indexOf(normN(n)); const cK = ix('Buqo-Konto'), cN = ix('Buqo-Notiz'), cI = ix('Buqo-KI'), cS = ix('Buqo-Überspringen');
+      if (cK >= 0 || cN >= 0 || cI >= 0 || cS >= 0) {
+        const pk = kind === 'ein' ? 'r' : 'b'; const a = {}, n = {}, ki = {}, sk = {};
+        const byLabel = {}; accounts.forEach(x => { byLabel[normN(x.label)] = x.key; byLabel[normN(x.key)] = x.key; });
+        parsed.rows.forEach((row, i) => {
+          const kk = cK >= 0 ? byLabel[normN(row[cK])] : null; if (kk) a[pk + i] = kk;
+          if (cN >= 0 && String(row[cN] || '').trim()) n[pk + i] = String(row[cN]).trim();
+          if (cI >= 0 && /^(ja|1|true|x)$/i.test(String(row[cI] || '').trim())) ki[pk + i] = true;
+          if (cS >= 0 && /^(ja|1|true|x)$/i.test(String(row[cS] || '').trim())) sk[pk + i] = true;
+        });
+        setRowAcct(p => ({ ...p, ...a })); setNotes(p => ({ ...p, ...n })); setKiRows(p => ({ ...p, ...ki })); setSkip(p => ({ ...p, ...sk }));
+        setImportMsg('Buqo-Export erkannt: ' + Object.keys(a).length + ' Konto-Zuordnungen, ' + Object.keys(n).length + ' Notizen, ' + Object.keys(ki).length + ' KI-Haken und ' + Object.keys(sk).length + ' übersprungene Zeilen wiederhergestellt.');
+      } }
     catch (e) { setErr('CSV konnte nicht gelesen werden: ' + (e.message || e)); }
   };
   const readZip = async (file, setter) => {
@@ -230,6 +245,7 @@ export default function SevdeskImport(props) {
       {slot('Rechnungen · CSV', 'sevDesk → Rechnungen → Exportieren → CSV', '.csv,.txt,text/csv', rech, f => readCsv(f, 'ein', setRech), rech && (rech.parsed.rows.length + ' Zeilen · ' + FORMAT_LABEL[rech.format]))}
       {slot('Rechnungen · ZIP mit PDFs', 'sevDesk → Rechnungen → Exportieren → ZIP (PDF)', '.zip,application/zip', zipR, f => readZip(f, setZipR), zipR && (zipR.entries.length + ' Dateien'))}
     </div>
+    {importMsg && <div style={{ background: hexA(C.grn, 0.08), border: '1px solid ' + hexA(C.grn, 0.35), borderRadius: 12, padding: '10px 14px', fontSize: 13, color: C.txt, marginBottom: 14 }}>✅ {importMsg}</div>}
     {err && <div style={{ background: hexA(C.red, 0.08), border: '1px solid ' + hexA(C.red, 0.35), borderRadius: 12, padding: '10px 14px', fontSize: 13, color: C.red, marginBottom: 14 }}>{err}</div>}
 
     {(B || R) && (<>
@@ -449,6 +465,20 @@ function Table({ ui, eff, ocr, ocrOff, setOcrOff, ocrDiff, kiRows, setKiRows, ki
       else { setRowAcct(a => ({ ...a, [k + r.idx]: val })); setNote(''); }
       setAsk(null);
     };
+    // Tabelle als CSV exportieren (alle Zeilen der Datei, nicht nur das gewählte Jahr) – inkl. deiner Änderungen
+    const exportCsv = () => {
+      const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const num = (v) => String(Math.round((v || 0) * 100) / 100).replace('.', ',');
+      const dt = (d) => d ? d.split('-').reverse().join('.') : '';
+      const head = ['Datum', 'Name', 'Nummer', 'Beschreibung', 'Kategorie', 'Brutto', 'Netto', 'MwSt', 'Art', 'Status', 'PDF-Datei', 'Buqo-Konto', 'Buqo-Notiz', 'Buqo-KI', 'Buqo-Überspringen', 'Hinweis'];
+      const lines = X.rows.map(r => {
+        const acc = accounts.find(a => a.key === acctOf(k, r)); const status = r.cancelled ? 'storniert' : (r.status === 'bezahlt' ? 'bezahlt' : 'offen');
+        return [dt(r.datum), r.name, r.nummer, r.beschreibung, r.kategorie, num(r.brutto), num(r.netto), r.mwst, r.kind === 'ein' ? 'Einnahme' : 'Ausgabe', status, r.file || '', acc ? acc.label : acctOf(k, r), (notes && notes[k + r.idx]) || '', (kiAll || (kiRows && kiRows[k + r.idx])) ? 'ja' : '', (skip && skip[k + r.idx]) ? 'ja' : '', [r.dup ? 'schon vorhanden' : '', ...(r.warn || [])].filter(Boolean).join(', ')].map(q).join(';');
+      });
+      const blob = new Blob(['\uFEFF' + [head.map(q).join(';'), ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'buqo-import-' + (k === 'r' ? 'rechnungen' : 'belege') + '-' + new Date().toISOString().slice(0, 10) + '.csv'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      setNote(X.rows.length + ' Zeilen als CSV geladen. Du kannst sie später wieder als ' + title + '-CSV hochladen – deine Änderungen bleiben erhalten.');
+    };
     const th = { textAlign: 'left', fontSize: 11, fontWeight: 700, color: C.mut, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '8px 8px', borderBottom: '1px solid ' + C.bdr, whiteSpace: 'nowrap' };
     const td = { fontSize: 13, padding: '7px 8px', borderBottom: '1px solid ' + C.sep, verticalAlign: 'top' };
     return (
@@ -460,6 +490,7 @@ function Table({ ui, eff, ocr, ocrOff, setOcrOff, ocrDiff, kiRows, setKiRows, ki
         <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Sortieren nach</span>
         <select value={sort} onChange={e => setSort(e.target.value)} style={{ ...SS, width: 'auto', fontSize: 12.5, padding: '5px 8px' }}><option value="name">Name (Abbuchung/Kunde)</option><option value="datum">Datum</option><option value="betrag">Betrag</option></select>
         <span style={{ fontSize: 11.5, color: C.mut, flex: 1, minWidth: 220 }}>{note || 'Tipp: Änderst du das Konto bei einem Namen, der öfter vorkommt, fragt die App, ob alle Zeilen mit diesem Namen oder nur diese Zeile geändert werden.'}</span>
+        <button onClick={exportCsv} title="Die Tabelle mit allen deinen Änderungen (Konto, Notiz, KI-Haken, Überspringen) als CSV laden – später wieder hier hochladen" style={{ background: C.surf2, color: C.txt, border: '1px solid ' + C.bdr, borderRadius: 9, padding: '6px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Als CSV laden</button>
         <button onClick={() => setBig(b => !b)} style={{ background: big ? C.txt : C.surf2, color: big ? C.bg : C.txt, border: '1px solid ' + (big ? C.txt : C.bdr), borderRadius: 9, padding: '6px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{big ? 'Schließen' : 'Vergrößern'}</button>
       </div>
       <div style={{ overflowX: 'auto', marginTop: 8, maxHeight: big ? 'calc(100vh - 90px)' : 420, overflowY: 'auto', border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
