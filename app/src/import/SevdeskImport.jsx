@@ -44,6 +44,7 @@ export default function SevdeskImport(props) {
   const [ocr, setOcr] = useState({});               // KI-Lesung der PDFs: {b12|r3: {name, datum, nummer, brutto, netto, mwst, kategorie, beschreibung} | {error}}
   const [ocrOff, setOcrOff] = useState({});         // Zeilen, bei denen die KI-Änderungen abgeschaltet sind
   const [kiRows, setKiRows] = useState({});         // Zeilen, die die KI beim Import im Hintergrund lesen soll (k+idx)
+  const [confirmRun, setConfirmRun] = useState(null);   // Rückfrage vor dem Verbuchen: 'main' | 'bank'
   const [importMsg, setImportMsg] = useState('');     // Hinweis nach dem Laden eines Buqo-Exports
   const [kiAll, setKiAll] = useState(false);        // alle PDFs beim Import von der KI lesen lassen
   const restored = React.useRef(false);
@@ -182,20 +183,21 @@ export default function SevdeskImport(props) {
 
   // ── Prüfliste: alles, was du vor dem Verbuchen noch einmal ansehen solltest ──
   const NOTE_RE = /anschau|prüf|pruef|nochmal|nochmals|kontrollier|checken|klären|klaeren|\?/i;
+  // Doppelung = gleicher Name + Betrag innerhalb von 5 Tagen. Raten/Leasing (monatlich gleicher Betrag) zählen nicht.
   const dupFlag = useMemo(() => {
     const flag = {}; const groups = new Map();
-    allGo.forEach(({ r, k }) => { const key = k + '|' + normN(r.name) + '|' + Math.round(r.brutto * 100); if (!groups.has(key)) groups.set(key, []); groups.get(key).push({ r, k }); });
-    groups.forEach(list => { if (list.length < 2) return; list.forEach(a => { const near = list.some(b => b !== a && (Math.abs(new Date(a.r.datum) - new Date(b.r.datum)) <= 5 * 864e5 || (a.r.nummer && a.r.nummer === b.r.nummer))); if (near) flag[a.k + a.r.idx] = true; }); });
+    allGo.forEach(({ r, k }) => { if (r.storno) return; const key = k + '|' + normN(r.name) + '|' + Math.round(r.brutto * 100); if (!groups.has(key)) groups.set(key, []); groups.get(key).push({ r, k }); });
+    groups.forEach(list => { if (list.length < 2) return; list.forEach(a => { const near = list.some(b => b !== a && Math.abs(new Date(a.r.datum) - new Date(b.r.datum)) <= 5 * 864e5); if (near) flag[a.k + a.r.idx] = true; }); });
     return flag;
   }, [belege, rech, year, skip]); // eslint-disable-line
-  const reviewOf = (k, r) => { const w = []; if (kiAll || kiRows[k + r.idx]) w.push('KI soll PDF lesen'); const n = String((notes && notes[k + r.idx]) || ''); if (NOTE_RE.test(n)) w.push('Notiz: ' + n.slice(0, 60)); if (dupFlag[k + r.idx]) w.push('Mögliche Doppelung (gleicher Name + Betrag, ±5 Tage) – KI prüft das PDF (Storno?)'); return w; };
+  const reviewOf = (k, r) => { const w = []; if (kiAll || kiRows[k + r.idx]) w.push('KI soll PDF lesen'); const n = String((notes && notes[k + r.idx]) || ''); if (NOTE_RE.test(n)) w.push('Notiz: ' + n.slice(0, 60)); if (r.storno) w.push('Storno/Gutschrift – negativ gebucht, Gegenstück prüfen'); if (dupFlag[k + r.idx]) w.push('Mögliche Doppelung (gleicher Name + Betrag, ±5 Tage) – KI prüft das PDF (Storno?)'); return w; };
   const reviewRows = allGo.map(x => ({ ...x, why: reviewOf(x.k, x.r) })).filter(x => x.why.length);
   const run = async (stage) => {
     if (busy || (stage === 'bank' ? !bank.length : !belegeGo.length && !rechGo.length)) return;
     setBusy(true); setErr(''); setResult(null);
     try {
       const payload = {
-        confirmed, minCust,
+        confirmed, minCust, year,
         bank: stage === 'bank' ? bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })) : [],
         belege: stage === 'bank' ? [] : belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, review: reviewOf('b', r0), ki: !!r.file && (kiAll || !!kiRows['b' + r.idx] || !!dupFlag['b' + r.idx]), taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
         rechnungen: stage === 'bank' ? [] : rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, review: reviewOf('r', r0), ki: !!r.file && (kiAll || !!kiRows['r' + r.idx] || !!dupFlag['r' + r.idx]), taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file) }); }),
@@ -283,7 +285,7 @@ export default function SevdeskImport(props) {
         <div style={{ ...card, marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}><div style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>Belege · {FORMAT_LABEL[belege.format]}</div><div style={{ fontSize: 12.5, color: C.sub }}>{belege.fileName}</div></div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10 }}>
-            <Stat l="Importierbar" v={belegeGo.length} c={C.grn} /><Stat l="Schon vorhanden" v={B.sum.dup} c={C.amb} /><Stat l="Storniert / unvollständig" v={B.sum.cancelled + B.sum.invalid} /><Stat l="Summe brutto" v={fmt(belegeGo.reduce((s, r) => s + r.brutto, 0))} /><Stat l="PDF zugeordnet" v={(B.filesMatched) + (zipB ? ' / ' + zipB.entries.length : '')} c={zipB ? C.txt : C.mut} />
+            <Stat l="Importierbar" v={belegeGo.length} c={C.grn} /><Stat l="Schon vorhanden" v={B.sum.dup} c={C.amb} /><Stat l="Storniert / unvollständig" v={B.sum.cancelled + B.sum.invalid} /><Stat l="Summe brutto" v={fmt(belegeGo.reduce((s, r) => s + (r.storno ? -r.brutto : r.brutto), 0))} /><Stat l="PDF zugeordnet" v={(B.filesMatched) + (zipB ? ' / ' + zipB.entries.length : '')} c={zipB ? C.txt : C.mut} />
           </div>
           {!zipB && <div style={{ fontSize: 12, color: C.amb, marginTop: 8 }}>Ohne ZIP werden die Belege ohne Datei angelegt – du kannst die PDFs später einzeln nachladen. Besser: jetzt das ZIP dazulegen.</div>}
           <Mapping ui={ui} src={belege} setSrc={setBelege} k="b" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
@@ -294,7 +296,7 @@ export default function SevdeskImport(props) {
         <div style={{ ...card, marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}><div style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>Rechnungen · {FORMAT_LABEL[rech.format]}</div><div style={{ fontSize: 12.5, color: C.sub }}>{rech.fileName}</div></div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10 }}>
-            <Stat l="Importierbar" v={rechGo.length} c={C.grn} /><Stat l="Schon vorhanden" v={R.sum.dup} c={C.amb} /><Stat l="Davon offen" v={rechGo.filter(r => r.status === 'offen').length} /><Stat l="Summe brutto" v={fmt(rechGo.reduce((s, r) => s + r.brutto, 0))} /><Stat l="PDF zugeordnet" v={(R.filesMatched) + (zipR ? ' / ' + zipR.entries.length : '')} c={zipR ? C.txt : C.mut} />
+            <Stat l="Importierbar" v={rechGo.length} c={C.grn} /><Stat l="Schon vorhanden" v={R.sum.dup} c={C.amb} /><Stat l="Davon offen" v={rechGo.filter(r => r.status === 'offen').length} /><Stat l="Summe brutto" v={fmt(rechGo.reduce((s, r) => s + (r.storno ? -r.brutto : r.brutto), 0))} /><Stat l="PDF zugeordnet" v={(R.filesMatched) + (zipR ? ' / ' + zipR.entries.length : '')} c={zipR ? C.txt : C.mut} />
           </div>
           <Mapping ui={ui} src={rech} setSrc={setRech} k="r" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
           <Table ui={ui} eff={eff} ocr={ocr} ocrOff={ocrOff} setOcrOff={setOcrOff} ocrDiff={ocrDiff} kiRows={kiRows} setKiRows={setKiRows} kiAll={kiAll} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Rechnungen" zip={zipR} X={R} k="r" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
@@ -363,7 +365,7 @@ export default function SevdeskImport(props) {
           <div style={{ fontSize: 15, fontWeight: 700 }}>{belegeGo.length} Belege und {rechGo.length} Rechnungen{year !== 'alle' ? ' für ' + year : ''} importieren</div>
           <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>{progress || (busy ? 'Läuft…' : 'Buchungen kommen als offen in den jeweiligen Monat, PDFs in den Beleg-Speicher, Kunden und Rechnungen in den Rechnungsbereich. Zugeordnet/abgehakt wird erst in Schritt 2 mit dem Kontoauszug.')}</div>
         </div>
-        <button onClick={() => run('main')} disabled={busy || (!belegeGo.length && !rechGo.length)} style={{ ...btnP, opacity: (busy || (!belegeGo.length && !rechGo.length)) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Verbucht…' : 'Schritt 1: Jetzt verbuchen'}</button>
+        <button onClick={() => setConfirmRun('main')} disabled={busy || (!belegeGo.length && !rechGo.length)} style={{ ...btnP, opacity: (busy || (!belegeGo.length && !rechGo.length)) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Verbucht…' : 'Schritt 1: Jetzt verbuchen'}</button>
       </div>
 
     </>)}
@@ -381,7 +383,7 @@ export default function SevdeskImport(props) {
       {bank.length > 0 && <button onClick={e => { e.preventDefault(); setBank([]); }} style={{ background: 'none', border: 'none', color: C.mut, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit' }}>Entfernen</button>}
       <input type="file" multiple accept=".csv,.txt,.pdf,image/*,text/csv" onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ''; if (fs.length) addBank(fs); }} style={{ display: 'none' }} />
     </label>
-        <button onClick={() => run('bank')} disabled={busy || !bank.length} style={{ ...btnP, opacity: (busy || !bank.length) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Läuft…' : 'Schritt 2: Kontoauszug einlesen & abgleichen'}</button>
+        <button onClick={() => setConfirmRun('bank')} disabled={busy || !bank.length} style={{ ...btnP, opacity: (busy || !bank.length) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Läuft…' : 'Schritt 2: Kontoauszug einlesen & abgleichen'}</button>
       </div>
       {busy && <div className="prog" style={{ marginBottom: 14 }} />}
       {result && (
@@ -390,6 +392,34 @@ export default function SevdeskImport(props) {
           <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.6 }}>{result.fehler ? result.fehler + ' Datei(en) konnten nicht hochgeladen werden, die Buchungen sind trotzdem da. ' : ''}Schau jetzt in die Konten oder direkt in die Steuerprognose {year !== 'alle' ? year : ''} – dort sind die Zahlen sofort drin. Einen erneuten Import mit denselben Dateien erkennt Buqo als Dubletten.</div>
         </div>
       )}
+      {confirmRun && (() => {
+      const stornos = [...belegeGo, ...rechGo].filter(r => r.storno).length; const kiN = allGo.filter(x => x.r.file && (kiAll || kiRows[x.k + x.r.idx] || dupFlag[x.k + x.r.idx])).length;
+      const years = [...new Set([...(yearsSeen), defaultYear].filter(Boolean))].sort();
+      const stage = confirmRun; const allYears = year === 'alle';
+      return (
+        <div onClick={() => setConfirmRun(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 18, padding: '20px 22px', maxWidth: 460, width: '100%', boxShadow: '0 24px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 8 }}>{stage === 'bank' ? 'Kontoauszug jetzt einlesen?' : 'Jetzt verbuchen?'}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><span style={{ fontSize: 13, fontWeight: 700 }}>Nur dieses Jahr laden:</span><select value={year} onChange={e => setYear(e.target.value)} style={{ ...SS, width: 'auto' }}>{years.map(y => <option key={y} value={String(y)}>{y}</option>)}<option value="alle">Alle Jahre</option></select></div>
+            {allYears && <div style={{ background: hexA(C.amb, 0.12), border: '1px solid ' + hexA(C.amb, 0.5), borderRadius: 10, padding: '8px 12px', fontSize: 12.5, marginBottom: 10 }}>⚠ Du hast <b>Alle Jahre</b> gewählt. Wenn nur ein Jahr rein soll, wähle es oben aus.</div>}
+            {stage === 'main' ? (
+              <div style={{ fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
+                Es werden <b>{belegeGo.length} Belege</b> und <b>{rechGo.length} Rechnungen</b> {allYears ? 'aus allen Jahren' : 'aus ' + year} gebucht – als <b>offen</b>{confirmed ? ' (du hast „sofort als bezahlt" gewählt)' : ''}. Andere Jahre und bereits vorhandene Buchungen bleiben unberührt.
+                {stornos > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Davon {stornos} Storno/Gutschriften – sie werden als negativer Betrag gebucht.</div>}
+                {kiN > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Danach liest die KI im Hintergrund {kiN} PDFs (Fortschritt unten rechts).</div>}
+                <div style={{ color: C.sub, fontSize: 12.5 }}>Bis jetzt wurde nichts gespeichert – alles liegt nur in diesem Browser.</div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
+                <b>{bank.length} Kontoauszug-Datei(en)</b> werden eingelesen, aber nur Umsätze {allYears ? 'aus allen Jahren' : 'aus ' + year}. Danach werden offene Posten abgeglichen und abgehakt.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button onClick={() => { const st = confirmRun; setConfirmRun(null); run(st); }} style={{ flex: 1, background: C.act, color: C.actTxt, border: 'none', borderRadius: 11, padding: '12px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{stage === 'bank' ? 'Jetzt einlesen' : 'Jetzt verbuchen'}</button>
+              <button onClick={() => setConfirmRun(null)} style={{ background: C.surf2, color: C.txt, border: '1px solid ' + C.bdr, borderRadius: 11, padding: '12px 16px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Abbrechen</button>
+            </div>
+          </div>
+        </div>); })()}
   </>);
 }
 
@@ -504,7 +534,7 @@ function Table({ ui, eff, ocr, ocrOff, setOcrOff, ocrDiff, kiRows, setKiRows, ki
                 <td style={{ ...td, maxWidth: 240 }}><div style={{ fontWeight: 600, color: C.txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name || '—'}{chg('name') && <span title={'vorher: ' + (r.name || '—')} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: C.pri, background: hexA(C.pri, 0.14), borderRadius: 6, padding: '1px 5px' }}>KI</span>}{nameCount[nkey(r)] > 1 && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: C.sub, background: C.surf3, borderRadius: 6, padding: '1px 6px' }}>×{nameCount[nkey(r)]}</span>}</div>{e.beschreibung && e.beschreibung !== e.name && <div title={chg('beschreibung') ? 'vorher: ' + (r.beschreibung || '—') : undefined} style={{ fontSize: 11.5, color: chg('beschreibung') ? C.pri : C.mut, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{e.beschreibung}</div>}</td>
                 <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{e.nummer || '—'}{chg('nummer') && <span title="von der KI aus dem PDF ergänzt" style={{ marginLeft: 4, fontSize: 10, fontWeight: 800, color: C.pri }}>KI</span>}</td>
                 <td style={td}>{e.kategorie ? <span title={chg('kategorie') ? 'vorher: ' + (r.kategorie || '—') : undefined} style={{ color: chg('kategorie') ? C.pri : C.txt, fontWeight: chg('kategorie') ? 700 : 400 }}>{e.kategorie}{chg('kategorie') ? ' ·KI' : ''}</span> : <span style={{ color: C.mut }}>—</span>}</td>
-                <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', color: r.kind === 'ein' ? C.grn : C.txt, fontWeight: 600 }}>{r.kind === 'ein' ? '+' : '−'}{fmt(r.brutto)}</td>
+                <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', color: r.kind === 'ein' ? C.grn : C.txt, fontWeight: 600 }}>{(r.kind === 'ein') !== !!r.storno ? '+' : '−'}{fmt(r.brutto)}</td>
                 <td style={{ ...td, ...NUM, color: chg('mwst') ? C.pri : undefined, fontWeight: chg('mwst') ? 700 : undefined }} title={chg('mwst') ? 'vorher: ' + r.mwst + ' %' : undefined}>{e.mwst} %</td>
                 {withAcct && (() => { const s = aiOf(r); const manual = !!rowAcct[k + r.idx]; const unsure = s && !s.sure && !manual; return <td style={td}><select value={acctOf(k, r)} onChange={e => assign(r, e.target.value)} style={{ ...SS, fontSize: 12, padding: '4px 6px', width: 150, border: '1px solid ' + (unsure ? C.amb : 'transparent') }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>{s && <div title={s.why} style={{ fontSize: 11, marginTop: 3, color: manual ? C.mut : unsure ? C.amb : C.sub, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{manual ? 'von dir gewählt' : (unsure ? '? ' : 'KI: ') + (s.why || '')}</div>}</td>; })()}
                 <td style={{ ...td, whiteSpace: 'nowrap' }}>{r.file ? <><button onClick={() => openTab(r)} title={'Beleg in neuem Tab öffnen: ' + r.file} style={{ background: C.surf3, border: '1px solid ' + C.bdr, color: C.txt, borderRadius: 8, padding: '3px 9px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Ansehen ↗</button> <button onClick={() => openView(rows.indexOf(r))} title="Beleg neben Konto und Notiz prüfen (blättern)" style={{ background: 'none', border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 8, padding: '3px 7px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>⇆</button></> : <span style={{ color: C.mut }}>—</span>}</td>

@@ -187,6 +187,7 @@ export function normalizeRows(parsed, mapping, opts = {}) {
       if (/ausgangsrechnung|rechnung an|einnahme|erl(ö|oe)s|gutschrift an|revenue|income|credit/.test(typ) && !/eingangs|lieferant/.test(typ)) kind = 'ein';
       else if (/eingangsrechnung|beleg|ausgabe|aufwand|expense|debit|lieferant/.test(typ)) kind = 'aus';
     } else if (opts.kind === 'auto') kind = brutto < 0 ? 'aus' : 'ein';
+    const stornoFlag = brutto < 0 && !!opts.kind && opts.kind !== 'auto' && map.sh == null; // Stornorechnung/Gutschrift: negativer Betrag im Export
     if (brutto < 0) { brutto = Math.abs(brutto); netto = Math.abs(netto); }
     const skr = map.datevKonto != null ? (isBankAcct(get(row, 'datevKonto')) ? get(row, 'gegenkonto') : get(row, 'datevKonto')) : '';
     let kategorie = mapCategory(get(row, 'kategorie'), skr) || mapCategory(beschreibung) || mapCategory(name);
@@ -198,8 +199,9 @@ export function normalizeRows(parsed, mapping, opts = {}) {
     if (!brutto) warn.push('kein Betrag');
     if (cancelled) warn.push('storniert/Entwurf');
     if (nameGuess) warn.push('Name aus Adresse geschätzt');
+    if (stornoFlag) warn.push('Storno/Gutschrift – wird negativ gebucht');
     const y = datum ? +datum.slice(0, 4) : null, m = datum ? (+datum.slice(5, 7) - 1) : null;
-    out.push({ idx, adresse: get(row, 'adresse'), kdnr: get(row, 'kdnr'), kind, datum, y, m, nummer, name: name.slice(0, 90), beschreibung, brutto, netto, mwst: rate, kategorie, status: paid ? 'bezahlt' : 'offen', cancelled, zahldatum, faellig: parseDate(get(row, 'faellig'), year), waehrung: (get(row, 'waehrung') || 'EUR').toUpperCase().slice(0, 3), skr, warn });
+    out.push({ idx, adresse: get(row, 'adresse'), kdnr: get(row, 'kdnr'), kind, storno: stornoFlag, datum, y, m, nummer, name: name.slice(0, 90), beschreibung, brutto, netto, mwst: rate, kategorie, status: paid ? 'bezahlt' : 'offen', cancelled, zahldatum, faellig: parseDate(get(row, 'faellig'), year), waehrung: (get(row, 'waehrung') || 'EUR').toUpperCase().slice(0, 3), skr, warn });
   });
   return out;
 }
@@ -221,7 +223,7 @@ export function matchFiles(records, fileNames) {
 /* ── Dubletten gegen bestehende Buchungen ── */
 export function markDuplicates(records, existing) {
   const byNr = new Set(), bySig = new Set();
-  (existing || []).forEach(e => { const nr = tok(e.nummer); const cents = Math.round((e.brutto || 0) * 100); if (nr.length >= 3) byNr.add(nr + '|' + cents); bySig.add(tok(e.name).slice(0, 14) + '|' + cents + '|' + (e.datum || '')); });
+  (existing || []).forEach(e => { const nr = tok(e.nummer); const cents = Math.round(Math.abs(e.brutto || 0) * 100); if (nr.length >= 3) byNr.add(nr + '|' + cents); bySig.add(tok(e.name).slice(0, 14) + '|' + cents + '|' + (e.datum || '')); });
   const seen = new Set();
   return records.map(r => { const cents = Math.round(r.brutto * 100); const nr = tok(r.nummer); const k1 = nr + '|' + cents, k2 = tok(r.name).slice(0, 14) + '|' + cents + '|' + r.datum; const dup = (nr.length >= 3 && byNr.has(k1)) || bySig.has(k2) || seen.has(k1 + '|' + k2); seen.add(k1 + '|' + k2); return { ...r, dup }; });
 }
@@ -239,7 +241,7 @@ export function summarize(records) {
    idxs:[Zeilen-idx], ongoing, last:{idx,...} }. `today` (Date) bestimmt, ob eine Gruppe noch läuft
    (letzter Eintrag im aktuellen oder Vormonat). */
 export function detectRecurring(rows, { minMonths = 3, tolerance = 0.02, today = new Date() } = {}) {
-  const usable = (rows || []).filter(r => r && !r.cancelled && !r.dup && r.brutto > 0 && r.datum && r.y != null);
+  const usable = (rows || []).filter(r => r && !r.cancelled && !r.dup && !r.storno && r.brutto > 0 && r.datum && r.y != null);
   const byName = new Map();
   usable.forEach(r => { const k = norm(r.name); if (k.length < 3) return; if (!byName.has(k)) byName.set(k, []); byName.get(k).push(r); });
   const nowK = today.getFullYear() * 12 + today.getMonth();
