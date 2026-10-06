@@ -1532,6 +1532,9 @@ function App({session}) {
   const belegMetaRef= useRef({name:'beleg.jpg', isPdf:false, media:'image/jpeg'});
   const quellenScrollRef= useRef(null);            // Konten-Karten horizontal scrollen
   const [calOpen,setCalOpen]= useState(false);     // Monats-Kalender-Popover
+  const [yearAll,setYearAll]= useState(false);        // „Ganzes Jahr" (Rechnungen: alle Monate des gewählten Jahres)
+  const [invLimit,setInvLimit]= useState(100);        // Rechnungsliste: so viele auf einmal anzeigen
+  const [invPdfUrl,setInvPdfUrl]= useState(null);     // Original-PDF (Import) der geöffneten Rechnung
   const [calYr,setCalYr]= useState(now.getFullYear());
   const [profOpen,setProfOpen]= useState(false);   // Profil-Menü
   const [taxBusy,setTaxBusy]= useState(false);     // Steuer-KI-Analyse
@@ -1739,7 +1742,9 @@ function App({session}) {
   },[ready]);
 
   const getMD = (y,m) => data[y]?.[m] || emptyMonth();
-  const goMonth = (delta) => { let m=mo+delta, y=yr; if(m<0){m=11;y=yr-1;} else if(m>11){m=0;y=yr+1;} setMo(m); setYr(y); };
+  useEffect(()=>{ setInvLimit(100); },[yr,mo,yearAll,invDomain,invStatusF,invSearch]);
+  useEffect(()=>{ let alive=true; setInvPdfUrl(null); if(invView&&invView.pdfPath){ sb.storage.from('belege').createSignedUrl(invView.pdfPath,3600).then(({data:d})=>{ if(alive&&d) setInvPdfUrl(d.signedUrl); }).catch(()=>{}); } return ()=>{ alive=false; }; },[invView&&invView.id,invView&&invView.pdfPath]);
+  const goMonth = (delta) => { if(yearAll&&tab==='rechnung'){ setYr(yr+delta); return; } let m=mo+delta, y=yr; if(m<0){m=11;y=yr-1;} else if(m>11){m=0;y=yr+1;} setMo(m); setYr(y); };
   const upd = fn => setData(prev=>{const yd=prev[yr]||{};const md=yd[mo]||emptyMonth();return{...prev,[yr]:{...yd,[mo]:fn(md)}};});
   const updAll = fn => setData(prev=>{
     const nd=JSON.parse(JSON.stringify(prev));
@@ -4143,7 +4148,7 @@ function App({session}) {
           <button onClick={()=>setSideOpen(o=>!o)} title={sideOpen?'Menü einklappen':'Menü ausklappen'} style={{...topIconBtn,background:'none',border:'none'}}><Ic p={P.panel} sz={19} col={C.sub}/></button>
           <div style={{display:'flex',alignItems:'center',gap:2,background:C.surf,border:'1px solid '+C.bdr,borderRadius:999,padding:3,boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03)'}}>
             <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>‹</button>
-            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
+            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {(yearAll&&tab==='rechnung')?'Ganzes Jahr':MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
             <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>›</button>
           </div>
           <div style={{flex:1}}/>
@@ -4188,12 +4193,13 @@ function App({session}) {
             </div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
               {MONTHS.map((mn,i)=>{ const sel=(i===mo&&calYr===yr); return (
-                <button key={i} onClick={()=>{ setMo(i); setYr(calYr); setCalOpen(false); }} style={{
+                <button key={i} onClick={()=>{ setMo(i); setYr(calYr); setYearAll(false); setCalOpen(false); }} style={{
                   background:sel?C.accent:C.surf2, color:sel?C.accentTxt:C.txt, border:'none', borderRadius:9,
                   padding:'10px 0', cursor:'pointer', fontFamily:'inherit', fontSize:13, fontWeight:sel?700:500,
                 }}>{mn.slice(0,3)}</button>
               ); })}
             </div>
+            <button onClick={()=>{ setYr(calYr); setYearAll(true); setCalOpen(false); }} title="Alle Monate des Jahres anzeigen (Rechnungen)" style={{marginTop:8,width:'100%',background:(yearAll&&calYr===yr)?C.accent:C.surf2,color:(yearAll&&calYr===yr)?C.accentTxt:C.txt,border:'none',borderRadius:9,padding:'10px 0',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700}}>Ganzes Jahr {calYr}</button>
           </div>
         </div>
       )}
@@ -5441,14 +5447,15 @@ function App({session}) {
                     if(invStatusF==='offen' && inv.paid) return false;
                     if(invStatusF==='bezahlt' && !inv.paid) return false;
                     const d=new Date(inv.sentDate||inv.date); const mKey=isNaN(d)?'0000-99':(d.getFullYear()+'-'+String(d.getMonth()).padStart(2,'0'));
-                    if(!q && mKey!=='0000-99' && mKey!==curMKey) return false;
+                    if(!q && mKey!=='0000-99'){ const fy=+mKey.slice(0,4), fm=+mKey.slice(5); if(fy!==yr || (!yearAll && fm!==mo)) return false; }
                     if(!q) return true;
                     const c=customers.find(x=>x.id===inv.customerId);
                     const total=inv.total!=null?inv.total:invTotals(inv.items).gross;
                     return [inv.number,inv.custName,(c&&c.name),String(total)].filter(Boolean).some(s=>String(s).toLowerCase().includes(q));
                   });
-                  if(!filtered.length) return <div style={{...SC,fontSize:13,color:C.mut}}>{allInv.length?(q?'Keine Treffer.':'Keine Rechnungen in diesem Monat.'):'Noch keine Rechnungen in diesem Bereich.'}</div>;
-                  const groups={}; filtered.forEach(inv=>{ const d=new Date(inv.sentDate||inv.date); const key=isNaN(d)?'0000-99':(d.getFullYear()+'-'+String(d.getMonth()).padStart(2,'0')); (groups[key]=groups[key]||[]).push(inv); });
+                  if(!filtered.length) return <div style={{...SC,fontSize:13,color:C.mut}}>{allInv.length?(q?'Keine Treffer.':(yearAll?'Keine Rechnungen in diesem Jahr.':'Keine Rechnungen in diesem Monat – oben den Monat wählen oder „Ganzes Jahr".')):'Noch keine Rechnungen in diesem Bereich.'}</div>;
+                  const totalFiltered=filtered.length; const shownInv=filtered.slice().sort((a,b)=>String(b.sentDate||b.date).localeCompare(String(a.sentDate||a.date))).slice(0,invLimit);
+                  const groups={}; shownInv.forEach(inv=>{ const d=new Date(inv.sentDate||inv.date); const key=isNaN(d)?'0000-99':(d.getFullYear()+'-'+String(d.getMonth()).padStart(2,'0')); (groups[key]=groups[key]||[]).push(inv); });
                   const keys=Object.keys(groups).sort().reverse();
                   const monthLabel=(key)=>{ if(key==='0000-99')return 'Ohne Datum'; const [y,m]=key.split('-'); return MONTHS[+m]+' '+y; };
                   return keys.map(key=>(
@@ -5474,7 +5481,7 @@ function App({session}) {
                         })}
                       </div>
                     </div>
-                  ));
+                  )).concat(totalFiltered>shownInv.length?[<button key="more" onClick={()=>setInvLimit(l=>l+100)} style={{width:'100%',background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:12,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:12}}>Mehr anzeigen ({shownInv.length} von {totalFiltered})</button>]:[]);
                 })()}
                 </>)}
                 <button onClick={()=>setTab('kunden')} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'14px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:14,fontWeight:600,textAlign:'left',marginTop:14}}><Ic p={P.prson} sz={17} col={C.sub}/> <span style={{flex:1}}>Kunden verwalten</span> <span style={{color:C.mut}}>{customersFor(invDomain).length} ›</span></button>
@@ -7264,7 +7271,9 @@ function App({session}) {
               <button onClick={()=>setInvView(null)} title="Schließen" style={{marginLeft:'auto',background:C.surf2,border:'none',color:C.sub,width:34,height:34,borderRadius:9,cursor:'pointer',fontSize:20,lineHeight:1,fontFamily:'inherit'}}>×</button>
             </div>
             <div style={{flex:1,overflow:'auto',background:'#fff'}}>
-              <iframe title="Rechnung" srcDoc={invoiceHTML(invView,false)} style={{width:'100%',height:isMobile?'52vh':'58vh',border:'none',display:'block'}}/>
+              {invView.pdfPath
+                ? (invPdfUrl ? <iframe title="Rechnung (Original-PDF)" src={invPdfUrl} style={{width:'100%',height:isMobile?'52vh':'58vh',border:'none',display:'block'}}/> : <div style={{padding:30,color:C.mut,fontSize:13}}>Original-PDF wird geladen…</div>)
+                : <iframe title="Rechnung" srcDoc={invoiceHTML(invView,false)} style={{width:'100%',height:isMobile?'52vh':'58vh',border:'none',display:'block'}}/>}
             </div>
             <div style={{display:'flex',gap:9,padding:'13px 18px',borderTop:'1px solid '+C.sep,flexWrap:'wrap'}}>
               <button onClick={()=>openMailCompose(invView)} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:'1 1 100%',background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.receipt} sz={16} col={C.actTxt}/> {invView.emailedAt?'Erneut per E-Mail senden':'Per E-Mail an Kunden senden'}</button>
