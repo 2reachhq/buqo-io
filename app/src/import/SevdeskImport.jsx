@@ -59,6 +59,8 @@ export default function SevdeskImport(props) {
   const [filt, setFilt] = useState('alle');         // Abgleich-Filter: alle | ausgaben | einnahmen | passt | hinweis | fehlt
   const [analysing, setAnalysing] = useState(false);
   const [anaProg, setAnaProg] = useState('');
+  const [anaTotal, setAnaTotal] = useState(0);        // Arbeitsschritte im Abgleich (Kontoauszüge, DATEV, PDFs) für die Prozentanzeige
+  const [anaDone, setAnaDone] = useState(0);
   const [confirmRun, setConfirmRun] = useState(false);   // Rückfrage vor dem Verbuchen
   const [importMsg, setImportMsg] = useState('');     // Hinweis nach dem Laden eines Buqo-Exports
   const restored = React.useRef(false);
@@ -248,33 +250,38 @@ export default function SevdeskImport(props) {
     const worker = async () => {
       while (i < todo.length) {
         const [k, r, z] = todo[i++];
-        try { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); const bytes = await e.data(); const res = await aiReadDoc(bytes, r.file, { kind: r.kind, name: r.name, brutto: r.brutto }); setOcr(p => ({ ...p, [k + r.idx]: res })); }
+        try { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); const bytes = await e.data(); const res = await withRetry(() => aiReadDoc(bytes, r.file, { kind: r.kind, name: r.name, brutto: r.brutto })); setOcr(p => ({ ...p, [k + r.idx]: res })); }
         catch (e) { setOcr(p => ({ ...p, [k + r.idx]: { error: String(e.message || e).slice(0, 80) } })); }
-        done++; setAnaProg('KI liest PDFs … ' + done + ' / ' + todo.length);
+        done++; setAnaDone(d => d + 1); setAnaProg('KI liest PDFs … ' + done + ' / ' + todo.length);
       }
     };
     await Promise.all([worker(), worker(), worker()]);
   };
+  // Aufrufe der KI-Funktion bei kurzen Netzwerkfehlern bis zu zweimal wiederholen
+  const withRetry = async (fn) => { for (let i = 0; ; i++) { try { return await fn(); } catch (e) { if (i >= 2 || !/Failed to send|fetch|network|timeout|timed out|50[234]/i.test(String((e && e.message) || e))) throw e; await new Promise(r => setTimeout(r, 1500 * (i + 1))); } } };
   const kiTargets = (only) => [...belegeGo.map(r => ['b', r, zipB]), ...rechGo.map(r => ['r', r, zipR])].filter(([k, r]) => only ? (kiAll || kiRows[k + r.idx]) : (kiAll || kiRows[k + r.idx] || dupFlag[k + r.idx] || NOTE_RE.test(String(notes[k + r.idx] || ''))));
   // „Abgleich starten": Kontoauszüge (PDF/Foto) und DATEV-Dateien lesen, markierte/auffällige PDFs von der KI prüfen lassen – gebucht wird noch nichts
   const analyze = async () => {
     if (analysing || (!belegeGo.length && !rechGo.length)) return;
     setAnalysing(true); setErr('');
     try {
-      const nb = [...bank];
-      for (let i = 0; i < nb.length; i++) if (!nb[i].rows && aiBankRows) { setAnaProg('Kontoauszug lesen: ' + nb[i].name); try { nb[i] = { ...nb[i], rows: await aiBankRows(nb[i].file) }; } catch (e) { nb[i] = { ...nb[i], rows: [], err: String(e.message || e) }; setErr('Kontoauszug „' + nb[i].name + '" konnte nicht gelesen werden: ' + (e.message || e)); } }
+      const kiTodo = kiTargets(false).filter(([k, r]) => r.file && !ocr[k + r.idx]).length; const toRead = bank.filter(b => !b.rows).length;
+      setAnaTotal((aiBankRows ? toRead : 0) + datev.length + (aiReadDoc ? kiTodo : 0)); setAnaDone(0);
+      // Kontoauszüge (PDF/Foto): 3 gleichzeitig, mit Wiederholung bei Netzwerkfehlern
+      const nb = [...bank]; const idxs = nb.map((b, i) => i).filter(i => !nb[i].rows && aiBankRows); let n = 0, q = 0;
+      const bw = async () => { while (q < idxs.length) { const i = idxs[q++]; try { nb[i] = { ...nb[i], rows: await withRetry(() => aiBankRows(nb[i].file)) }; } catch (e) { nb[i] = { ...nb[i], rows: [], err: String(e.message || e) }; setErr(x => (x ? x + '\n' : '') + 'Kontoauszug „' + nb[i].name + '" konnte nicht gelesen werden: ' + (e.message || e) + ' – bitte später nochmal versuchen.'); } n++; setAnaDone(d => d + 1); setAnaProg('Kontoauszüge gelesen: ' + n + ' / ' + idxs.length); } };
+      await Promise.all([bw(), bw(), bw()]);
       setBank(nb);
       const dr = [];
-      for (const d of datev) { setAnaProg('DATEV lesen: ' + d.name); try { dr.push(...parseDatev(await d.file.arrayBuffer())); } catch (e) { setErr('DATEV „' + d.name + '": ' + (e.message || e)); } }
+      for (const d of datev) { setAnaProg('DATEV lesen: ' + d.name); try { dr.push(...parseDatev(await d.file.arrayBuffer())); } catch (e) { setErr(x => (x ? x + '\n' : '') + 'DATEV „' + d.name + '": ' + (e.message || e)); } setAnaDone(x => x + 1); }
       setDatevRows(dr);
       await runOcr(kiTargets(false));
       setStep(2);
     } catch (e) { setErr('Abgleich fehlgeschlagen: ' + (e.message || e)); }
-    setAnalysing(false); setAnaProg('');
+    setAnalysing(false); setAnaProg(''); setAnaTotal(0); setAnaDone(0);
   };
   const kiOpen = kiTargets(true).filter(([k, r]) => r.file && !ocr[k + r.idx]).length;
-  const readMarked = async () => { if (analysing) return; setAnalysing(true); try { await runOcr(kiTargets(true)); } catch (e) { setErr(String(e.message || e)); } setAnalysing(false); setAnaProg(''); };
-
+  const readMarked = async () => { if (analysing) return; setAnalysing(true); setAnaTotal(kiOpen); setAnaDone(0); try { await runOcr(kiTargets(true)); } catch (e) { setErr(String(e.message || e)); } setAnalysing(false); setAnaProg(''); setAnaTotal(0); setAnaDone(0); };
   const run = async () => {
     if (busy || (!belegeGo.length && !rechGo.length)) return;
     setBusy(true); setErr(''); setResult(null);
@@ -330,6 +337,15 @@ export default function SevdeskImport(props) {
       {[[1, 'Hochladen'], [2, 'Abgleich'], [3, 'Wiederkehrendes & Verbuchen']].map(([n, t]) => (
         <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: step === n ? C.act : C.surf2, color: step === n ? C.actTxt : (step > n ? C.grn : C.sub), border: '1px solid ' + (step === n ? C.act : C.bdr) }}>{step > n ? '✓' : n} {t}</span>))}
     </div>);
+  // Fortschrittsbalken mit Prozentzahl (done/total); ohne Gesamtzahl der laufende Balken
+  const Bar = ({ done, total, label }) => { const pct = total ? Math.min(100, Math.round(done / total * 100)) : null; return (
+    <div style={{ marginTop: 10 }}>
+      {pct != null ? (<>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: C.sub, marginBottom: 5 }}><span>{label}</span><b style={{ ...NUM, color: C.txt }}>{pct} %</b></div>
+        <div style={{ height: 8, borderRadius: 99, background: C.surf3, overflow: 'hidden' }}><div style={{ height: '100%', width: pct + '%', background: C.pri, transition: 'width .3s' }} /></div>
+      </>) : <div className="prog" />}
+    </div>); };
+  const progPct = (t) => { const m = String(t || '').match(/(\d+)\s*\/\s*(\d+)/); return m ? [+m[1], +m[2]] : [0, 0]; };
   const chipCol = (c) => c === 'ok' ? C.grn : c === 'miss' ? C.red : c === 'ai' ? C.pri : C.amb;
 
   return (<>
@@ -372,7 +388,7 @@ export default function SevdeskImport(props) {
           <button onClick={analyze} disabled={analysing || !yearChosen || (!belegeGo.length && !rechGo.length)} style={{ ...btnP, opacity: (analysing || !yearChosen || (!belegeGo.length && !rechGo.length)) ? 0.55 : 1 }}><Ic p={P.spark} sz={16} col={C.actTxt} /> {analysing ? 'Läuft …' : 'Weiter: Abgleich starten'}</button>
           <span style={{ fontSize: 12.5, color: C.sub }}>{anaProg || (!(belege || rech) ? 'Lade zuerst eine CSV.' : !yearChosen ? 'Bitte zuerst das Jahr wählen.' : '')}</span>
         </div>
-        {analysing && <div className="prog" style={{ marginTop: 10 }} />}
+        {analysing && <Bar done={anaDone} total={anaTotal} label={anaProg || 'Abgleich läuft …'} />}
       </div>
     </>)}
 
@@ -391,7 +407,7 @@ export default function SevdeskImport(props) {
             <button key={k} onClick={() => setFilt(k)} style={{ background: filt === k ? C.txt : C.surf2, color: filt === k ? C.bg : C.txt, border: '1px solid ' + (filt === k ? C.txt : C.bdr), borderRadius: 999, padding: '6px 13px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{t}</button>))}
           {aiReadDoc && kiOpen > 0 && <button onClick={readMarked} disabled={analysing} style={{ ...btnS, background: AI_GRADIENT, color: '#fff', border: 'none', padding: '6px 13px', fontSize: 12.5 }}>{analysing ? (anaProg || 'KI liest …') : 'KI liest ' + kiOpen + ' markierte PDFs'}</button>}
         </div>
-        {analysing && <div className="prog" style={{ marginTop: 10 }} />}
+        {analysing && <Bar done={anaDone} total={anaTotal} label={anaProg || 'KI liest …'} />}
       </div>
       <div style={{ ...card, marginBottom: 14 }}>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -501,7 +517,7 @@ export default function SevdeskImport(props) {
           <button onClick={() => setStep(2)} style={btnS}>‹ Zurück zum Abgleich</button>
           <button onClick={() => setConfirmRun(true)} disabled={busy || (!belegeGo.length && !rechGo.length)} style={{ ...btnP, opacity: (busy || (!belegeGo.length && !rechGo.length)) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Verbucht …' : 'Alles richtig verbuchen'}</button>
         </div>
-        {busy && <div className="prog" style={{ marginTop: 10 }} />}
+        {busy && (() => { const [d, t] = progPct(progress); return <Bar done={d} total={t} label={progress || 'Verbucht …'} />; })()}
       </div>
       {result && (
         <div style={{ ...card, marginBottom: 14, background: hexA(C.grn, 0.07), border: '1px solid ' + hexA(C.grn, 0.35) }}>
