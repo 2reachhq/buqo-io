@@ -1355,6 +1355,7 @@ function App({session}) {
   const [todoSel,setTodoSel]= useState([]);
   const [packBusy,setPackBusy]= useState(false);       // Steuerberater-Paket wird gepackt
   const [packY,setPackY]= useState(new Date().getFullYear()); const [packM,setPackM]= useState('');  // Zeitraum fürs Paket ('' = ganzes Jahr)
+  const [wipe,setWipe]= useState(null);            // Neu anfangen: {year,opts,text,busy,msg}
   const [taxUp,setTaxUp]= useState(null);            // Steuerunterlage hochladen: {file,year,cat,title,acct,ki,busy,msg}
   const [taxDocY,setTaxDocY]= useState(null);        // Steuerunterlagen: gewähltes Jahr
   const [wiedF,setWiedF]= useState('alle');          // Wiederkehrend: Filter
@@ -2561,6 +2562,37 @@ function App({session}) {
       setData(prev=>({...prev, taxDocs:[{id, account:t.acct||'unter', year, category:cat, title, amount:null, note:'', summary:summary.slice(0,900), filePath:fi.path, fileName:fi.fname, createdAt:new Date().toISOString().slice(0,10)}, ...(prev.taxDocs||[])]}));
       setTaxDocY(year); setTaxUp(null); setToast('Gespeichert in Steuerunterlagen'+(summary?' – KI hat das Dokument ausgewertet':''));
     }catch(e){ setTaxUp(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
+  };
+  // ── Neu anfangen: Buchungen/Rechnungen/To-dos eines Jahres (oder aller Jahre) löschen, damit der sevDesk-Import neu laufen kann ──
+  const wipeYears = (w)=> w.year==='alle' ? Object.keys(data||{}).filter(k=>/^\d{4}$/.test(k)).map(Number) : [Number(w.year)];
+  const wipeCounts = (w)=>{ const ys=new Set(wipeYears(w)); return { book:existingBookings().filter(b=>ys.has(b.y)).length, inv:(data.invoices||[]).filter(iv=>ys.has(new Date(iv.sentDate||iv.date).getFullYear())).length, todo:(data.todos||[]).length, rev:(data.importReview||[]).length, bank:(data.bankStatements||[]).filter(x=>ys.has(+x.year)).length, drafts:(data.drafts||[]).length }; };
+  const runWipe = async ()=>{
+    const w=wipe; if(!w||w.busy||w.text.trim().toUpperCase()!=='LÖSCHEN') return;
+    setWipe(x=>({...x,busy:true,msg:'Sicherung wird erstellt …'}));
+    try{
+      // 1) Sicherung als Datei herunterladen (alles, was jetzt in der App steht)
+      const snap=JSON.stringify({savedAt:new Date().toISOString(), names, data}, null, 1);
+      const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([snap],{type:'application/json'})); a.download='buqo-sicherung-'+new Date().toISOString().slice(0,10)+'.json'; document.body.appendChild(a); a.click(); a.remove();
+      await new Promise(r=>setTimeout(r,600));
+      setWipe(x=>({...x,msg:'Löscht …'}));
+      const ys=new Set(wipeYears(w)); const o=w.opts; const paths=new Set();
+      const collect=(v)=>{ if(Array.isArray(v)) v.forEach(collect); else if(v&&typeof v==='object'){ Object.keys(v).forEach(k=>{ if((k==='filePath'||k==='pdfPath'||k==='path')&&typeof v[k]==='string'&&v[k]) paths.add(v[k]); else collect(v[k]); }); } };
+      const invOf=(iv)=>ys.has(new Date(iv.sentDate||iv.date).getFullYear());
+      if(o.book) ys.forEach(y=>{ if(data[y]) collect(data[y]); });
+      if(o.inv) collect((data.invoices||[]).filter(invOf));
+      if(o.bank) collect((data.bankStatements||[]).filter(x=>ys.has(+x.year)));
+      setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev));
+        if(o.book) ys.forEach(y=>{ if(nd[y]) Object.keys(nd[y]).forEach(m=>{ nd[y][m]=emptyMonth(); }); });
+        if(o.inv){ nd.invoices=(nd.invoices||[]).filter(iv=>!invOf(iv)); nd.recurInvoices=(nd.recurInvoices||[]).filter(r=>!ys.has(+r.fromY)); }
+        if(o.todo) nd.todos=[];
+        if(o.rev){ nd.importReview=[]; nd.datevChecks=[]; nd.importLog=[]; }
+        if(o.bank){ nd.bankStatements=(nd.bankStatements||[]).filter(x=>!ys.has(+x.year)); nd.drafts=[]; }
+        if(o.cust) nd.customers=[];
+        return nd; });
+      let removed=0; const list=[...paths];
+      if(o.files){ for(let i=0;i<list.length;i+=100){ try{ const {error}=await sb.storage.from('belege').remove(list.slice(i,i+100)); if(!error) removed+=Math.min(100,list.length-i); }catch(e){} } }
+      setWipe(null); setToast('Zurückgesetzt'+(o.files?' · '+removed+' Dateien gelöscht':'')+'. Die Sicherung wurde heruntergeladen. Jetzt kannst du den Import neu starten.');
+    }catch(e){ setWipe(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
   };
   // DATEV-Datei (Steuerberater) gegen die Buqo-Buchungen prüfen; Abweichungen landen in „Zu prüfen", die KI fasst Fehlermuster zusammen
   const runDatevCheck = async (file)=>{
@@ -4946,6 +4978,40 @@ function App({session}) {
                     existing={sevdeskExisting()} onImport={runSevdeskImport}
                     aiReadDoc={aiReadDoc} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
                 )}
+
+                {importTab==='sevdesk' && (
+                  <div style={{background:C.surf2,border:'1px solid '+hexA(C.exp,0.45),borderRadius:16,padding:'16px 18px',marginTop:16}}>
+                    <div style={{fontSize:17,fontWeight:800}}>Neu anfangen</div>
+                    <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>Löscht Buchungen, Rechnungen, To-dos usw. eines Jahres (oder aller Jahre), damit du den Umzug aus sevDesk sauber neu machen kannst. Dein Zwischenspeicher hier (geladene CSV/ZIP, Zuordnungen, Notizen, KI-Haken), Einstellungen, Konten und Steuerunterlagen bleiben erhalten – du musst nichts neu hochladen oder zuordnen. Vorher wird automatisch eine Sicherung als Datei heruntergeladen.</div>
+                    <button onClick={()=>setWipe({year:String(yr),opts:{book:true,inv:true,todo:true,rev:true,bank:true,files:true,cust:false},text:'',busy:false,msg:''})} style={{marginTop:10,background:'none',border:'1px solid '+C.exp,color:C.exp,borderRadius:10,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Zurücksetzen …</button>
+                  </div>)}
+                {wipe && (()=>{ const cnt=wipeCounts(wipe); const yrs=[...new Set([...Object.keys(data||{}).filter(k=>/^\d{4}$/.test(k)), String(yr)])].sort(); const set=(k)=>(e)=>setWipe(x=>({...x,opts:{...x.opts,[k]:e.target.checked}}));
+                  const row=(k,label,n)=>(<label key={k} style={{display:'flex',gap:9,alignItems:'center',fontSize:13.5,cursor:'pointer'}}><input type="checkbox" checked={!!wipe.opts[k]} onChange={set(k)} disabled={wipe.busy}/> <span style={{flex:1}}>{label}</span>{n!=null && <span style={{color:C.sub,...NUM}}>{n}</span>}</label>);
+                  const ok=wipe.text.trim().toUpperCase()==='LÖSCHEN';
+                  return (
+                  <div onClick={()=>!wipe.busy&&setWipe(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:180,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+                    <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'20px 22px',maxWidth:480,width:'100%',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 24px 60px rgba(0,0,0,0.3)'}}>
+                      <div style={{fontSize:17,fontWeight:800,color:C.exp,marginBottom:4}}>Wirklich zurücksetzen?</div>
+                      <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:12}}>Das kann nicht rückgängig gemacht werden (außer mit der Sicherungsdatei). Schließe vorher alle anderen Buqo-Tabs und Geräte, sonst können sie alte Daten zurückschreiben.</div>
+                      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}><span style={{fontSize:13,fontWeight:700}}>Zeitraum</span><select value={wipe.year} onChange={e=>setWipe(x=>({...x,year:e.target.value}))} disabled={wipe.busy} style={{...SS,width:'auto'}}>{yrs.map(y=><option key={y} value={y}>{y}</option>)}<option value="alle">Alle Jahre</option></select></div>
+                      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                        {row('book','Buchungen in allen Konten (Einnahmen/Ausgaben, inkl. Mieteinnahmen-Felder)',cnt.book)}
+                        {row('inv','Rechnungen + wiederkehrende Serien dieses Zeitraums',cnt.inv)}
+                        {row('todo','Alle To-dos',cnt.todo)}
+                        {row('rev','Zu-prüfen-Liste, DATEV-Prüfungen, Import-Protokoll',cnt.rev)}
+                        {row('bank','Kontoauszüge dieses Zeitraums + Bank-Entwürfe',cnt.bank+cnt.drafts)}
+                        {row('files','Zugehörige Beleg-/Rechnungs-Dateien im Speicher löschen',null)}
+                        {row('cust','Auch alle Kunden löschen',(data.customers||[]).length)}
+                      </div>
+                      <div style={{fontSize:12.5,color:C.sub,margin:'14px 0 6px'}}>Zur Bestätigung <b>LÖSCHEN</b> eintippen:</div>
+                      <input value={wipe.text} onChange={e=>setWipe(x=>({...x,text:e.target.value}))} disabled={wipe.busy} style={{...SS,width:'100%',textAlign:'left',boxSizing:'border-box'}}/>
+                      {wipe.msg && <div style={{fontSize:12.5,color:C.sub,marginTop:8}}>{wipe.msg}</div>}
+                      <div style={{display:'flex',gap:8,marginTop:14}}>
+                        <button onClick={runWipe} disabled={wipe.busy||!ok} style={{flex:1,background:C.exp,color:'#fff',border:'none',borderRadius:11,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:(wipe.busy||!ok)?0.5:1}}>{wipe.busy?'Läuft …':'Sicherung laden und löschen'}</button>
+                        <button onClick={()=>setWipe(null)} disabled={wipe.busy} style={{background:C.surf2,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'12px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+                      </div>
+                    </div>
+                  </div>); })()}
 
                 {importTab==='sevdesk' && (()=>{ const dc=(data.datevChecks||[]).slice(-1)[0]; return (
                   <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:16,padding:'16px 18px',marginTop:16}}>
