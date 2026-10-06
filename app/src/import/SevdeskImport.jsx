@@ -4,6 +4,8 @@
 import React from 'react';
 import { decodeText, parseCSV, autoMap, detectFormat, FORMAT_LABEL, normalizeRows, matchFiles, markDuplicates, summarize, detectRecurring, bankRowsFromCsv, CATS } from './sevdesk.js';
 import { readZipEntries, baseName } from './zip.js';
+import { parseDatev } from './datevCompare.js';
+import { matchBank, matchDatev } from './reconcile.js';
 
 const { useState, useMemo } = React;
 const MAP_FIELDS = [['datum','Datum'],['nummer','Nummer'],['name','Name / Kontakt'],['beschreibung','Beschreibung'],['brutto','Brutto'],['netto','Netto'],['mwst','MwSt-Satz'],['kategorie','Kategorie'],['status','Status'],['zahldatum','Zahldatum'],['faellig','Fällig']];
@@ -18,19 +20,25 @@ const idbDel = async (k) => { const d = await idbOpen(); return new Promise((res
 const normN = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
 
 export default function SevdeskImport(props) {
-  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc } = props;
+  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows } = props;
   const { C, SC, SS, NUM, fmt, Ic, P, hexA, AI_GRADIENT, MONTHS } = ui;
+  const [step, setStep] = useState(1);              // 1 Hochladen · 2 Abgleich · 3 Wiederkehrendes + Verbuchen
   const [belege, setBelege] = useState(null);      // {fileName, parsed, format, mapping, kind}
   const [rech, setRech] = useState(null);
-  const [zipB, setZipB] = useState(null);          // {fileName, entries}
+  const [zipB, setZipB] = useState(null);          // {fileName, files, entries}
   const [zipR, setZipR] = useState(null);
   const [year, setYear] = useState(defaultYear ? String(defaultYear) : 'alle');
+  const [yearChosen, setYearChosen] = useState(false);   // Jahr wurde nach dem CSV-Upload bewusst gewählt
+  const [yearAsk, setYearAsk] = useState(false);
   const [acct, setAcct] = useState((accounts[0] || {}).key || 'unter');
   const [rowAcct, setRowAcct] = useState({});
   const [skip, setSkip] = useState({});
   const [notes, setNotes] = useState({});           // Notiz je Zeile (für den KI-Steuerberater), Schlüssel k+idx
-  const [confirmed, setConfirmed] = useState(false);  // false: Belege/Rechnungen bleiben offen, bis Schritt 2 (Kontoauszug) sie abgleicht
+  const [confirmed, setConfirmed] = useState(false);  // false: Belege/Rechnungen bleiben offen, bis der Kontoauszug sie abgleicht
   const [bank, setBank] = useState([]);           // Kontoauszüge: [{file, name, kind:'csv'|'datei', rows?}]
+  const [datev, setDatev] = useState([]);         // DATEV-Dateien (Steuerberater), mehrere möglich: [{file, name}]
+  const [datevRows, setDatevRows] = useState([]);
+  const [extra, setExtra] = useState([]);         // weitere Unterlagen/Infos für die KI (landen in den Steuerunterlagen): [{file, name}]
   const [recurOff, setRecurOff] = useState({}); // erkannte Wiederkehrend-Gruppen, die der Nutzer abgewählt hat
   const [minCust, setMinCust] = useState(2); // Kunden nur anlegen, wenn er mind. so viele Rechnungen hat (1 = alle)
   const [mapOpen, setMapOpen] = useState({});
@@ -41,12 +49,18 @@ export default function SevdeskImport(props) {
   const [ai, setAi] = useState({});             // KI-Sortierung: {b12|r3: {acct, sure, why}}
   const [aiBusy, setAiBusy] = useState(false);
   const [aiProg, setAiProg] = useState('');
-  const [ocr, setOcr] = useState({});               // KI-Lesung der PDFs: {b12|r3: {name, datum, nummer, brutto, netto, mwst, kategorie, beschreibung} | {error}}
+  const [ocr, setOcr] = useState({});               // KI-Lesung der PDFs: {b12|r3: {name, datum, nummer, brutto, netto, mwst, kategorie, beschreibung, storno, urteil} | {error}}
   const [ocrOff, setOcrOff] = useState({});         // Zeilen, bei denen die KI-Änderungen abgeschaltet sind
-  const [kiRows, setKiRows] = useState({});         // Zeilen, die die KI beim Import im Hintergrund lesen soll (k+idx)
-  const [confirmRun, setConfirmRun] = useState(null);   // Rückfrage vor dem Verbuchen: 'main' | 'bank'
+  const [kiRows, setKiRows] = useState({});         // Zeilen, deren PDF die KI lesen soll (k+idx)
+  const [kiAll, setKiAll] = useState(false);        // alle PDFs von der KI lesen lassen
+  const [later, setLater] = useState({});           // „Für später": wird gebucht, dazu entsteht ein To-do (k+idx)
+  const [datevAct, setDatevAct] = useState({});     // DATEV-Zeilen ohne Gegenstück: 'later' | 'ignore'
+  const [upPdf, setUpPdf] = useState({});           // im Abgleich nachgeladene PDFs: {k+idx: {name, data}}
+  const [filt, setFilt] = useState('alle');         // Abgleich-Filter: alle | ausgaben | einnahmen | passt | hinweis | fehlt
+  const [analysing, setAnalysing] = useState(false);
+  const [anaProg, setAnaProg] = useState('');
+  const [confirmRun, setConfirmRun] = useState(false);   // Rückfrage vor dem Verbuchen
   const [importMsg, setImportMsg] = useState('');     // Hinweis nach dem Laden eines Buqo-Exports
-  const [kiAll, setKiAll] = useState(false);        // alle PDFs beim Import von der KI lesen lassen
   const restored = React.useRef(false);
   const [draftInfo, setDraftInfo] = useState(null); // {savedAt} – Zwischenstand vorhanden
   const [hint, setHint] = useState('');         // Hinweise für die KI, z. B. „Mieter Müller = Sylt"
@@ -70,9 +84,17 @@ export default function SevdeskImport(props) {
       } }
     catch (e) { setErr('CSV konnte nicht gelesen werden: ' + (e.message || e)); }
   };
-  const readZip = async (file, setter) => {
-    try { const buf = await file.arrayBuffer(); const entries = readZipEntries(buf).filter(e => isDoc(e.name)); if (!entries.length) throw new Error('Keine PDF/Bild-Dateien im ZIP gefunden.'); setter({ fileName: file.name, file, entries }); setResult(null); setErr(''); }
-    catch (e) { setErr('ZIP konnte nicht gelesen werden: ' + (e.message || e)); }
+  // ZIP-Dateien und einzelne PDFs/Fotos (mehrere auf einmal, auch nachträglich dazu) zu einer Belegliste zusammenfassen
+  const readDocs = async (files, setter, cur) => {
+    const entries = cur ? [...cur.entries] : [], fl = cur ? [...cur.files] : [];
+    for (const f of files) {
+      try {
+        if (/\.zip$/i.test(f.name) || f.type === 'application/zip') { entries.push(...readZipEntries(await f.arrayBuffer()).filter(e => isDoc(e.name))); fl.push(f); }
+        else if (isDoc(f.name)) { entries.push({ name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) }); fl.push(f); }
+      } catch (e) { setErr('„' + f.name + '" konnte nicht gelesen werden: ' + (e.message || e)); }
+    }
+    if (!entries.length) { setErr('Keine PDF/Bild-Dateien gefunden.'); return; }
+    setter({ fileName: fl.length === 1 ? fl[0].name : fl.length + ' Dateien', files: fl, entries }); setResult(null); setErr('');
   };
 
   const addBank = async (files) => {
@@ -106,37 +128,41 @@ export default function SevdeskImport(props) {
       try {
         const f = await idbGet('files'); const s = await idbGet('state'); if (!alive) return;
         const map = (s && s.mappings) || {};
+        const arr = (v) => v ? (Array.isArray(v) ? v : [v]) : [];
         if (f) {
           if (f.belege) await readCsv(f.belege.file, f.belege.kind, o => setBelege(map.belege ? { ...o, mapping: map.belege } : o));
           if (f.rech) await readCsv(f.rech.file, f.rech.kind, o => setRech(map.rech ? { ...o, mapping: map.rech } : o));
-          if (f.zipB) await readZip(f.zipB, setZipB);
-          if (f.zipR) await readZip(f.zipR, setZipR);
+          if (arr(f.zipB).length) await readDocs(arr(f.zipB), setZipB, null);
+          if (arr(f.zipR).length) await readDocs(arr(f.zipR), setZipR, null);
           if (f.bank && f.bank.length) await addBank(f.bank.map(x => x.file));
+          if (f.datev && f.datev.length) setDatev(f.datev.map(x => ({ file: x.file, name: x.file.name })));
+          if (f.extra && f.extra.length) setExtra(f.extra.map(x => ({ file: x.file, name: x.file.name })));
         }
-        if (s && s.state) { const st = s.state; setYear(st.year); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setDraftInfo({ savedAt: s.savedAt }); }
+        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setDraftInfo({ savedAt: s.savedAt }); }
       } catch (e) { /* kein Zwischenspeicher (z. B. privater Modus) */ }
       restored.current = true;
     })();
     return () => { alive = false; };
   }, []);
+  const anyFile = () => belege || rech || zipB || zipR || bank.length || datev.length || extra.length;
   React.useEffect(() => {
     if (!restored.current) return;
     const t = setTimeout(() => {
-      if (!belege && !rech && !zipB && !zipR && !bank.length) { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setDraftInfo(null); return; }
-      idbSet('files', { belege: belege && { file: belege.file, kind: belege.kind }, rech: rech && { file: rech.file, kind: rech.kind }, zipB: zipB && zipB.file, zipR: zipR && zipR.file, bank: bank.map(b => ({ file: b.file })) }).catch(() => {});
+      if (!anyFile()) { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setDraftInfo(null); return; }
+      idbSet('files', { belege: belege && { file: belege.file, kind: belege.kind }, rech: rech && { file: rech.file, kind: rech.kind }, zipB: zipB && zipB.files, zipR: zipR && zipR.files, bank: bank.map(b => ({ file: b.file })), datev: datev.map(d => ({ file: d.file })), extra: extra.map(d => ({ file: d.file })) }).catch(() => {});
     }, 500);
     return () => clearTimeout(t);
-  }, [belege && belege.file, rech && rech.file, zipB && zipB.file, zipR && zipR.file, bank]);
+  }, [belege && belege.file, rech && rech.file, zipB && zipB.files, zipR && zipR.files, bank, datev, extra]);
   React.useEffect(() => {
     if (!restored.current) return;
     const t = setTimeout(() => {
-      if (!belege && !rech && !zipB && !zipR && !bank.length) return;
+      if (!anyFile()) return;
       const savedAt = Date.now();
-      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
+      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
     }, 700);
     return () => clearTimeout(t);
-  }, [year, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, belege && belege.mapping, rech && rech.mapping]);
-  const discardDraft = () => { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setBelege(null); setRech(null); setZipB(null); setZipR(null); setBank([]); setRowAcct({}); setSkip({}); setNotes({}); setAi({}); setOcr({}); setOcrOff({}); setRecurOff({}); setDraftInfo(null); setResult(null); };
+  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, belege && belege.mapping, rech && rech.mapping]);
+  const discardDraft = () => { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setBelege(null); setRech(null); setZipB(null); setZipR(null); setBank([]); setDatev([]); setDatevRows([]); setExtra([]); setRowAcct({}); setSkip({}); setNotes({}); setAi({}); setOcr({}); setOcrOff({}); setRecurOff({}); setLater({}); setDatevAct({}); setUpPdf({}); setYearChosen(false); setStep(1); setDraftInfo(null); setResult(null); };
   const build = (src, zip, exist) => {
     if (!src) return null;
     let recs = normalizeRows(src.parsed, src.mapping, { kind: src.kind, year: year !== 'alle' ? +year : null });
@@ -149,6 +175,9 @@ export default function SevdeskImport(props) {
   const B = useMemo(() => build(belege, zipB, existing && existing.belege), [belege, zipB, year, existing]);
   const R = useMemo(() => build(rech, zipR, existing && existing.rechnungen), [rech, zipR, year, existing]);
   const yearsSeen = useMemo(() => { const s = new Set(); [B, R].forEach(x => x && x.rows.forEach(r => r.y && s.add(r.y))); return [...s].sort(); }, [B, R]);
+  const yearCounts = useMemo(() => { const c = {}; [B, R].forEach(x => x && x.rows.forEach(r => { if (r.y && !r.cancelled) c[r.y] = (c[r.y] || 0) + 1; })); return c; }, [B, R]);
+  // Nach dem Laden der ersten CSV wird gefragt, welches Jahr importiert werden soll (nur dieses Jahr wird geladen)
+  React.useEffect(() => { if (restored.current && !yearChosen && (belege || rech)) setYearAsk(true); }, [belege, rech, yearChosen]);
 
   const willImport = (X, key) => X ? X.rows.filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum && !skip[key + r.idx]) : [];
   const belegeGo = willImport(B, 'b'), rechGo = willImport(R, 'r');
@@ -179,9 +208,9 @@ export default function SevdeskImport(props) {
     } catch (e) { setErr('KI-Sortierung fehlgeschlagen: ' + (e.message || e)); setAiProg(''); }
     setAiBusy(false);
   };
-  const fileFor = (zip, name) => { if (!zip || !name) return null; const e = zip.entries.find(x => x.name === name); return e ? { name: baseName(e.name), data: e.data } : null; };
+  const fileFor = (zip, name, key) => { if (upPdf[key]) return { name: upPdf[key].name, data: upPdf[key].data }; if (!zip || !name) return null; const e = zip.entries.find(x => x.name === name); return e ? { name: baseName(e.name), data: e.data } : null; };
 
-  // ── Prüfliste: alles, was du vor dem Verbuchen noch einmal ansehen solltest ──
+  // ── Abgleich: Hinweise, Kontoauszug, DATEV ──
   const NOTE_RE = /anschau|prüf|pruef|nochmal|nochmals|kontrollier|checken|klären|klaeren|\?/i;
   // Doppelung = gleicher Name + Betrag innerhalb von 5 Tagen. Raten/Leasing (monatlich gleicher Betrag) zählen nicht.
   const dupFlag = useMemo(() => {
@@ -190,22 +219,80 @@ export default function SevdeskImport(props) {
     groups.forEach(list => { if (list.length < 2) return; list.forEach(a => { const near = list.some(b => b !== a && Math.abs(new Date(a.r.datum) - new Date(b.r.datum)) <= 5 * 864e5); if (near) flag[a.k + a.r.idx] = true; }); });
     return flag;
   }, [belege, rech, year, skip]); // eslint-disable-line
-  const reviewOf = (k, r) => { const w = []; if (kiAll || kiRows[k + r.idx]) w.push('KI soll PDF lesen'); const n = String((notes && notes[k + r.idx]) || ''); if (NOTE_RE.test(n)) w.push('Notiz: ' + n.slice(0, 60)); if (r.storno) w.push('Storno/Gutschrift – negativ gebucht, Gegenstück prüfen'); if (dupFlag[k + r.idx]) w.push('Mögliche Doppelung (gleicher Name + Betrag, ±5 Tage) – KI prüft das PDF (Storno?)'); return w; };
-  const reviewRows = allGo.map(x => ({ ...x, why: reviewOf(x.k, x.r) })).filter(x => x.why.length);
-  const run = async (stage) => {
-    if (busy || (stage === 'bank' ? !bank.length : !belegeGo.length && !rechGo.length)) return;
+  const inY = (r) => year === 'alle' || String(r.datum || '').slice(0, 4) === year;
+  const bankRowsY = useMemo(() => bank.flatMap(b => b.rows || []).filter(inY), [bank, year]); // eslint-disable-line
+  const datevRowsY = useMemo(() => datevRows.filter(inY), [datevRows, year]); // eslint-disable-line
+  const signed = (r) => (r.storno ? -r.brutto : r.brutto);
+  const bankMatch = useMemo(() => bankRowsY.length ? matchBank(allGo.map(({ r, k }) => ({ key: k + r.idx, kind: r.storno ? (r.kind === 'ein' ? 'aus' : 'ein') : r.kind, datum: r.datum, brutto: r.brutto, name: r.name })), bankRowsY) : null, [B, R, skip, year, bankRowsY]); // eslint-disable-line
+  const dMatch = useMemo(() => datevRowsY.length ? matchDatev(allGo.map(({ r, k }) => ({ key: k + r.idx, y: r.y, m: r.m, kind: r.kind, name: r.name, amount: signed(r), datum: r.datum, nummer: r.nummer, category: r.kategorie, mwst: r.mwst })), datevRowsY) : null, [B, R, skip, year, datevRowsY]); // eslint-disable-line
+  // Status je Zeile: passt / hinweis / fehlt, dazu die Kurz-Hinweise
+  const statusOf = (k, r) => {
+    const key = k + r.idx; const chips = []; let miss = false, hintF = false; const o = ocr[key];
+    if (!(r.file || upPdf[key])) { chips.push({ t: 'PDF fehlt', c: 'miss' }); miss = true; }
+    if (bankMatch) { if (bankMatch.has(key)) chips.push({ t: 'Kontoauszug ✓', c: 'ok' }); else if (r.kind === 'aus' && !r.storno) { chips.push({ t: 'nicht im Kontoauszug', c: 'miss' }); miss = true; } }
+    if (dMatch) { const d = dMatch.byKey.get(key); if (d) { if (d.state === 'ok') chips.push({ t: 'DATEV ✓', c: 'ok' }); else if (d.state === 'abw') { chips.push({ t: 'DATEV: ' + d.why.join('; '), c: 'warn' }); hintF = true; } else { chips.push({ t: 'fehlt in DATEV', c: 'miss' }); miss = true; } } }
+    if (r.storno) { chips.push({ t: 'Storno/Gutschrift (negativ)', c: 'warn' }); hintF = true; }
+    if (dupFlag[key] && !(o && o.storno)) { chips.push({ t: 'Doppelung?', c: 'warn' }); hintF = true; }
+    if (o && o.error) chips.push({ t: 'KI: ' + o.error, c: 'miss' });
+    if (o && !o.error) { ocrDiff(k, r).forEach(t => { chips.push({ t, c: 'warn' }); hintF = true; }); if (o.storno && !r.storno) chips.push({ t: 'PDF ist Storno/Gutschrift', c: 'warn' }); if (o.urteil) chips.push({ t: '🤖 ' + o.urteil, c: 'ai' }); }
+    if (NOTE_RE.test(String(notes[key] || ''))) { chips.push({ t: 'Notiz: ' + String(notes[key]).slice(0, 50), c: 'warn' }); hintF = true; }
+    return { cls: miss ? 'fehlt' : hintF ? 'hinweis' : 'passt', chips };
+  };
+  const stats = useMemo(() => { const c = { passt: 0, hinweis: 0, fehlt: 0, ausg: 0, einn: 0 }; allGo.forEach(({ r, k }) => { c[statusOf(k, r).cls]++; if (r.kind === 'ein') c.einn++; else c.ausg++; }); return c; }, [B, R, skip, year, bankMatch, dMatch, ocr, upPdf, notes]); // eslint-disable-line
+
+  // KI liest PDFs (zugeordnete PDFs der gewählten Zeilen), 3 gleichzeitig
+  const runOcr = async (targets) => {
+    if (!aiReadDoc) return;
+    const todo = targets.filter(([k, r, z]) => r.file && z && !ocr[k + r.idx]); if (!todo.length) return;
+    let done = 0, i = 0;
+    const worker = async () => {
+      while (i < todo.length) {
+        const [k, r, z] = todo[i++];
+        try { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); const bytes = await e.data(); const res = await aiReadDoc(bytes, r.file, { kind: r.kind, name: r.name, brutto: r.brutto }); setOcr(p => ({ ...p, [k + r.idx]: res })); }
+        catch (e) { setOcr(p => ({ ...p, [k + r.idx]: { error: String(e.message || e).slice(0, 80) } })); }
+        done++; setAnaProg('KI liest PDFs … ' + done + ' / ' + todo.length);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+  };
+  const kiTargets = (only) => [...belegeGo.map(r => ['b', r, zipB]), ...rechGo.map(r => ['r', r, zipR])].filter(([k, r]) => only ? (kiAll || kiRows[k + r.idx]) : (kiAll || kiRows[k + r.idx] || dupFlag[k + r.idx] || NOTE_RE.test(String(notes[k + r.idx] || ''))));
+  // „Abgleich starten": Kontoauszüge (PDF/Foto) und DATEV-Dateien lesen, markierte/auffällige PDFs von der KI prüfen lassen – gebucht wird noch nichts
+  const analyze = async () => {
+    if (analysing || (!belegeGo.length && !rechGo.length)) return;
+    setAnalysing(true); setErr('');
+    try {
+      const nb = [...bank];
+      for (let i = 0; i < nb.length; i++) if (!nb[i].rows && aiBankRows) { setAnaProg('Kontoauszug lesen: ' + nb[i].name); try { nb[i] = { ...nb[i], rows: await aiBankRows(nb[i].file) }; } catch (e) { nb[i] = { ...nb[i], rows: [], err: String(e.message || e) }; setErr('Kontoauszug „' + nb[i].name + '" konnte nicht gelesen werden: ' + (e.message || e)); } }
+      setBank(nb);
+      const dr = [];
+      for (const d of datev) { setAnaProg('DATEV lesen: ' + d.name); try { dr.push(...parseDatev(await d.file.arrayBuffer())); } catch (e) { setErr('DATEV „' + d.name + '": ' + (e.message || e)); } }
+      setDatevRows(dr);
+      await runOcr(kiTargets(false));
+      setStep(2);
+    } catch (e) { setErr('Abgleich fehlgeschlagen: ' + (e.message || e)); }
+    setAnalysing(false); setAnaProg('');
+  };
+  const kiOpen = kiTargets(true).filter(([k, r]) => r.file && !ocr[k + r.idx]).length;
+  const readMarked = async () => { if (analysing) return; setAnalysing(true); try { await runOcr(kiTargets(true)); } catch (e) { setErr(String(e.message || e)); } setAnalysing(false); setAnaProg(''); };
+
+  const run = async () => {
+    if (busy || (!belegeGo.length && !rechGo.length)) return;
     setBusy(true); setErr(''); setResult(null);
     try {
+      const todos = [];
+      allGo.forEach(({ r, k }) => { if (later[k + r.idx]) todos.push({ title: 'Prüfen: ' + (eff(k, r).name || 'Posten') + ' · ' + fmt(r.brutto), note: statusOf(k, r).chips.map(c => c.t).join('\n') }); });
+      (dMatch ? dMatch.onlyDatev : []).forEach((d, i) => { if (datevAct['d' + i] === 'later') todos.push({ title: 'In DATEV, aber nicht im Import: ' + (d.name || 'Posten') + ' · ' + fmt(d.brutto), note: (d.datum || '') + (d.nummer ? ' · ' + d.nummer : '') }); });
       const payload = {
-        confirmed, minCust, year,
-        bank: stage === 'bank' ? bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })) : [],
-        belege: stage === 'bank' ? [] : belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, review: reviewOf('b', r0), ki: !!r.file && (kiAll || !!kiRows['b' + r.idx] || !!dupFlag['b' + r.idx]), taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
-        rechnungen: stage === 'bank' ? [] : rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, review: reviewOf('r', r0), ki: !!r.file && (kiAll || !!kiRows['r' + r.idx] || !!dupFlag['r' + r.idx]), taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file) }); }),
+        confirmed, minCust, year, todos,
+        bank: bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })),
+        extraDocs: extra.map(x => x.file),
+        belege: belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, status: (bankMatch && bankMatch.has('b' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file, 'b' + r.idx), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
+        rechnungen: rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, status: (bankMatch && bankMatch.has('r' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file, 'r' + r.idx) }); }),
         // laufende Rechnungs-Serien: ab dem Folgemonat automatisch weiter erzeugen
-        recurInvoices: stage === 'bank' ? [] : recurActive(recurR, rechGo, 'r').filter(g => g.ongoing && g.idxs.includes(g.last.idx) && rechGo.some(r => r.idx === g.last.idx)).map(g => ({ name: g.last.name, dest: acctOf('r', g.last), netto: g.last.netto, mwst: g.last.mwst, beschreibung: g.last.beschreibung, adresse: g.last.adresse, lastY: g.to.y, lastM: g.to.m })),
+        recurInvoices: recurActive(recurR, rechGo, 'r').filter(g => g.ongoing && g.idxs.includes(g.last.idx) && rechGo.some(r => r.idx === g.last.idx)).map(g => ({ name: g.last.name, dest: acctOf('r', g.last), netto: g.last.netto, mwst: g.last.mwst, beschreibung: g.last.beschreibung, adresse: g.last.adresse, lastY: g.to.y, lastM: g.to.m })),
       };
       const res = await onImport(payload, setProgress);
-      setResult({ ...res, stage });
+      setResult(res);
     } catch (e) { setErr('Import fehlgeschlagen: ' + (e.message || e)); }
     setBusy(false); setProgress('');
   };
@@ -214,6 +301,7 @@ export default function SevdeskImport(props) {
   const card = { ...SC, padding: isMobile ? '16px' : '20px 22px' };
   const lbl = { fontSize: 12, color: C.sub, fontWeight: 600, marginBottom: 6 };
   const btnP = { display: 'inline-flex', alignItems: 'center', gap: 8, background: C.act, color: C.actTxt, border: 'none', borderRadius: 999, padding: '11px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' };
+  const btnS = { display: 'inline-flex', alignItems: 'center', gap: 8, background: C.surf2, color: C.txt, border: '1px solid ' + C.bdr, borderRadius: 999, padding: '10px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' };
   const slot = (title, hint, accept, cur, onFile, done) => (
     <label style={{ display: 'flex', alignItems: 'center', gap: 12, background: cur ? hexA(C.grn, 0.08) : C.surf2, border: '1.5px ' + (cur ? 'solid ' + hexA(C.grn, 0.5) : 'dashed ' + C.bdrM), borderRadius: 14, padding: '13px 14px', cursor: 'pointer', minWidth: 0 }}>
       <span style={{ width: 38, height: 38, borderRadius: 11, background: cur ? C.grn : C.surf3, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={cur ? P.check : P.upload} sz={17} col={cur ? '#fff' : C.sub} /></span>
@@ -224,33 +312,87 @@ export default function SevdeskImport(props) {
       <input type="file" accept={accept} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) onFile(f); }} style={{ display: 'none' }} />
     </label>
   );
+  // mehrere Dateien auf einmal (und später weitere dazu)
+  const slotMulti = (title, hint, accept, names, onFiles, onClear) => (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 12, background: names.length ? hexA(C.grn, 0.08) : C.surf2, border: '1.5px ' + (names.length ? 'solid ' + hexA(C.grn, 0.5) : 'dashed ' + C.bdrM), borderRadius: 14, padding: '13px 14px', cursor: 'pointer', minWidth: 0 }}>
+      <span style={{ width: 38, height: 38, borderRadius: 11, background: names.length ? C.grn : C.surf3, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={names.length ? P.check : P.upload} sz={17} col={names.length ? '#fff' : C.sub} /></span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: C.txt }}>{title}</span>
+        <span style={{ display: 'block', fontSize: 12, color: C.sub, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{names.length ? names.join(' · ') : hint}</span>
+      </span>
+      {names.length > 0 && <button onClick={e => { e.preventDefault(); onClear(); }} style={{ background: 'none', border: 'none', color: C.mut, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit' }}>Entfernen</button>}
+      <input type="file" multiple accept={accept} onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ''; if (fs.length) onFiles(fs); }} style={{ display: 'none' }} />
+    </label>
+  );
   const Stat = ({ l, v, c }) => <div style={{ flex: 1, minWidth: 120 }}><div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600 }}>{l}</div><div style={{ fontSize: 18, fontWeight: 800, color: c || C.txt, ...NUM }}>{v}</div></div>;
+  const Steps = () => (
+    <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+      {[[1, 'Hochladen'], [2, 'Abgleich'], [3, 'Wiederkehrendes & Verbuchen']].map(([n, t]) => (
+        <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: step === n ? C.act : C.surf2, color: step === n ? C.actTxt : (step > n ? C.grn : C.sub), border: '1px solid ' + (step === n ? C.act : C.bdr) }}>{step > n ? '✓' : n} {t}</span>))}
+    </div>);
+  const chipCol = (c) => c === 'ok' ? C.grn : c === 'miss' ? C.red : c === 'ai' ? C.pri : C.amb;
 
   return (<>
-    <div style={{ ...card, marginBottom: 14 }}>
-      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <span style={{ width: 44, height: 44, borderRadius: '50%', background: C.txt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.swap} sz={20} col={C.bg} /></span>
-        <div style={{ flex: 1, minWidth: 240, fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
-          <b>So holst du alles aus sevDesk:</b> Dort unter <b>Belege → Exportieren</b> die <b>CSV</b> und das <b>ZIP mit den Belegdateien</b> laden, unter <b>Rechnungen → Exportieren</b> ebenfalls CSV + ZIP. Alternativ reicht der <b>DATEV-Export</b> (Buchungsstapel) im Belege-Feld. Buqo erkennt Spalten, Beträge, MwSt, Kategorien und ordnet die PDFs anhand der Belegnummer zu. Nichts wird geschrieben, bevor du unten auf „Jetzt importieren" drückst. Doppelte Einträge werden übersprungen, du kannst den Import also gefahrlos wiederholen.
-        </div>
-      </div>
-    </div>
-
-    {draftInfo && (belege || rech || zipB || zipR || bank.length > 0) && (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: hexA(C.grn, 0.08), border: '1px solid ' + hexA(C.grn, 0.35), borderRadius: 12, padding: '10px 14px', fontSize: 12.5, color: C.txt, marginBottom: 14 }}>
-        <span style={{ flex: 1, minWidth: 220 }}>💾 Zwischengespeichert ({new Date(draftInfo.savedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}): geladene Dateien, Kontozuordnungen, Notizen und KI-Ergebnisse bleiben erhalten, auch wenn du die Seite schließt.</span>
-        <button onClick={() => { if (window.confirm('Zwischenstand wirklich verwerfen? Geladene Dateien und alle Zuordnungen hier werden entfernt (bereits importierte Buchungen bleiben).')) discardDraft(); }} style={{ background: 'none', border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 999, padding: '6px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5 }}>Zwischenstand verwerfen</button>
-      </div>)}
-    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12, marginBottom: 14 }}>
-      {slot('Belege · CSV oder DATEV', 'sevDesk → Belege → Exportieren → CSV', '.csv,.txt,text/csv', belege, f => readCsv(f, 'aus', setBelege), belege && (belege.parsed.rows.length + ' Zeilen · ' + FORMAT_LABEL[belege.format]))}
-      {slot('Belege · ZIP mit PDFs', 'sevDesk → Belege → Exportieren → ZIP (Dateien)', '.zip,application/zip', zipB, f => readZip(f, setZipB), zipB && (zipB.entries.length + ' Dateien'))}
-      {slot('Rechnungen · CSV', 'sevDesk → Rechnungen → Exportieren → CSV', '.csv,.txt,text/csv', rech, f => readCsv(f, 'ein', setRech), rech && (rech.parsed.rows.length + ' Zeilen · ' + FORMAT_LABEL[rech.format]))}
-      {slot('Rechnungen · ZIP mit PDFs', 'sevDesk → Rechnungen → Exportieren → ZIP (PDF)', '.zip,application/zip', zipR, f => readZip(f, setZipR), zipR && (zipR.entries.length + ' Dateien'))}
-    </div>
+    <Steps />
     {importMsg && <div style={{ background: hexA(C.grn, 0.08), border: '1px solid ' + hexA(C.grn, 0.35), borderRadius: 12, padding: '10px 14px', fontSize: 13, color: C.txt, marginBottom: 14 }}>✅ {importMsg}</div>}
     {err && <div style={{ background: hexA(C.red, 0.08), border: '1px solid ' + hexA(C.red, 0.35), borderRadius: 12, padding: '10px 14px', fontSize: 13, color: C.red, marginBottom: 14 }}>{err}</div>}
 
-    {(B || R) && (<>
+    {step === 1 && (<>
+      <div style={{ ...card, marginBottom: 14 }}>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <span style={{ width: 44, height: 44, borderRadius: '50%', background: C.txt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.swap} sz={20} col={C.bg} /></span>
+          <div style={{ flex: 1, minWidth: 240, fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
+            <b>Schritt 1: Alles hochladen.</b> Lade zuerst die CSV (Belege und/oder Rechnungen) – danach wirst du gefragt, <b>welches Jahr</b> importiert werden soll; nur dieses Jahr wird geladen. Dann kommen die PDFs/ZIPs, DATEV-Dateien, Kontoauszüge und weitere Unterlagen dazu, so viele du willst. <b>Es wird nichts angezeigt und nichts gespeichert</b>, bis du auf „Abgleich starten" klickst. Im nächsten Schritt siehst du alles auf einen Blick: was passt, was fehlt, Hinweise der KI. Gebucht wird erst ganz am Ende.
+          </div>
+        </div>
+      </div>
+      {draftInfo && anyFile() && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: hexA(C.grn, 0.08), border: '1px solid ' + hexA(C.grn, 0.35), borderRadius: 12, padding: '10px 14px', fontSize: 12.5, color: C.txt, marginBottom: 14 }}>
+          <span style={{ flex: 1, minWidth: 220 }}>💾 Zwischengespeichert ({new Date(draftInfo.savedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}): geladene Dateien, Zuordnungen, Notizen und KI-Ergebnisse bleiben erhalten, auch wenn du die Seite schließt.</span>
+          <button onClick={() => { if (window.confirm('Zwischenstand wirklich verwerfen? Geladene Dateien und alle Zuordnungen hier werden entfernt (bereits importierte Buchungen bleiben).')) discardDraft(); }} style={{ background: 'none', border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 999, padding: '6px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5 }}>Verwerfen</button>
+        </div>)}
+      {(belege || rech) && yearChosen && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14, fontSize: 13.5 }}>
+          <span style={{ fontWeight: 700 }}>Importiert wird nur:</span>
+          <span style={{ background: hexA(C.pri, 0.14), color: C.pri, borderRadius: 999, padding: '5px 12px', fontWeight: 800 }}>{year === 'alle' ? 'Alle Jahre' : year}</span>
+          <button onClick={() => setYearAsk(true)} style={{ background: 'none', border: 'none', color: C.pri, cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700 }}>Jahr ändern</button>
+        </div>)}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        {slot('Belege · CSV oder DATEV', 'sevDesk → Belege → Exportieren → CSV', '.csv,.txt,text/csv', belege, f => readCsv(f, 'aus', setBelege), belege && (belege.parsed.rows.length + ' Zeilen · ' + FORMAT_LABEL[belege.format]))}
+        {slotMulti('Belege · PDFs (ZIP oder einzelne Dateien)', 'sevDesk → Belege → Exportieren → ZIP, mehrere möglich', '.zip,application/zip,.pdf,image/*', zipB ? [zipB.fileName + ' (' + zipB.entries.length + ' Dateien)'] : [], fs => readDocs(fs, setZipB, zipB), () => setZipB(null))}
+        {slot('Rechnungen · CSV', 'sevDesk → Rechnungen → Exportieren → CSV', '.csv,.txt,text/csv', rech, f => readCsv(f, 'ein', setRech), rech && (rech.parsed.rows.length + ' Zeilen · ' + FORMAT_LABEL[rech.format]))}
+        {slotMulti('Rechnungen · PDFs (ZIP oder einzelne Dateien)', 'sevDesk → Rechnungen → Exportieren → ZIP, mehrere möglich', '.zip,application/zip,.pdf,image/*', zipR ? [zipR.fileName + ' (' + zipR.entries.length + ' Dateien)'] : [], fs => readDocs(fs, setZipR, zipR), () => setZipR(null))}
+        {slotMulti('DATEV-Dateien (Steuerberater)', 'Buchungsstapel als CSV, mehrere möglich – wird mit deinen Buchungen abgeglichen', '.csv,.txt,text/csv', datev.map(d => d.name), fs => setDatev(d => [...d, ...fs.map(f => ({ file: f, name: f.name }))]), () => { setDatev([]); setDatevRows([]); })}
+        {slotMulti('Kontoauszüge', 'CSV, PDF oder Foto, mehrere möglich – Zahlungen werden zugeordnet', '.csv,.txt,.pdf,image/*,text/csv', bank.map(b => b.name + (b.kind === 'csv' ? ' (' + b.rows.length + ' Umsätze)' : '')), addBank, () => setBank([]))}
+      </div>
+      {slotMulti('Weitere Unterlagen und Infos für die KI', 'z. B. EÜR, BWA, Steuerbescheid, Verträge, Notizen – landen in den Steuerunterlagen, die KI nutzt sie als Steuerberater', '.pdf,.csv,.txt,image/*', extra.map(x => x.name), fs => setExtra(x => [...x, ...fs.map(f => ({ file: f, name: f.name }))]), () => setExtra([]))}
+      <div style={{ ...card, margin: '14px 0' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, cursor: 'pointer' }}><input type="checkbox" checked={kiAll} onChange={e => setKiAll(e.target.checked)} /> <span><b>KI liest alle PDFs</b> vor dem Abgleich (genauer, verbraucht KI-Guthaben). Ohne Haken liest sie nur auffällige Zeilen (mögliche Doppelungen, Notizen mit „prüfen").</span></label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 14 }}>
+          <button onClick={analyze} disabled={analysing || !yearChosen || (!belegeGo.length && !rechGo.length)} style={{ ...btnP, opacity: (analysing || !yearChosen || (!belegeGo.length && !rechGo.length)) ? 0.55 : 1 }}><Ic p={P.spark} sz={16} col={C.actTxt} /> {analysing ? 'Läuft …' : 'Weiter: Abgleich starten'}</button>
+          <span style={{ fontSize: 12.5, color: C.sub }}>{anaProg || (!(belege || rech) ? 'Lade zuerst eine CSV.' : !yearChosen ? 'Bitte zuerst das Jahr wählen.' : '')}</span>
+        </div>
+        {analysing && <div className="prog" style={{ marginTop: 10 }} />}
+      </div>
+    </>)}
+
+    {step === 2 && (<>
+      <div style={{ ...card, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 17, fontWeight: 800, flex: 1, minWidth: 200 }}>Abgleich · {year === 'alle' ? 'Alle Jahre' : year}</div>
+          <button onClick={() => setStep(1)} style={btnS}>‹ Zurück zum Hochladen</button>
+        </div>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 12 }}>
+          <Stat l="Ausgaben" v={stats.ausg} /><Stat l="Einnahmen" v={stats.einn} /><Stat l="✅ Passt" v={stats.passt} c={C.grn} /><Stat l="⚠ Hinweise" v={stats.hinweis} c={stats.hinweis ? C.amb : C.sub} /><Stat l="❌ Fehlt" v={stats.fehlt} c={stats.fehlt ? C.red : C.sub} />{dMatch && <Stat l="Nur in DATEV" v={dMatch.onlyDatev.length} c={dMatch.onlyDatev.length ? C.amb : C.sub} />}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.sub, marginTop: 10, lineHeight: 1.5 }}>{bankMatch ? 'Kontoauszug geladen (' + bankRowsY.length + ' Umsätze). ' : 'Kein Kontoauszug geladen. '}{dMatch ? 'DATEV geladen (' + datevRowsY.length + ' Zeilen). ' : 'Keine DATEV-Datei geladen. '}Bei jeder Zeile kannst du ein fehlendes PDF direkt hochladen, sie <b>für später</b> als To-do vormerken oder <b>ignorieren</b>. Gebucht wird erst in Schritt 3.</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+          {[['alle', 'Alle'], ['ausgaben', 'Ausgaben'], ['einnahmen', 'Einnahmen'], ['passt', '✅ Passt'], ['hinweis', '⚠ Hinweise'], ['fehlt', '❌ Fehlt']].map(([k, t]) => (
+            <button key={k} onClick={() => setFilt(k)} style={{ background: filt === k ? C.txt : C.surf2, color: filt === k ? C.bg : C.txt, border: '1px solid ' + (filt === k ? C.txt : C.bdr), borderRadius: 999, padding: '6px 13px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{t}</button>))}
+          {aiReadDoc && kiOpen > 0 && <button onClick={readMarked} disabled={analysing} style={{ ...btnS, background: AI_GRADIENT, color: '#fff', border: 'none', padding: '6px 13px', fontSize: 12.5 }}>{analysing ? (anaProg || 'KI liest …') : 'KI liest ' + kiOpen + ' markierte PDFs'}</button>}
+        </div>
+        {analysing && <div className="prog" style={{ marginTop: 10 }} />}
+      </div>
       <div style={{ ...card, marginBottom: 14 }}>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div><div style={lbl}>Steuerjahr</div><select value={year} onChange={e => setYear(e.target.value)} style={{ ...SS, width: 130 }}><option value="alle">Alle Jahre</option>{[...new Set([...(yearsSeen), defaultYear].filter(Boolean))].sort().map(y => <option key={y} value={String(y)}>{y}</option>)}</select></div>
@@ -281,7 +423,7 @@ export default function SevdeskImport(props) {
         </div>
       )}
 
-      {B && (
+      {B && filt !== 'einnahmen' && (
         <div style={{ ...card, marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}><div style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>Belege · {FORMAT_LABEL[belege.format]}</div><div style={{ fontSize: 12.5, color: C.sub }}>{belege.fileName}</div></div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10 }}>
@@ -289,40 +431,44 @@ export default function SevdeskImport(props) {
           </div>
           {!zipB && <div style={{ fontSize: 12, color: C.amb, marginTop: 8 }}>Ohne ZIP werden die Belege ohne Datei angelegt – du kannst die PDFs später einzeln nachladen. Besser: jetzt das ZIP dazulegen.</div>}
           <Mapping ui={ui} src={belege} setSrc={setBelege} k="b" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
-          <Table ui={ui} eff={eff} ocr={ocr} ocrOff={ocrOff} setOcrOff={setOcrOff} ocrDiff={ocrDiff} kiRows={kiRows} setKiRows={setKiRows} kiAll={kiAll} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Belege" zip={zipB} X={B} k="b" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
+          <Table ui={ui} statusOf={statusOf} filt={filt} later={later} setLater={setLater} upPdf={upPdf} setUpPdf={setUpPdf} eff={eff} ocr={ocr} ocrOff={ocrOff} setOcrOff={setOcrOff} ocrDiff={ocrDiff} kiRows={kiRows} setKiRows={setKiRows} kiAll={kiAll} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Belege" zip={zipB} X={B} k="b" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
         </div>
       )}
-      {R && (
+      {R && filt !== 'ausgaben' && (
         <div style={{ ...card, marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}><div style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>Rechnungen · {FORMAT_LABEL[rech.format]}</div><div style={{ fontSize: 12.5, color: C.sub }}>{rech.fileName}</div></div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10 }}>
             <Stat l="Importierbar" v={rechGo.length} c={C.grn} /><Stat l="Schon vorhanden" v={R.sum.dup} c={C.amb} /><Stat l="Davon offen" v={rechGo.filter(r => r.status === 'offen').length} /><Stat l="Summe brutto" v={fmt(rechGo.reduce((s, r) => s + (r.storno ? -r.brutto : r.brutto), 0))} /><Stat l="PDF zugeordnet" v={(R.filesMatched) + (zipR ? ' / ' + zipR.entries.length : '')} c={zipR ? C.txt : C.mut} />
           </div>
           <Mapping ui={ui} src={rech} setSrc={setRech} k="r" mapOpen={mapOpen} setMapOpen={setMapOpen} isMobile={isMobile} />
-          <Table ui={ui} eff={eff} ocr={ocr} ocrOff={ocrOff} setOcrOff={setOcrOff} ocrDiff={ocrDiff} kiRows={kiRows} setKiRows={setKiRows} kiAll={kiAll} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Rechnungen" zip={zipR} X={R} k="r" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
+          <Table ui={ui} statusOf={statusOf} filt={filt} later={later} setLater={setLater} upPdf={upPdf} setUpPdf={setUpPdf} eff={eff} ocr={ocr} ocrOff={ocrOff} setOcrOff={setOcrOff} ocrDiff={ocrDiff} kiRows={kiRows} setKiRows={setKiRows} kiAll={kiAll} year={year} setYear={setYear} years={yearsSeen} notes={notes} setNotes={setNotes} title="Rechnungen" zip={zipR} X={R} k="r" withAcct skip={skip} setSkip={setSkip} rowAcct={rowAcct} setRowAcct={setRowAcct} accounts={accounts} acctOf={acctOf} ai={ai} onlyUnsure={onlyUnsure} />
         </div>
       )}
 
-      {aiReadDoc && (B || R) && (belegeGo.length + rechGo.length) > 0 && (() => {
-        const withFile = [...belegeGo.map(r => ['b', r]), ...rechGo.map(r => ['r', r])].filter(([k, r]) => r.file);
-        const marked = withFile.filter(([k, r]) => kiAll || kiRows[k + r.idx]).length;
-        return (
-          <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.35) }}>
-            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <span style={{ width: 44, height: 44, borderRadius: 13, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.spark} sz={20} col="#fff" /></span>
-              <div style={{ flex: 1, minWidth: 240 }}>
-                <div style={{ fontSize: 15, fontWeight: 700 }}>KI soll PDFs lesen (beim Import, im Hintergrund)</div>
-                <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>Hake in der Tabelle in der Spalte „KI" die Zeilen an, deren PDF die KI lesen soll – oder alle auf einmal. Gelesen wird erst, wenn du auf <b>Importieren</b> klickst; danach läuft es im Hintergrund, den Fortschritt siehst du unten rechts. Die KI korrigiert Name, Kategorie, Beschreibung, Nummer und MwSt-Satz. <b>Betrag und Datum ändert sie nie</b> – weicht das PDF ab, legt sie ein To-do an. Verbraucht KI-Guthaben pro PDF.</div>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
-                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', fontSize: 13.5, fontWeight: 600 }}><input type="checkbox" checked={kiAll} onChange={e => setKiAll(e.target.checked)} /> Alle {withFile.length} PDFs von der KI lesen lassen</label>
-                  <span style={{ fontSize: 12.5, color: C.sub }}>{marked} von {withFile.length} PDFs für die KI markiert</span>
-                </div>
-              </div>
-            </div>
-          </div>);
-      })()}
 
-      {(recurB.length + recurR.length > 0) && (() => {
+      {dMatch && dMatch.onlyDatev.length > 0 && (
+        <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.amb, 0.5) }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>In DATEV, aber nicht im Import · {dMatch.onlyDatev.length}</div>
+          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>Diese Buchungen des Steuerberaters finden sich nicht in deinen sevDesk-Dateien. Fehlt etwas, lade die Datei oben nach; sonst „Für später" (To-do) oder „Ignorieren".</div>
+          <div style={{ maxHeight: 280, overflowY: 'auto', marginTop: 8 }}>
+            {dMatch.onlyDatev.map((d, i) => { const a = datevAct['d' + i]; return (
+              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 2px', borderTop: '1px solid ' + C.sep, fontSize: 12.5, opacity: a === 'ignore' ? 0.45 : 1 }}>
+                <span style={{ ...NUM, color: C.sub, whiteSpace: 'nowrap' }}>{d.datum ? d.datum.split('-').reverse().join('.') : '—'}</span>
+                <span style={{ flex: 1, minWidth: 0, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name || d.beschreibung || '—'}{d.nummer ? ' · ' + d.nummer : ''}</span>
+                <span style={{ ...NUM, whiteSpace: 'nowrap' }}>{fmt(d.brutto)}</span>
+                <button onClick={() => setDatevAct(x => ({ ...x, ['d' + i]: a === 'later' ? null : 'later' }))} style={{ ...btnS, padding: '4px 10px', fontSize: 12, background: a === 'later' ? hexA(C.pri, 0.16) : C.surf2 }}>{a === 'later' ? '✓ Für später' : 'Für später'}</button>
+                <button onClick={() => setDatevAct(x => ({ ...x, ['d' + i]: a === 'ignore' ? null : 'ignore' }))} style={{ ...btnS, padding: '4px 10px', fontSize: 12 }}>{a === 'ignore' ? '✓ Ignoriert' : 'Ignorieren'}</button>
+              </div>); })}
+          </div>
+        </div>)}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        <button onClick={() => setStep(1)} style={btnS}>‹ Zurück</button>
+        <button onClick={() => setStep(3)} style={btnP}>Weiter: Wiederkehrendes prüfen ›</button>
+      </div>
+    </>)}
+
+    {step === 3 && (<>
+      {(recurB.length + recurR.length > 0) ? (() => {
         const M = (f) => ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'][f.m] + ' ' + f.y;
         const sec = (title, groups, go, k, note) => groups.filter(g => g.idxs.some(i => goIdx(go).has(i))).length > 0 && (
           <div style={{ marginTop: 12 }}>
@@ -341,82 +487,62 @@ export default function SevdeskImport(props) {
             {sec('BELEGE / AUSGABEN', recurB, belegeGo, 'b')}
             {sec('RECHNUNGEN / EINNAHMEN', recurR, rechGo, 'r', g => ' · neue Rechnung ab ' + M({ y: g.to.m === 11 ? g.to.y + 1 : g.to.y, m: (g.to.m + 1) % 12 }))}
           </div>);
-      })()}
-
-      {reviewRows.length > 0 && (
-        <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.amb, 0.5) }}>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>Zu prüfen · {reviewRows.length} Posten</div>
-          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>Hier landet alles, was du noch einmal ansehen solltest: Zeilen mit KI-Haken, Notizen mit „anschauen / prüfen / ?" und mögliche Doppelungen. Beim Verbuchen kommen sie in den Bereich <b>Zu prüfen</b> unter dem Import, dort kannst du das PDF öffnen und sie abhaken. Die Buchung selbst ist sofort drin – es geht nichts verloren.</div>
-          <div style={{ maxHeight: 260, overflowY: 'auto', marginTop: 8 }}>
-            {reviewRows.slice(0, 200).map(({ r, k, why }) => (
-              <div key={k + r.idx} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 2px', borderTop: '1px solid ' + C.sep, fontSize: 12.5 }}>
-                <span style={{ ...NUM, color: C.sub, whiteSpace: 'nowrap' }}>{r.datum ? r.datum.split('-').reverse().join('.') : '—'}</span>
-                <span style={{ flex: 1, minWidth: 0, color: C.txt, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}</span>
-                <span style={{ ...NUM, whiteSpace: 'nowrap' }}>{fmt(r.brutto)}</span>
-                <span style={{ color: C.amb, fontSize: 11.5, maxWidth: '38%' }}>{why.join(' · ')}</span>
-              </div>))}
-          </div>
-        </div>
-      )}
-
-      <div style={{ ...card, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ fontSize: 11.5, fontWeight: 800, color: C.pri, letterSpacing: '0.05em', marginBottom: 2 }}>SCHRITT 1 VON 2</div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{belegeGo.length} Belege und {rechGo.length} Rechnungen{year !== 'alle' ? ' für ' + year : ''} importieren</div>
-          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>{progress || (busy ? 'Läuft…' : 'Buchungen kommen als offen in den jeweiligen Monat, PDFs in den Beleg-Speicher, Kunden und Rechnungen in den Rechnungsbereich. Zugeordnet/abgehakt wird erst in Schritt 2 mit dem Kontoauszug.')}</div>
-        </div>
-        <button onClick={() => setConfirmRun('main')} disabled={busy || (!belegeGo.length && !rechGo.length)} style={{ ...btnP, opacity: (busy || (!belegeGo.length && !rechGo.length)) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Verbucht…' : 'Schritt 1: Jetzt verbuchen'}</button>
-      </div>
-
-    </>)}
+      })() : <div style={{ ...card, marginBottom: 14, fontSize: 13.5, color: C.sub }}>Keine wiederkehrenden Buchungen (Leasing, Raten, Abos) erkannt.</div>}
 
       <div style={{ ...card, marginBottom: 14 }}>
-        <div style={{ fontSize: 11.5, fontWeight: 800, color: C.pri, letterSpacing: '0.05em', marginBottom: 2 }}>SCHRITT 2 VON 2</div>
-        <div style={{ fontSize: 15, fontWeight: 700 }}>Kontoauszug hochladen und abgleichen</div>
-        <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, marginBottom: 12, lineHeight: 1.5 }}>Erst jetzt – nachdem alle Belege und Rechnungen drin sind – werden Zahlungen den offenen Posten zugeordnet und abgehakt. So gibt es keine doppelte Arbeit. Fehlende Zahlungen werden als To-do angelegt.</div>
-    <label style={{ display: 'flex', alignItems: 'center', gap: 12, background: bank.length ? hexA(C.grn, 0.08) : C.surf2, border: '1.5px ' + (bank.length ? 'solid ' + hexA(C.grn, 0.5) : 'dashed ' + C.bdrM), borderRadius: 14, padding: '13px 14px', cursor: 'pointer', marginBottom: 12 }}>
-      <span style={{ width: 38, height: 38, borderRadius: 11, background: bank.length ? C.grn : C.surf3, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={bank.length ? P.check : P.bank} sz={17} col={bank.length ? '#fff' : C.sub} /></span>
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: C.txt }}>Kontoauszüge · CSV, PDF oder Foto (mehrere möglich)</span>
-        <span style={{ display: 'block', fontSize: 12, color: C.sub, marginTop: 2 }}>{bank.length ? bank.map(b => b.name + (b.rows ? ' (' + b.rows.length + ' Umsätze)' : ' (wird gelesen)')).join(' · ') : 'Die Umsätze werden mit deinen Belegen und Rechnungen abgeglichen; die Datei wird für den Steuerberater abgelegt.'}</span>
-      </span>
-      {bank.length > 0 && <button onClick={e => { e.preventDefault(); setBank([]); }} style={{ background: 'none', border: 'none', color: C.mut, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit' }}>Entfernen</button>}
-      <input type="file" multiple accept=".csv,.txt,.pdf,image/*,text/csv" onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ''; if (fs.length) addBank(fs); }} style={{ display: 'none' }} />
-    </label>
-        <button onClick={() => setConfirmRun('bank')} disabled={busy || !bank.length} style={{ ...btnP, opacity: (busy || !bank.length) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Läuft…' : 'Schritt 2: Kontoauszug einlesen & abgleichen'}</button>
+        <div style={{ fontSize: 11.5, fontWeight: 800, color: C.pri, letterSpacing: '0.05em', marginBottom: 2 }}>SCHRITT 3 VON 3</div>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>{belegeGo.length} Belege und {rechGo.length} Rechnungen{year !== 'alle' ? ' aus ' + year : ''} verbuchen</div>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', margin: '10px 0' }}>
+          <Stat l="✅ Passt" v={stats.passt} c={C.grn} /><Stat l="⚠ Hinweise" v={stats.hinweis} c={stats.hinweis ? C.amb : C.sub} /><Stat l="❌ Fehlt" v={stats.fehlt} c={stats.fehlt ? C.red : C.sub} /><Stat l="Für später (To-do)" v={Object.keys(later).filter(k => later[k]).length + Object.values(datevAct).filter(v => v === 'later').length} />
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.txt, cursor: 'pointer', marginBottom: 6 }}><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> Alles sofort als bezahlt buchen (sonst bleiben Posten offen, die nicht im Kontoauszug gefunden wurden)</label>
+        <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>{progress || 'Beim Verbuchen landen Buchungen in den Konten, PDFs im Beleg-Speicher, Kunden und Rechnungen im Rechnungsbereich, Kontoauszüge und weitere Unterlagen bei den Steuerunterlagen.'}</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+          <button onClick={() => setStep(2)} style={btnS}>‹ Zurück zum Abgleich</button>
+          <button onClick={() => setConfirmRun(true)} disabled={busy || (!belegeGo.length && !rechGo.length)} style={{ ...btnP, opacity: (busy || (!belegeGo.length && !rechGo.length)) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Verbucht …' : 'Alles richtig verbuchen'}</button>
+        </div>
+        {busy && <div className="prog" style={{ marginTop: 10 }} />}
       </div>
-      {busy && <div className="prog" style={{ marginBottom: 14 }} />}
       {result && (
         <div style={{ ...card, marginBottom: 14, background: hexA(C.grn, 0.07), border: '1px solid ' + hexA(C.grn, 0.35) }}>
-          <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>{result.stage === 'bank' ? 'Kontoauszug verarbeitet – ' + result.kontoauszuege + ' Auszug/Auszüge, ' + result.bankUmsaetze + ' Umsätze. Offene Posten werden abgeglichen und abgehakt, Fehlendes als To-do angelegt.' : <>Fertig – {result.belege} Belege, {result.rechnungen} Rechnungen, {result.kunden} neue Kunden, {result.dateien} Dateien abgelegt{result.wiederkehrend ? ' · ' + result.wiederkehrend + ' Belege als wiederkehrend markiert' : ''}{result.serien ? ' · ' + result.serien + ' laufende Rechnungs-Serie(n) angelegt' : ''}{result.kontoauszuege ? ' · ' + result.kontoauszuege + ' Kontoauszug/-auszüge abgelegt (' + result.bankUmsaetze + ' Umsätze zum Abgleich im Bereich Bank)' : ''}</>}</div>
+          <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>Fertig – {result.belege} Belege, {result.rechnungen} Rechnungen, {result.kunden} neue Kunden, {result.dateien} Dateien abgelegt{result.wiederkehrend ? ' · ' + result.wiederkehrend + ' Belege als wiederkehrend markiert' : ''}{result.serien ? ' · ' + result.serien + ' laufende Rechnungs-Serie(n) angelegt' : ''}{result.kontoauszuege ? ' · ' + result.kontoauszuege + ' Kontoauszug/-auszüge' : ''}</div>
           <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.6 }}>{result.fehler ? result.fehler + ' Datei(en) konnten nicht hochgeladen werden, die Buchungen sind trotzdem da. ' : ''}Schau jetzt in die Konten oder direkt in die Steuerprognose {year !== 'alle' ? year : ''} – dort sind die Zahlen sofort drin. Einen erneuten Import mit denselben Dateien erkennt Buqo als Dubletten.</div>
         </div>
       )}
-      {confirmRun && (() => {
-      const stornos = [...belegeGo, ...rechGo].filter(r => r.storno).length; const kiN = allGo.filter(x => x.r.file && (kiAll || kiRows[x.k + x.r.idx] || dupFlag[x.k + x.r.idx])).length;
-      const years = [...new Set([...(yearsSeen), defaultYear].filter(Boolean))].sort();
-      const stage = confirmRun; const allYears = year === 'alle';
+    </>)}
+
+    {yearAsk && (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 185, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+        <div style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 18, padding: '20px 22px', maxWidth: 420, width: '100%', boxShadow: '0 24px 60px rgba(0,0,0,0.3)' }}>
+          <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 6 }}>Welches Jahr soll importiert werden?</div>
+          <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.5, marginBottom: 12 }}>Nur dieses Jahr wird geladen und später gebucht. Alle anderen Jahre bleiben draußen – auch bei PDFs, DATEV und Kontoauszügen.</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {yearsSeen.slice().reverse().map(y => (
+              <button key={y} onClick={() => { setYear(String(y)); setYearChosen(true); setYearAsk(false); }} style={{ ...btnS, justifyContent: 'space-between', borderRadius: 12, padding: '12px 14px', background: String(y) === year && yearChosen ? hexA(C.pri, 0.14) : C.surf2 }}><span>{y}</span><span style={{ color: C.sub, fontWeight: 600 }}>{yearCounts[y] || 0} Zeilen</span></button>))}
+            <button onClick={() => { setYear('alle'); setYearChosen(true); setYearAsk(false); }} style={{ ...btnS, borderRadius: 12, padding: '12px 14px', color: C.sub }}>Alle Jahre</button>
+          </div>
+        </div>
+      </div>)}
+
+    {confirmRun && (() => {
+      const stornos = [...belegeGo, ...rechGo].filter(r => r.storno).length; const laterN = Object.keys(later).filter(k => later[k]).length;
+      const allYears = year === 'alle';
       return (
-        <div onClick={() => setConfirmRun(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+        <div onClick={() => setConfirmRun(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 18, padding: '20px 22px', maxWidth: 460, width: '100%', boxShadow: '0 24px 60px rgba(0,0,0,0.3)' }}>
-            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 8 }}>{stage === 'bank' ? 'Kontoauszug jetzt einlesen?' : 'Jetzt verbuchen?'}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}><span style={{ fontSize: 13, fontWeight: 700 }}>Nur dieses Jahr laden:</span><select value={year} onChange={e => setYear(e.target.value)} style={{ ...SS, width: 'auto' }}>{years.map(y => <option key={y} value={String(y)}>{y}</option>)}<option value="alle">Alle Jahre</option></select></div>
-            {allYears && <div style={{ background: hexA(C.amb, 0.12), border: '1px solid ' + hexA(C.amb, 0.5), borderRadius: 10, padding: '8px 12px', fontSize: 12.5, marginBottom: 10 }}>⚠ Du hast <b>Alle Jahre</b> gewählt. Wenn nur ein Jahr rein soll, wähle es oben aus.</div>}
-            {stage === 'main' ? (
-              <div style={{ fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
-                Es werden <b>{belegeGo.length} Belege</b> und <b>{rechGo.length} Rechnungen</b> {allYears ? 'aus allen Jahren' : 'aus ' + year} gebucht – als <b>offen</b>{confirmed ? ' (du hast „sofort als bezahlt" gewählt)' : ''}. Andere Jahre und bereits vorhandene Buchungen bleiben unberührt.
-                {stornos > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Davon {stornos} Storno/Gutschriften – sie werden als negativer Betrag gebucht.</div>}
-                {kiN > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Danach liest die KI im Hintergrund {kiN} PDFs (Fortschritt unten rechts).</div>}
-                <div style={{ color: C.sub, fontSize: 12.5 }}>Bis jetzt wurde nichts gespeichert – alles liegt nur in diesem Browser.</div>
-              </div>
-            ) : (
-              <div style={{ fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
-                <b>{bank.length} Kontoauszug-Datei(en)</b> werden eingelesen, aber nur Umsätze {allYears ? 'aus allen Jahren' : 'aus ' + year}. Danach werden offene Posten abgeglichen und abgehakt.
-              </div>
-            )}
+            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 8 }}>Jetzt alles verbuchen?</div>
+            {allYears && <div style={{ background: hexA(C.amb, 0.12), border: '1px solid ' + hexA(C.amb, 0.5), borderRadius: 10, padding: '8px 12px', fontSize: 12.5, marginBottom: 10 }}>⚠ Du hast <b>Alle Jahre</b> gewählt.</div>}
+            <div style={{ fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
+              Es werden <b>{belegeGo.length} Belege</b> und <b>{rechGo.length} Rechnungen</b> {allYears ? 'aus allen Jahren' : 'aus ' + year} gebucht{bankMatch ? ' – im Kontoauszug gefundene als bezahlt, die übrigen als offen' : ' – als offen'}{confirmed ? ' (du hast „sofort als bezahlt" gewählt)' : ''}. Andere Jahre und bereits vorhandene Buchungen bleiben unberührt.
+              {stornos > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Davon {stornos} Storno/Gutschriften – negativ gebucht.</div>}
+              {laterN > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Für {laterN} Zeilen entsteht ein To-do („Für später").</div>}
+              {bank.length > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>{bank.length} Kontoauszug-Datei(en) werden für den Steuerberater abgelegt.</div>}
+              {extra.length > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>{extra.length} weitere Unterlage(n) kommen in die Steuerunterlagen (KI liest sie aus).</div>}
+              <div style={{ color: C.sub, fontSize: 12.5 }}>Bis jetzt wurde nichts gespeichert – alles liegt nur in diesem Browser.</div>
+            </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button onClick={() => { const st = confirmRun; setConfirmRun(null); run(st); }} style={{ flex: 1, background: C.act, color: C.actTxt, border: 'none', borderRadius: 11, padding: '12px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{stage === 'bank' ? 'Jetzt einlesen' : 'Jetzt verbuchen'}</button>
-              <button onClick={() => setConfirmRun(null)} style={{ background: C.surf2, color: C.txt, border: '1px solid ' + C.bdr, borderRadius: 11, padding: '12px 16px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Abbrechen</button>
+              <button onClick={() => { setConfirmRun(false); run(); }} style={{ flex: 1, background: C.act, color: C.actTxt, border: 'none', borderRadius: 11, padding: '12px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Jetzt verbuchen</button>
+              <button onClick={() => setConfirmRun(false)} style={{ background: C.surf2, color: C.txt, border: '1px solid ' + C.bdr, borderRadius: 11, padding: '12px 16px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Abbrechen</button>
             </div>
           </div>
         </div>); })()}
@@ -439,7 +565,7 @@ function Mapping({ ui, src, setSrc, k, mapOpen, setMapOpen, isMobile }) {
     </div>
   );
 }
-function Table({ ui, eff, ocr, ocrOff, setOcrOff, ocrDiff, kiRows, setKiRows, kiAll, X, k, title, zip, year, setYear, years, notes, setNotes, withAcct, skip, setSkip, rowAcct, setRowAcct, accounts, acctOf, ai, onlyUnsure }) {
+function Table({ ui, statusOf, filt, later, setLater, upPdf, setUpPdf, eff, ocr, ocrOff, setOcrOff, ocrDiff, kiRows, setKiRows, kiAll, X, k, title, zip, year, setYear, years, notes, setNotes, withAcct, skip, setSkip, rowAcct, setRowAcct, accounts, acctOf, ai, onlyUnsure }) {
   const { C, SS, NUM, fmt, hexA } = ui;
   const [sort, setSort] = useState('name');        // Sortierung: nach Name (Standard), Datum oder Betrag
   const [noteAsk, setNoteAsk] = useState(null);      // Rückfrage nach einer Notiz: {r, val, count}
@@ -452,7 +578,7 @@ function Table({ ui, eff, ocr, ocrOff, setOcrOff, ocrDiff, kiRows, setKiRows, ki
     const aiOf = (r) => (ai && ai[k + r.idx]) || null;
     const nkey = (r) => String(r.name || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
     const cmpName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'de', { sensitivity: 'base' }) || String(a.datum || '').localeCompare(String(b.datum || ''));
-    const rows = X.rows.filter(r => r.inYear && (!onlyUnsure || (aiOf(r) && !aiOf(r).sure && !rowAcct[k + r.idx]))).sort(sort === 'datum' ? (a, b) => String(a.datum || '').localeCompare(String(b.datum || '')) : sort === 'betrag' ? (a, b) => (b.brutto || 0) - (a.brutto || 0) : cmpName).slice(0, big ? 3000 : 300);
+    const rows = X.rows.filter(r => r.inYear && (!statusOf || !filt || ['alle', 'ausgaben', 'einnahmen'].includes(filt) || statusOf(k, r).cls === filt) && (!onlyUnsure || (aiOf(r) && !aiOf(r).sure && !rowAcct[k + r.idx]))).sort(sort === 'datum' ? (a, b) => String(a.datum || '').localeCompare(String(b.datum || '')) : sort === 'betrag' ? (a, b) => (b.brutto || 0) - (a.brutto || 0) : cmpName).slice(0, big ? 3000 : 300);
     // Beleg in neuem Tab: Fenster sofort öffnen (Popup-Blocker), Datei danach laden
     const openTab = async (r) => {
       const w = window.open('', '_blank'); if (w) { try { w.document.title = r.file; w.document.body.style.cssText = 'margin:0;font-family:sans-serif;background:#222;color:#fff'; w.document.body.innerText = 'Beleg wird geladen…'; } catch (e) { /* egal */ } }
@@ -525,7 +651,7 @@ function Table({ ui, eff, ocr, ocrOff, setOcrOff, ocrDiff, kiRows, setKiRows, ki
       </div>
       <div style={{ overflowX: 'auto', marginTop: 8, maxHeight: big ? 'calc(100vh - 90px)' : 420, overflowY: 'auto', border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
-          <thead><tr><th style={th}></th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Nummer</th><th style={th}>Kategorie</th><th style={{ ...th, textAlign: 'right' }}>Brutto</th><th style={th}>MwSt</th>{withAcct && <th style={th}>Konto</th>}<th style={th}>PDF</th><th style={th} title="KI liest das PDF beim Import im Hintergrund">KI</th><th style={th}>Notiz für den Steuerberater</th><th style={th}>Hinweis</th></tr></thead>
+          <thead><tr><th style={th}></th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Nummer</th><th style={th}>Kategorie</th><th style={{ ...th, textAlign: 'right' }}>Brutto</th><th style={th}>MwSt</th>{withAcct && <th style={th}>Konto</th>}<th style={th}>PDF</th><th style={th} title="KI liest das PDF beim Import im Hintergrund">KI</th><th style={th}>Notiz für den Steuerberater</th><th style={th}>Hinweis</th>{statusOf && <th style={th}>Status</th>}{statusOf && <th style={th}>Aktion</th>}</tr></thead>
           <tbody>
             {rows.map(r => { const off = r.dup || r.cancelled || !(r.brutto > 0 && r.datum); const sk = !!skip[k + r.idx]; const dim = off || sk; const e = eff(k, r); const o = ocr[k + r.idx]; const kiOn = !!o && !o.error && !ocrOff[k + r.idx]; const chg = (f) => kiOn && e[f] !== r[f]; const odiff = ocrDiff(k, r); return (
               <tr key={r.idx} style={{ opacity: dim ? 0.5 : 1, background: dim ? 'transparent' : (r.kind === 'ein' ? hexA(C.grn, 0.04) : 'transparent') }}>
@@ -541,6 +667,13 @@ function Table({ ui, eff, ocr, ocrOff, setOcrOff, ocrDiff, kiRows, setKiRows, ki
                 <td style={{ ...td, textAlign: 'center' }}>{r.file ? <input type="checkbox" checked={kiAll || !!kiRows[k + r.idx]} disabled={kiAll || off} onChange={e => setKiRows(p => ({ ...p, [k + r.idx]: e.target.checked }))} title="KI soll dieses PDF beim Import lesen" /> : <span style={{ color: C.mut }}>—</span>}</td>
                 <td style={{ ...td, minWidth: big ? 280 : 170 }}><input value={(notes && notes[k + r.idx]) || ''} onChange={e => setNotes(n => ({ ...n, [k + r.idx]: e.target.value }))} onBlur={e => askNote(r, e.target.value)} placeholder="z. B. Material Wohnung 2" disabled={off} style={{ ...SS, width: '100%', fontSize: 12, padding: '5px 8px', textAlign: 'left', boxSizing: 'border-box' }} /></td>
                 <td style={{ ...td, fontSize: 12, color: r.dup ? C.amb : (r.cancelled ? C.mut : C.exp) }}>{r.dup ? 'schon vorhanden' : r.cancelled ? 'storniert/Entwurf' : r.warn.join(', ')}{odiff.length > 0 && <div style={{ color: C.amb, fontWeight: 700 }}>{odiff.join(' · ')}</div>}{o && !o.error && (e !== r || odiff.length > 0) && <button onClick={() => setOcrOff(p => ({ ...p, [k + r.idx]: !p[k + r.idx] }))} style={{ marginTop: 3, background: 'none', border: 'none', color: C.mut, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', padding: 0, textDecoration: 'underline' }}>{ocrOff[k + r.idx] ? 'KI-Korrektur wieder an' : 'KI-Korrektur aus'}</button>}{o && o.error && <div style={{ color: C.red }}>KI: {o.error}</div>}</td>
+                {statusOf && (() => { const st = statusOf(k, r); const key = k + r.idx; const hasPdf = r.file || upPdf[key]; const small = { background: C.surf2, border: '1px solid ' + C.bdr, color: C.txt, borderRadius: 8, padding: '3px 8px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }; return (<>
+                  <td style={{ ...td, minWidth: 190, maxWidth: 320 }}>{st.chips.map((c, i) => { const col = c.c === 'ok' ? C.grn : c.c === 'miss' ? C.red : c.c === 'ai' ? C.pri : C.amb; return <span key={i} style={{ display: 'inline-block', margin: '0 4px 4px 0', fontSize: 11, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 7px', lineHeight: 1.35 }}>{c.t}</span>; })}{!st.chips.length && <span style={{ color: C.mut }}>—</span>}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                    {!hasPdf && <label style={{ ...small, display: 'inline-block', marginRight: 5 }}>PDF hochladen<input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) setUpPdf(p => ({ ...p, [key]: { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) } })); }} /></label>}
+                    <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} style={{ ...small, marginRight: 5, background: later[key] ? hexA(C.pri, 0.16) : C.surf2 }}>{later[key] ? '✓ Für später' : 'Für später'}</button>
+                    <button onClick={() => setSkip(sk => ({ ...sk, [key]: !sk[key] }))} style={small}>{skip[key] ? '✓ Ignoriert' : 'Ignorieren'}</button>
+                  </td></>); })()}
               </tr>
             ); })}
           </tbody>
