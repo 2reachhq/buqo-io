@@ -173,7 +173,7 @@ export default function SevdeskImport(props) {
     groups.forEach(list => { if (list.length < 2) return; list.forEach(a => { const near = list.some(b => b !== a && (Math.abs(new Date(a.r.datum) - new Date(b.r.datum)) <= 5 * 864e5 || (a.r.nummer && a.r.nummer === b.r.nummer))); if (near) flag[a.k + a.r.idx] = true; }); });
     return flag;
   }, [belege, rech, year, skip]); // eslint-disable-line
-  const reviewOf = (k, r) => { const w = []; if (kiAll || kiRows[k + r.idx]) w.push('KI soll PDF lesen'); const n = String((notes && notes[k + r.idx]) || ''); if (NOTE_RE.test(n)) w.push('Notiz: ' + n.slice(0, 60)); if (dupFlag[k + r.idx]) w.push('Mögliche Doppelung (gleicher Name + Betrag, ±5 Tage)'); return w; };
+  const reviewOf = (k, r) => { const w = []; if (kiAll || kiRows[k + r.idx]) w.push('KI soll PDF lesen'); const n = String((notes && notes[k + r.idx]) || ''); if (NOTE_RE.test(n)) w.push('Notiz: ' + n.slice(0, 60)); if (dupFlag[k + r.idx]) w.push('Mögliche Doppelung (gleicher Name + Betrag, ±5 Tage) – KI prüft das PDF (Storno?)'); return w; };
   const reviewRows = allGo.map(x => ({ ...x, why: reviewOf(x.k, x.r) })).filter(x => x.why.length);
   const run = async (stage) => {
     if (busy || (stage === 'bank' ? !bank.length : !belegeGo.length && !rechGo.length)) return;
@@ -182,8 +182,8 @@ export default function SevdeskImport(props) {
       const payload = {
         confirmed, minCust,
         bank: stage === 'bank' ? bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })) : [],
-        belege: stage === 'bank' ? [] : belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, review: reviewOf('b', r0), ki: !!r.file && (kiAll || !!kiRows['b' + r.idx]), taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
-        rechnungen: stage === 'bank' ? [] : rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, review: reviewOf('r', r0), ki: !!r.file && (kiAll || !!kiRows['r' + r.idx]), taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file) }); }),
+        belege: stage === 'bank' ? [] : belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, review: reviewOf('b', r0), ki: !!r.file && (kiAll || !!kiRows['b' + r.idx] || !!dupFlag['b' + r.idx]), taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; }),
+        rechnungen: stage === 'bank' ? [] : rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, review: reviewOf('r', r0), ki: !!r.file && (kiAll || !!kiRows['r' + r.idx] || !!dupFlag['r' + r.idx]), taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file) }); }),
         // laufende Rechnungs-Serien: ab dem Folgemonat automatisch weiter erzeugen
         recurInvoices: stage === 'bank' ? [] : recurActive(recurR, rechGo, 'r').filter(g => g.ongoing && g.idxs.includes(g.last.idx) && rechGo.some(r => r.idx === g.last.idx)).map(g => ({ name: g.last.name, dest: acctOf('r', g.last), netto: g.last.netto, mwst: g.last.mwst, beschreibung: g.last.beschreibung, adresse: g.last.adresse, lastY: g.to.y, lastM: g.to.m })),
       };

@@ -2515,27 +2515,53 @@ function App({session}) {
     setBelegBusy(false);
   };
   /* ── KI liest importierte PDFs im Hintergrund und verbessert Name/Kategorie/Beschreibung/Nummer/MwSt. Betrag und Datum bleiben unverändert (Abweichung → To-do) ── */
+  // Ergebnis der KI-Lesung auf die Buchung anwenden (nie Betrag/Datum) und im Bereich „Zu prüfen" festhalten
+  const applyKiResult=(j,r,o)=>{
+    const patchItem=(id,fn)=>{ const walk=(o)=>{ if(Array.isArray(o)){ for(const it of o){ if(it&&typeof it==='object'&&it.id===id&&('amount' in it)){ fn(it); return true; } if(walk(it)) return true; } } else if(o&&typeof o==='object'){ for(const k of Object.keys(o)){ if(walk(o[k])) return true; } } return false; }; return walk; };
+          const diff=[]; if(o.brutto!=null && Math.abs(o.brutto-r.brutto)>0.02) diff.push('Betrag laut PDF '+fmt(o.brutto)+' statt '+fmt(r.brutto)); if(o.datum && r.datum && o.datum!==r.datum) diff.push('Datum laut PDF '+o.datum.split('-').reverse().join('.')+' statt '+r.datum.split('-').reverse().join('.'));
+          let ch=false; const chs=[];
+          setData(prev=>{ chs.length=0; const nd=JSON.parse(JSON.stringify(prev)); const M=(nd[r.y]&&nd[r.y][r.m])||{}; let hit=false;
+            patchItem(j.id, it=>{ hit=true; if(j.kind==='b'){ if(o.name && normName(o.name)!==normName(it.name)){ chs.push('Name „'+it.name+'“ → „'+String(o.name).slice(0,90)+'“'); it.name=String(o.name).slice(0,90); ch=true; } if(o.kategorie && r.kind==='aus' && CATS.includes(o.kategorie) && o.kategorie!==it.category){ chs.push('Kategorie → '+o.kategorie); it.category=o.kategorie; ch=true; } if(o.mwst!=null && o.brutto!=null && Math.abs(o.brutto-r.brutto)<0.02 && o.mwst!==it.mwst){ chs.push('MwSt → '+o.mwst+' %'); it.mwst=o.mwst; it.netto=Math.round(r.brutto/(1+o.mwst/100)*100)/100; ch=true; } }
+              if(o.nummer && !it.belegnr){ it.belegnr=String(o.nummer).slice(0,40); ch=true; }
+              if(o.beschreibung && !String(it.note||'').includes(o.beschreibung)){ it.note=[o.beschreibung.slice(0,120), it.note].filter(Boolean).join(' · '); ch=true; }
+              if(diff.length && !String(it.note||'').includes('⚠ '+diff.join('; '))){ it.note=[it.note, '⚠ '+diff.join('; ')].filter(Boolean).join(' · '); } })(M);
+            { const rv=(nd.importReview=nd.importReview||[]); let ex=rv.find(x=>x.itemId===j.id); const add=[]; if(chs.length||diff.length) add.push('KI: '+[...chs,...diff].join('; ')); if(o.storno) add.push('PDF ist Storno/Gutschrift/Korrektur – keine echte Doppelung'); if(add.length||ex||o.urteil){ if(!ex){ ex={id:uid(), inv:j.kind==='r', itemId:j.id, y:r.y, m:r.m, acct:r.acct, kind:j.kind==='r'?'ein':r.kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:[], path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:new Date().toISOString()}; rv.push(ex); } const have=new Set(ex.reasons||[]); const fresh=add.filter(x=>!have.has(x)); ex.reasons=[...(ex.reasons||[]),...fresh]; if(fresh.length) ex.done=false; if(o.urteil) ex.verdict=String(o.urteil).slice(0,300); ex.storno=!!o.storno; ex.checkedAt=new Date().toISOString(); } }
+            return nd; });
+    return {ch, diff};
+  };
+  // „Zu prüfen": PDF erneut von der KI lesen lassen, mit deinem Hinweis. Betrag/Datum bleiben unverändert.
+  const [revBusy,setRevBusy]=useState({});
+  const reanalyzeReview = async (ids)=>{
+    const list=(dataRef.current.importReview||[]).filter(x=>ids.includes(x.id));
+    if(!list.length) return;
+    setRevBusy(b=>{ const n={...b}; list.forEach(x=>{ n[x.id]=true; }); return n; });
+    let ok=0, fail=0, noPdf=0, idx=0;
+    const worker=async()=>{ while(idx<list.length){ const x=list[idx++];
+      try{
+        if(!x.path){ noPdf++; setData(prev=>({...prev, importReview:(prev.importReview||[]).map(y=>y.id===x.id?{...y, verdict:'Kein PDF zu dieser Buchung gespeichert – KI kann nur mit deinem Hinweis nicht prüfen. Bitte PDF nachladen.', checkedAt:new Date().toISOString()}:y)})); continue; }
+        const {data:blob,error}=await sb.storage.from('belege').download(x.path); if(error||!blob) throw (error||new Error('Download'));
+        const bytes=new Uint8Array(await blob.arrayBuffer());
+        const o=await aiReadDoc(bytes, x.fileName||x.path, {kind:x.kind, name:x.name, brutto:x.brutto, note:x.hint||'', context:(x.reasons||[]).join(' | ').slice(0,400)});
+        applyKiResult({id:x.itemId, kind:x.inv?'r':'b'}, {y:x.y,m:x.m,acct:x.acct,kind:x.kind,name:x.name,brutto:x.brutto,datum:x.datum,nummer:x.nummer,filePath:x.path,fileName:x.fileName}, o);
+        ok++;
+      }catch(e){ fail++; }
+      setRevBusy(b=>{ const n={...b}; delete n[x.id]; return n; });
+    } };
+    await Promise.all([worker(),worker(),worker()]);
+    setRevBusy(b=>{ const n={...b}; list.forEach(x=>{ delete n[x.id]; }); return n; });
+    setToast('KI-Prüfung fertig: '+ok+' geprüft'+(noPdf?', '+noPdf+' ohne PDF':'')+(fail?', '+fail+' Fehler':''));
+  };
   const startKiJobs = async (jobs)=>{
     if(kiRunRef.current){ setToast('Die KI liest noch – bitte kurz warten.'); return; }
     kiRunRef.current=true; kiCancelRef.current=false;
     let done=0, errs=0, changed=0; const mism=[]; let idx=0;
     setKiJob({total:jobs.length, done:0, errs:0, changed:0, running:true});
-    const patchItem=(id,fn)=>{ const walk=(o)=>{ if(Array.isArray(o)){ for(const it of o){ if(it&&typeof it==='object'&&it.id===id&&('amount' in it)){ fn(it); return true; } if(walk(it)) return true; } } else if(o&&typeof o==='object'){ for(const k of Object.keys(o)){ if(walk(o[k])) return true; } } return false; }; return walk; };
     const worker=async()=>{
       while(idx<jobs.length && !kiCancelRef.current){
         const j=jobs[idx++]; const r=j.r;
         try{
           const bytes=await r.file.data(); const o=await aiReadDoc(bytes, r.file.name, {kind:j.kind==='r'?'ein':r.kind, name:r.name, brutto:r.brutto});
-          const diff=[]; if(o.brutto!=null && Math.abs(o.brutto-r.brutto)>0.02) diff.push('Betrag laut PDF '+fmt(o.brutto)+' statt '+fmt(r.brutto)); if(o.datum && r.datum && o.datum!==r.datum) diff.push('Datum laut PDF '+o.datum.split('-').reverse().join('.')+' statt '+r.datum.split('-').reverse().join('.'));
-          if(diff.length) mism.push({name:r.name||'Beleg', nummer:r.nummer||'', diff});
-          let ch=false; const chs=[];
-          setData(prev=>{ chs.length=0; const nd=JSON.parse(JSON.stringify(prev)); const M=nd[r.y]&&nd[r.y][r.m]; if(!M) return prev; let hit=false;
-            patchItem(j.id, it=>{ hit=true; if(j.kind==='b'){ if(o.name && normName(o.name)!==normName(it.name)){ chs.push('Name „'+it.name+'“ → „'+String(o.name).slice(0,90)+'“'); it.name=String(o.name).slice(0,90); ch=true; } if(o.kategorie && r.kind==='aus' && CATS.includes(o.kategorie) && o.kategorie!==it.category){ chs.push('Kategorie → '+o.kategorie); it.category=o.kategorie; ch=true; } if(o.mwst!=null && o.brutto!=null && Math.abs(o.brutto-r.brutto)<0.02 && o.mwst!==it.mwst){ chs.push('MwSt → '+o.mwst+' %'); it.mwst=o.mwst; it.netto=Math.round(r.brutto/(1+o.mwst/100)*100)/100; ch=true; } }
-              if(o.nummer && !it.belegnr){ it.belegnr=String(o.nummer).slice(0,40); ch=true; }
-              if(o.beschreibung && !String(it.note||'').includes(o.beschreibung)){ it.note=[o.beschreibung.slice(0,120), it.note].filter(Boolean).join(' · '); ch=true; }
-              if(diff.length){ it.note=[it.note, '⚠ '+diff.join('; ')].filter(Boolean).join(' · '); } })(M);
-            if(hit && (chs.length||diff.length)){ const why='KI: '+[...chs,...diff].join('; '); const rv=(nd.importReview=nd.importReview||[]); const ex=rv.find(x=>x.itemId===j.id); if(ex){ ex.reasons=[...(ex.reasons||[]),why]; ex.done=false; } else rv.push({id:uid(), itemId:j.id, y:r.y, m:r.m, acct:r.acct, kind:j.kind==='r'?'ein':r.kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:[why], path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:new Date().toISOString()}); }
-            return hit?nd:prev; });
+          const diffR=applyKiResult(j,r,o); if(diffR.diff.length) mism.push({name:r.name||'Beleg', nummer:r.nummer||'', diff:diffR.diff}); const ch=diffR.ch;
           if(ch) changed++;
         }catch(e){ errs++; }
         done++; setKiJob({total:jobs.length, done, errs, changed, running:true});
@@ -2586,7 +2612,7 @@ function App({session}) {
       nd.recurInvoices=recs0;
       nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
       // Zu prüfen: Zeilen mit KI-Haken, Notiz „anschauen" oder Doppelungs-Verdacht (Buchung ist bereits drin, nichts geht verloren)
-      const revNew=[...bel.map(r=>({r,kind:r.kind})), ...rec.map(r=>({r,kind:'ein'}))].filter(x=>x.r.review&&x.r.review.length).map(({r,kind})=>({id:uid(), itemId:r._id, y:r.y, m:r.m, acct:r.acct, kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:r.review, path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:now2}));
+      const revNew=[...bel.map(r=>({r,kind:r.kind,inv:false})), ...rec.map(r=>({r,kind:'ein',inv:true}))].filter(x=>x.r.review&&x.r.review.length).map(({r,kind,inv})=>({id:uid(), inv, itemId:r._id, y:r.y, m:r.m, acct:r.acct, kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:r.review, path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:now2}));
       if(revNew.length) nd.importReview=[...(nd.importReview||[]), ...revNew];
       return nd; });
     // Kontoauszüge: Datei für den Steuerberater ablegen, Umsätze als Bank-Entwürfe (Abgleich mit den frisch importierten Belegen/Rechnungen)
@@ -3383,13 +3409,13 @@ function App({session}) {
     const isPdf=/\.pdf$/i.test(fileName); const ext=(fileName.split('.').pop()||'jpg').toLowerCase(); const mt=isPdf?'application/pdf':ext==='png'?'image/png':ext==='webp'?'image/webp':'image/jpeg';
     const blob=new Blob([bytes],{type:mt}); if(blob.size>12*1024*1024) throw new Error('Datei zu groß (>12 MB)'); const b64=await fileToB64(blob);
     const art=hint&&hint.kind==='ein'?'eine AUSGANGSRECHNUNG des Nutzers (er ist Rechnungssteller; "n" = Name des Empfängers/Kunden)':'ein BELEG bzw. eine EINGANGSRECHNUNG (der Nutzer hat bezahlt; "n" = Name des Ausstellers/Lieferanten)';
-    const prompt='Dies ist '+art+' (Deutschland). Lies das Dokument und antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown: {"n":"Name (max 60 Zeichen, korrekt geschrieben, ohne Rechtsform-Zusätze wie Adresse)","d":"TT.MM.JJJJ (Rechnungs-/Belegdatum, leer wenn unklar)","r":"Rechnungs-/Belegnummer (leer wenn keine)","b":Bruttobetrag als Zahl mit Punkt,"nt":Nettobetrag oder null,"mw":19|7|0 (Hauptsteuersatz) oder null,"c":"genau eine Kategorie aus [Allgemein,Miete,Nebenkosten,Versicherung,Material,Personal,Steuern,Software,Marketing,Reise,Bewirtung,Bank & Gebühren,Sonstiges] oder leer","z":"Kurzbeschreibung der Leistung/Ware (max 80 Zeichen)"}. Erfinde nichts; was nicht lesbar ist, bleibt leer/null.'+(hint&&hint.name?' Zur Orientierung steht in der Liste: Name "'+hint.name+'", Betrag '+hint.brutto+' EUR.':'');
+    const prompt='Dies ist '+art+' (Deutschland). Lies das Dokument und antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown: {"n":"Name (max 60 Zeichen, korrekt geschrieben, ohne Rechtsform-Zusätze wie Adresse)","d":"TT.MM.JJJJ (Rechnungs-/Belegdatum, leer wenn unklar)","r":"Rechnungs-/Belegnummer (leer wenn keine)","b":Bruttobetrag als Zahl mit Punkt,"nt":Nettobetrag oder null,"mw":19|7|0 (Hauptsteuersatz) oder null,"c":"genau eine Kategorie aus [Allgemein,Miete,Nebenkosten,Versicherung,Material,Personal,Steuern,Software,Marketing,Reise,Bewirtung,Bank & Gebühren,Sonstiges] oder leer","z":"Kurzbeschreibung der Leistung/Ware (max 80 Zeichen)","sto":true wenn das Dokument eine Stornierung, Gutschrift, Stornorechnung oder Korrekturrechnung ist (sonst false),"u":"EIN kurzer deutscher Satz: Was ist das für ein Dokument und passt es zu den Angaben aus der Liste bzw. zum Hinweis des Nutzers? Ist es ein Storno/Gutschrift, ein echtes Duplikat oder ein eigener Beleg?"}. Erfinde nichts; was nicht lesbar ist, bleibt leer/null.'+(hint&&hint.name?' Zur Orientierung steht in der Liste: Name "'+hint.name+'", Betrag '+hint.brutto+' EUR.':'')+(hint&&hint.context?' Bisherige Auffälligkeiten: '+hint.context+'.':'')+(hint&&hint.note?' WICHTIG – Hinweis des Nutzers, bitte berücksichtigen: "'+hint.note+'".':'');
     const content=[isPdf?{type:'document',source:{type:'base64',media_type:'application/pdf',data:b64}}:{type:'image',source:{type:'base64',media_type:mt,data:b64}},{type:'text',text:prompt}];
-    const {data:resp,error}=await aiInvoke({body:{model:'claude-haiku-4-5',max_tokens:600,messages:[{role:'user',content}]}});
+    const {data:resp,error}=await aiInvoke({body:{model:'claude-haiku-4-5',max_tokens:800,messages:[{role:'user',content}]}});
     if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
     let t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; t=t.replace(/```json|```/g,'').trim(); const mm=t.match(/\{[\s\S]*\}/); if(mm) t=mm[0]; const p=JSON.parse(t);
     const numv=v=>{ if(v==null||v==='') return null; const n=parseFloat(String(v).replace(/\./g,(x,i,s)=>/,/.test(s)?'':x).replace(',','.')); return Number.isFinite(n)?Math.abs(n):null; };
-    return { name:String(p.n||'').trim(), datum:toISO(p.d||''), nummer:String(p.r||'').trim(), brutto:numv(p.b), netto:numv(p.nt), mwst:[0,7,19].includes(+p.mw)?+p.mw:null, kategorie:String(p.c||'').trim(), beschreibung:String(p.z||'').trim() };
+    return { name:String(p.n||'').trim(), datum:toISO(p.d||''), nummer:String(p.r||'').trim(), brutto:numv(p.b), netto:numv(p.nt), mwst:[0,7,19].includes(+p.mw)?+p.mw:null, kategorie:String(p.c||'').trim(), beschreibung:String(p.z||'').trim(), storno:p.sto===true||p.sto==='true', urteil:String(p.u||'').trim() };
   };
   const applyBotImport = (drafts)=>{ addImportDrafts(drafts||[]); setBotMsgs(m=>[...m,{role:'assistant',content:(drafts||[]).length+' Posten in den Kontoauszug übernommen – ich öffne den Bereich.'}]); setTab('import'); setImportTab('bank'); };
 
@@ -4858,12 +4884,15 @@ function App({session}) {
                 )}
 
                 {importTab==='sevdesk' && (data.importReview||[]).length>0 && (()=>{ const rv=data.importReview||[]; const open=rv.filter(x=>!x.done); const shown=showRevDone?rv:open;
+                  const setRevHint=(id,v)=>setData(prev=>({...prev, importReview:(prev.importReview||[]).map(x=>x.id===id?{...x,hint:v}:x)}));
                   const setDone=(ids,v)=>setData(prev=>({...prev, importReview:(prev.importReview||[]).map(x=>ids.includes(x.id)?{...x,done:v}:x)}));
                   return (
                   <div style={{background:C.surf2,border:'1px solid '+hexA(C.amb,0.5),borderRadius:16,padding:'16px 18px',marginTop:16}}>
                     <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
                       <div style={{fontSize:17,fontWeight:800,flex:1,minWidth:200}}>Zu prüfen · {open.length} offen</div>
                       <label style={{fontSize:12.5,color:C.sub,display:'flex',gap:6,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={showRevDone} onChange={e=>setShowRevDone(e.target.checked)}/> Erledigte zeigen ({rv.length-open.length})</label>
+                      {open.some(x=>x.hint) && <button onClick={()=>reanalyzeReview(open.filter(x=>x.hint).map(x=>x.id))} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle mit Hinweis neu prüfen ({open.filter(x=>x.hint).length})</button>}
+                      {open.length>0 && <button onClick={()=>reanalyzeReview(open.filter(x=>x.path).map(x=>x.id))} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle offenen mit KI prüfen</button>}
                       {open.length>0 && <button onClick={()=>setDone(open.map(x=>x.id),true)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle erledigt</button>}
                     </div>
                     <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>Diese Buchungen sind bereits verbucht. Hier siehst du, was du oder die KI noch einmal anschauen sollte: Zeilen mit KI-Haken, deine Notizen mit „anschauen", mögliche Doppelungen und alles, was die KI am PDF geändert oder anders gelesen hat.</div>
@@ -4874,6 +4903,11 @@ function App({session}) {
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:14,fontWeight:700,color:C.txt}}>{x.name||'—'} <span style={{fontWeight:600,color:C.sub,fontSize:12.5}}>· {x.datum?x.datum.split('-').reverse().join('.'):''} · {fmt(x.brutto)} · {accLabel(x.acct)}</span></div>
                             <div style={{fontSize:12,color:C.amb,marginTop:2,lineHeight:1.45}}>{(x.reasons||[]).join(' · ')}</div>
+                            {x.verdict && <div style={{fontSize:12,color:C.txt,marginTop:4,lineHeight:1.45,background:C.surf3,borderRadius:8,padding:'5px 9px'}}>🤖 {x.verdict}{x.storno?' (Storno/Gutschrift)':''}</div>}
+                            <div style={{display:'flex',gap:6,marginTop:6,alignItems:'center'}}>
+                              <input value={x.hint||''} onChange={e=>setRevHint(x.id,e.target.value)} placeholder="Hinweis für die KI, z. B. „Storno – Gegenbuchung zu RE-1269“" style={{...SS,flex:1,minWidth:0,fontSize:12,padding:'5px 8px',textAlign:'left'}} />
+                              <button onClick={()=>reanalyzeReview([x.id])} disabled={!!revBusy[x.id]} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:8,padding:'5px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',opacity:revBusy[x.id]?0.6:1}}>{revBusy[x.id]?'KI liest…':'KI prüfen'}</button>
+                            </div>
                           </div>
                           {x.path && <button onClick={()=>openFile(x.path,x.fileName||x.name)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>PDF ansehen</button>}
                           <button onClick={()=>setDone([x.id],!x.done)} style={{background:x.done?'none':C.act,color:x.done?C.sub:C.actTxt,border:x.done?'1px solid '+C.bdr:'none',borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{x.done?'Wieder öffnen':'Erledigt'}</button>
