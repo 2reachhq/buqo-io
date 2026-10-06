@@ -1393,6 +1393,7 @@ function App({session}) {
   const [belStatusF,setBelStatusF]= useState('alle');      // Belege-Status: alle|offen|erledigt
   const [belAcct,setBelAcct]= useState('alle');            // Belege-Konten-Filter ('alle' | Konto-Key)
   const [todoDetail,setTodoDetail]= useState(null);  // Aufgabe im Detailpanel (rechts angedockt) geöffnet
+  const [todoFix,setTodoFix]= useState(null);        // Schnell beheben im To-do: {id, mwst, cat, busy, msg}
   const [todoGroupBy,setTodoGroupBy]= useState('problem'); // To-dos gruppieren: problem | name | liste
   const [todoGroupOpen,setTodoGroupOpen]= useState({});
   const [todoAiBusy,setTodoAiBusy]= useState(false); // KI-Frage zu einer Aufgabe läuft
@@ -2653,7 +2654,7 @@ function App({session}) {
       nd.recurInvoices=recs0;
       nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
       // Für später (aus dem Abgleich): To-dos
-      if(payload.todos&&payload.todos.length) nd.todos=[...payload.todos.map(t=>({id:uid(), done:false, source:'import', createdAt:now2, ref:null, title:String(t.title||'').slice(0,160), note:String(t.note||'').slice(0,600), comments:[]})), ...(nd.todos||[])];
+      if(payload.todos&&payload.todos.length) nd.todos=[...payload.todos.map(t=>{ const hit=t.rowKey?[...bel,...rec].find(x=>x.rowKey===t.rowKey):null; return {id:uid(), done:false, source:'import', createdAt:now2, ref:hit?{type:'booking',id:hit._id,year:hit.y}:null, title:String(t.title||'').slice(0,160), note:String(t.note||'').slice(0,600), comments:[]}; }), ...(nd.todos||[])];
       return nd; });
     // Weitere Unterlagen (EÜR, BWA …): in die Steuerunterlagen, die KI liest sie aus
     for(const f of (payload.extraDocs||[])){ prog('Unterlage: '+f.name); try{ await fileTaxDoc(f,{ year:(payload.year&&payload.year!=='alle')?+payload.year:new Date().getFullYear()-1, cat:'Sonstiges', acct:'unter', title:f.name.replace(/\.[a-z0-9]+$/i,''), ki:true }); }catch(e){ fehler++; } }
@@ -2882,6 +2883,35 @@ function App({session}) {
       ...(rows.every(r=>r.k==='e')?[{label:'Rechnung erstellen', fn:()=>invoiceFromCand(rows)}]:[]),
       {label:'Nur ablegen (Bank)', fn:()=>fileCand(rows)}]);
   };
+
+  // Zur Aufgabe gehörende Buchung samt Beleg: über die Verknüpfung, bei älteren Aufgaben (deep) automatisch über Name + Betrag aus dem Titel
+  const todoBooking = (t, deep)=>{
+    if(!t) return null; let loc=null;
+    if(t.ref&&t.ref.type==='booking'){ loc=findItemLocation(t.ref.id,t.ref.year); if(!loc) for(const yk of Object.keys(data)){ if(!/^\d{4}$/.test(yk)) continue; loc=findItemLocation(t.ref.id,yk); if(loc) break; } }
+    if(!loc && deep){ const m=String(t.title||'').match(/^(?:[^:]+:\s*)?(.+?) · (\d[\d.]*,\d{2}) €/); if(m){ const nm=normName(m[1]); const amt=parseFloat(m[2].replace(/\./g,'').replace(',','.')); const hit=allBookingsFlat().find(b=>normName(b.name)===nm && Math.abs(Math.abs(b.amount)-amt)<0.01); if(hit) loc=findItemLocation(hit.id,hit.year); } }
+    if(!loc) return null; const item=fullBelegItem(loc); return item?{loc,item}:null; };
+  // Aufgabe als erledigt markieren – nach einer Korrektur wird gefragt
+  const askTodoDone = (d, text)=> askChoice('Aufgabe erledigt?', text+' Soll ich die Aufgabe „'+(d.title||'')+'" als erledigt markieren?', [{label:'Ja, erledigt', fn:()=>{ doneTodos([d.id],true); setTodoDetail(null); }},{label:'Nein, offen lassen', fn:()=>{}}]);
+  const applyTodoFix = (d, tb, fix)=>{
+    const mw=fix.mwst===''||fix.mwst==null?null:+fix.mwst; const amt=num(tb.item.amount); const patch={};
+    if(mw!=null && !Number.isNaN(mw)){ patch.mwst=mw; patch.netto=Math.round(amt/(1+mw/100)*100)/100; }
+    if(fix.cat) patch.category=fix.cat;
+    if(!Object.keys(patch).length){ setToast('Nichts zu ändern.'); return; }
+    updateBelegItem(tb.loc, patch); setTodoFix(null);
+    askTodoDone(d, 'Die Buchung wurde angepasst'+(patch.mwst!=null?' (MwSt '+patch.mwst+' %)':'')+(patch.category?' (Kategorie '+patch.category+')':'')+'.');
+  };
+  const todoUploadBeleg = async (d, tb, file)=>{
+    try{ setToast('Beleg wird hochgeladen …'); const base=[tb.item.name, tb.item.belegnr||tb.item.datum].filter(Boolean).join('_'); const fi=await storeAttachment(file,['Belege',String(tb.loc._y),String(tb.loc._m+1).padStart(2,'0')],base); updateBelegItem(tb.loc,{filePath:fi.path,fileName:fi.fname}); askTodoDone(d,'Der Beleg ist an der Buchung angehängt.'); }
+    catch(e){ setToast('Upload fehlgeschlagen: '+(e.message||e)); } };
+  // KI liest das angehängte PDF und schlägt MwSt-Satz und Kategorie vor
+  const suggestTodoFix = async (tb, fix)=>{
+    const path=tb.item.filePath; if(!path){ setTodoFix({...fix,msg:'Kein PDF angehängt – bitte erst einen Beleg hochladen.'}); return; }
+    setTodoFix({...fix,busy:true,msg:'KI liest das PDF …'});
+    try{ const {data:blob,error}=await sb.storage.from('belege').download(path); if(error||!blob) throw (error||new Error('Datei nicht gefunden')); const o=await aiReadDoc(new Uint8Array(await blob.arrayBuffer()), tb.item.fileName||path, {kind:tb.loc._kind, name:tb.item.name, brutto:num(tb.item.amount)});
+      const next={...fix,busy:false}; const parts=[]; if(o.mwst!=null){ next.mwst=String(o.mwst); parts.push('MwSt '+o.mwst+' %'); } if(o.kategorie&&CATS.includes(o.kategorie)){ next.cat=o.kategorie; parts.push('Kategorie '+o.kategorie); }
+      if(o.brutto!=null && Math.abs(o.brutto-Math.abs(num(tb.item.amount)))>0.02) parts.push('⚠ Betrag im PDF '+fmt(o.brutto)+' statt '+fmt(Math.abs(num(tb.item.amount))));
+      next.msg=parts.length?'KI-Vorschlag aus dem PDF: '+parts.join(', ')+(o.urteil?' · '+o.urteil:'')+'. Prüfen und „Übernehmen" klicken.':'Im PDF nichts Eindeutiges gefunden.'; setTodoFix(next);
+    }catch(e){ setTodoFix({...fix,busy:false,msg:'Konnte das PDF nicht lesen: '+(e.message||e)}); } };
 
   // Beim Öffnen einer automatisch erzeugten Aufgabe: KI erklärt kurz das Problem (einmal pro Aufgabe, Antwort bleibt als Kommentar stehen)
   const explainTodoRef = useRef({});
@@ -5784,7 +5814,7 @@ function App({session}) {
                           </div>
                           {t.note && <div style={{fontSize:12.5,color:C.sub,marginTop:3,textDecoration:t.done?'line-through':'none',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden',whiteSpace:'pre-line'}}>{t.note}</div>}
                           <div style={{display:'flex',alignItems:'center',gap:10,marginTop:6}}>
-                            {t.ref && <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11.5,color:C.mut}}><Ic p={P.clip} sz={12} col={C.mut}/> Buchung verknüpft</span>}
+                            {t.ref && (()=>{ const tb=t.ref.type==='booking'?todoBooking(t,false):null; const hasF=tb&&(tb.item.filePath||tb.item.fileData); return (<><span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11.5,color:C.mut}}><Ic p={P.clip} sz={12} col={C.mut}/> Buchung verknüpft</span>{tb && (hasF ? <button onClick={e=>{e.stopPropagation();openFile(tb.item.filePath||tb.item.fileData,tb.item.fileName||tb.item.name);}} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:7,padding:'2px 8px',fontSize:11.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Beleg ansehen</button> : <span style={{fontSize:11,fontWeight:700,color:C.red,background:hexA(C.red,0.12),borderRadius:6,padding:'2px 7px'}}>Beleg fehlt</span>)}</>); })()}
                             {(t.comments||[]).length>0 && <span style={{fontSize:11.5,color:C.mut}}>{(t.comments||[]).length} Kommentar{(t.comments||[]).length>1?'e':''}</span>}
                           </div>
                         </div>
@@ -5862,6 +5892,32 @@ function App({session}) {
                       {d.replyDraft && <button onClick={()=>openLetterReply(d.id)} style={{display:'inline-flex',alignItems:'center',gap:6,background:C.act,color:C.actTxt,border:'none',borderRadius:10,padding:'9px 13px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.send} sz={14} col={C.actTxt}/> {d.repliedAt?'Erneut antworten':'Antwort per E-Mail'}</button>}
                     </div>
                   )}
+                  {!d.isNew && (()=>{ const tb=todoBooking(d,true); if(!tb) return null; const it=tb.item; const hasF=!!(it.filePath||it.fileData); const prob=todoProblem(d);
+                    const fix=(todoFix&&todoFix.id===d.id)?todoFix:{id:d.id, mwst:(it.mwst===undefined||it.mwst===null)?'':String(it.mwst), cat:it.category||'', busy:false, msg:''};
+                    const set=(patch)=>setTodoFix({...fix,...patch});
+                    const hl=(on)=>({...SS,textAlign:'left',padding:'8px 10px',fontSize:13,border:on?'1.5px solid '+C.pri:undefined,width:'100%'});
+                    return (
+                    <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:'12px 13px',display:'flex',flexDirection:'column',gap:9}}>
+                      <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap'}}>
+                        <span style={{fontSize:13.5,fontWeight:800,color:C.txt}}>{it.name}</span>
+                        <span style={{...NUM,fontSize:13,color:C.sub}}>{fmt(Math.abs(num(it.amount)))} · {it.datum?String(it.datum).split('-').reverse().join('.'):MONTHS[tb.loc._m]+' '+tb.loc._y} · {belBerLabel(tb.loc._ber)}</span>
+                      </div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                        {hasF ? <button onClick={()=>openFile(it.filePath||it.fileData,it.fileName||it.name)} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'8px 12px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>📎 Beleg ansehen</button>
+                          : <label style={{background:hexA(C.red,0.12),color:C.red,border:'1px solid '+hexA(C.red,0.4),borderRadius:9,padding:'8px 12px',fontSize:13,fontWeight:700,cursor:'pointer'}}>Beleg fehlt – hochladen<input type="file" accept=".pdf,image/*" style={{display:'none'}} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=''; if(f) todoUploadBeleg(d,tb,f); }}/></label>}
+                        <button onClick={()=>openCaptureEdit(tb.loc,it)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'8px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Buchung öffnen</button>
+                      </div>
+                      <div style={{fontSize:11.5,fontWeight:700,color:C.sub,letterSpacing:'0.03em',marginTop:2}}>SCHNELL BEHEBEN{prob!=='Sonstiges'?' · '+prob.toUpperCase():''}</div>
+                      <div style={{display:'flex',gap:8}}>
+                        <div style={{flex:1}}><div style={{fontSize:11.5,color:C.sub,marginBottom:3}}>MwSt-Satz</div><select value={fix.mwst} onChange={e=>set({mwst:e.target.value})} style={hl(prob==='MwSt / Umsatzsteuer')}><option value="">— unbekannt —</option><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></select></div>
+                        <div style={{flex:1.4}}><div style={{fontSize:11.5,color:C.sub,marginBottom:3}}>Kategorie</div><select value={fix.cat} onChange={e=>set({cat:e.target.value})} style={hl(false)}><option value="">— keine —</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                      </div>
+                      {fix.msg && <div style={{fontSize:12,color:C.sub,lineHeight:1.45}}>{fix.msg}</div>}
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                        {hasF && <button onClick={()=>suggestTodoFix(tb,fix)} disabled={fix.busy} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:9,padding:'8px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:fix.busy?0.6:1}}>{fix.busy?'KI liest …':'KI aus PDF vorschlagen'}</button>}
+                        <button onClick={()=>applyTodoFix(d,tb,fix)} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'8px 14px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Übernehmen</button>
+                      </div>
+                    </div>); })()}
                   <BookingSelect bookings={bookings} value={d.ref&&d.ref.type==='booking'?d.ref:null} onPick={b=>setTodoDetail({...d, ref: b?{type:'booking',id:b.id,year:b.year}:null})}/>
                   {d.ref && !d.isNew && <button onClick={()=>openTodoRef(d)} style={{alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:5,background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'6px 10px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.clip} sz={12} col={C.sub}/> Verknüpfte Buchung ansehen</button>}
                   <label style={{display:'flex',alignItems:'center',gap:9,fontSize:13,color:C.txt,cursor:'pointer',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,padding:'10px 12px'}}>
