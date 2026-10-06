@@ -64,6 +64,7 @@ export default function SevdeskImport(props) {
   const [confirmRun, setConfirmRun] = useState(false);   // Rückfrage vor dem Verbuchen
   const [importMsg, setImportMsg] = useState('');     // Hinweis nach dem Laden eines Buqo-Exports
   const restored = React.useRef(false);
+  const bankCacheRef = React.useRef({});          // bereits gelesene Kontoauszug-PDFs (Name|Größe → Umsätze), damit die KI sie nicht erneut lesen muss
   const [draftInfo, setDraftInfo] = useState(null); // {savedAt} – Zwischenstand vorhanden
   const [hint, setHint] = useState('');         // Hinweise für die KI, z. B. „Mieter Müller = Sylt"
   const [onlyUnsure, setOnlyUnsure] = useState(false);
@@ -104,7 +105,7 @@ export default function SevdeskImport(props) {
     for (const f of files) {
       try {
         if (/\.(csv|txt)$/i.test(f.name) || /csv|text/.test(f.type || '')) { const parsed = parseCSV(decodeText(new Uint8Array(await f.arrayBuffer()))); const rows = bankRowsFromCsv(parsed, autoMap(parsed.header)); if (!rows.length) throw new Error('Keine Umsätze erkannt (Spalten Datum/Betrag fehlen?)'); list.push({ file: f, name: f.name, kind: 'csv', rows }); }
-        else list.push({ file: f, name: f.name, kind: 'datei' });
+        else list.push({ file: f, name: f.name, kind: 'datei', rows: bankCacheRef.current[f.name + '|' + f.size] });
       } catch (e) { setErr('Kontoauszug „' + f.name + '": ' + (e.message || e)); }
     }
     if (list.length) { setBank(b => [...b, ...list]); setResult(null); }
@@ -129,7 +130,7 @@ export default function SevdeskImport(props) {
     (async () => {
       try {
         const f = await idbGet('files'); const s = await idbGet('state'); if (!alive) return;
-        const map = (s && s.mappings) || {};
+        const map = (s && s.mappings) || {}; bankCacheRef.current = (s && s.state && s.state.bankCache) || {};
         const arr = (v) => v ? (Array.isArray(v) ? v : [v]) : [];
         if (f) {
           if (f.belege) await readCsv(f.belege.file, f.belege.kind, o => setBelege(map.belege ? { ...o, mapping: map.belege } : o));
@@ -160,10 +161,10 @@ export default function SevdeskImport(props) {
     const t = setTimeout(() => {
       if (!anyFile()) return;
       const savedAt = Date.now();
-      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
+      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
     }, 700);
     return () => clearTimeout(t);
-  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, belege && belege.mapping, rech && rech.mapping]);
+  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, bank, belege && belege.mapping, rech && rech.mapping]);
   const discardDraft = () => { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setBelege(null); setRech(null); setZipB(null); setZipR(null); setBank([]); setDatev([]); setDatevRows([]); setExtra([]); setRowAcct({}); setSkip({}); setNotes({}); setAi({}); setOcr({}); setOcrOff({}); setRecurOff({}); setLater({}); setDatevAct({}); setUpPdf({}); setYearChosen(false); setStep(1); setDraftInfo(null); setResult(null); };
   const build = (src, zip, exist) => {
     if (!src) return null;

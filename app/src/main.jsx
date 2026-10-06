@@ -7,6 +7,7 @@ import TaxCockpit from './tax/TaxCockpit.jsx';
 import { YEARS as TAX_YEARS, berechneSteuer } from './tax/estg.js';
 import SevdeskImport from './import/SevdeskImport.jsx';
 import { classifyRows } from './import/classify.js';
+import { compactRow, searchBank } from './import/bankSearch.js';
 import * as ACT from './assistant/actions.js';
 import { ASSISTANT_TOOLS, ASSISTANT_MODELS, DEFAULT_ASSISTANT_MODEL, buildSystemPrompt, buildSystemBlocks, toolsWithCache, usageCost, addUsage, stepLabel } from './assistant/tools.js';
 import { runAssistantTurn, buildApiMessages, attachmentFromFile } from './assistant/agent.js';
@@ -1354,6 +1355,8 @@ function App({session}) {
   const [todoSel,setTodoSel]= useState([]);
   const [packBusy,setPackBusy]= useState(false);       // Steuerberater-Paket wird gepackt
   const [packY,setPackY]= useState(new Date().getFullYear()); const [packM,setPackM]= useState('');  // Zeitraum fürs Paket ('' = ganzes Jahr)
+  const [bankYear,setBankYear]= useState(null);      // Bank: Jahr der Kontoauszug-Übersicht
+  const [bankBusy,setBankBusy]= useState(null);      // Kontoauszug, der gerade neu gelesen wird
   const [wipe,setWipe]= useState(null);            // Neu anfangen: {year,opts,text,busy,msg}
   const [taxUp,setTaxUp]= useState(null);            // Steuerunterlage hochladen: {file,year,cat,title,acct,ki,busy,msg}
   const [taxDocY,setTaxDocY]= useState(null);        // Steuerunterlagen: gewähltes Jahr
@@ -1385,9 +1388,13 @@ function App({session}) {
   const [invStatusF,setInvStatusF]= useState('alle');      // Rechnungen-Status-Filter: alle|offen|bezahlt
   const [belFilterOpen,setBelFilterOpen]= useState(false); // Belege-Filter-Popup
   const [belKindF,setBelKindF]= useState('alle');          // Belege-Art: alle|einmalig|wied
+  const [belFileF,setBelFileF]= useState('alle');          // Belege: alle|mit (Beleg vorhanden)|fehlt
+  const [belLimit,setBelLimit]= useState(100);              // Belege-Liste: so viele auf einmal
   const [belStatusF,setBelStatusF]= useState('alle');      // Belege-Status: alle|offen|erledigt
   const [belAcct,setBelAcct]= useState('alle');            // Belege-Konten-Filter ('alle' | Konto-Key)
   const [todoDetail,setTodoDetail]= useState(null);  // Aufgabe im Detailpanel (rechts angedockt) geöffnet
+  const [todoGroupBy,setTodoGroupBy]= useState('problem'); // To-dos gruppieren: problem | name | liste
+  const [todoGroupOpen,setTodoGroupOpen]= useState({});
   const [todoAiBusy,setTodoAiBusy]= useState(false); // KI-Frage zu einer Aufgabe läuft
   const [todoFilter,setTodoFilter]= useState('offen'); // To-do-Filter: offen|erledigt|alle
   const [instForm,setInstForm]= useState(null);       // Rate/Kredit im Editor
@@ -1742,8 +1749,9 @@ function App({session}) {
 
   const getMD = (y,m) => data[y]?.[m] || emptyMonth();
   useEffect(()=>{ setInvLimit(100); },[yr,mo,yearAll,invDomain,invStatusF,invSearch]);
+  useEffect(()=>{ setBelLimit(100); },[yr,mo,yearAll,belAcct,belKindF,belStatusF,belFileF,belegSearch]);
   useEffect(()=>{ let alive=true; setInvPdfUrl(null); if(invView&&invView.pdfPath){ sb.storage.from('belege').createSignedUrl(invView.pdfPath,3600).then(({data:d})=>{ if(alive&&d) setInvPdfUrl(d.signedUrl); }).catch(()=>{}); } return ()=>{ alive=false; }; },[invView&&invView.id,invView&&invView.pdfPath]);
-  const goMonth = (delta) => { if(yearAll&&tab==='rechnung'){ setYr(yr+delta); return; } let m=mo+delta, y=yr; if(m<0){m=11;y=yr-1;} else if(m>11){m=0;y=yr+1;} setMo(m); setYr(y); };
+  const goMonth = (delta) => { if(yearAll&&(tab==='rechnung'||tab==='belege')){ setYr(yr+delta); return; } let m=mo+delta, y=yr; if(m<0){m=11;y=yr-1;} else if(m>11){m=0;y=yr+1;} setMo(m); setYr(y); };
   const upd = fn => setData(prev=>{const yd=prev[yr]||{};const md=yd[mo]||emptyMonth();return{...prev,[yr]:{...yd,[mo]:fn(md)}};});
   const updAll = fn => setData(prev=>{
     const nd=JSON.parse(JSON.stringify(prev));
@@ -2361,6 +2369,7 @@ function App({session}) {
   /* Häufigsten Monat einer Buchungsliste finden (für Auto-Monatswechsel) */
   const dominantMonth = list => { const cnt={}; (list||[]).forEach(p=>{ const iso=toISO(p.datum); if(iso&&/^\d{4}-\d{2}/.test(iso)){ const k=iso.slice(0,7); cnt[k]=(cnt[k]||0)+1; } }); let best=null,bv=0; Object.keys(cnt).forEach(k=>{ if(cnt[k]>bv){bv=cnt[k];best=k;} }); return best; };
   const importLocal = async file => {
+    if((data.bankStatements||[]).some(x=>x.fileName===file.name && x.size===file.size)) setToast('„'+file.name+'" war schon hochgeladen – es werden nur neue Umsätze angelegt, bereits gebuchte erscheinen mit ihrem Status.');
     setImportBusy(true); setImportStep('Kontoauszug wird geöffnet…');
     try{
       // 1) KI-Auslesung (Betrag, Datum, Empfänger, Verwendungszweck)
@@ -2382,6 +2391,7 @@ function App({session}) {
       let switchedTo=null;
       if(dom && dom!==curYm){ const [dy,dm]=dom.split('-').map(Number); setYr(dy); setMo(dm-1); switchedTo=MONTHS[dm-1]+' '+dy; }
       else { const ymPin = yr+'-'+String(mo+1).padStart(2,'0')+'-01'; parsed.forEach(p=>{ if(!p.datum) p.datum=ymPin; }); }
+      registerStatement(file, parsed);
       const res=addImportDrafts(parsed);
       setImportSummary({ total:parsed.length, added:res.added, skipped:res.skipped, dupBook:res.dupBook, switchedTo });
     }catch(e){ setToast('Import fehlgeschlagen: '+(e.message||e)); }
@@ -2577,8 +2587,34 @@ function App({session}) {
       setWipe(null); setToast('Zurückgesetzt'+(o.files?' · '+removed+' Dateien gelöscht':'')+'. Die Sicherung wurde heruntergeladen. Jetzt kannst du den Import neu starten.');
     }catch(e){ setWipe(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
   };
-  // Kontoauszug (PDF/Foto) von der KI lesen lassen → Umsätze im Format der Bank-Entwürfe
-  const aiBankRows = async (file)=>{ const r=await aiExtractPosten(file); return (r.list||[]).map(p=>({name:p.name, amount:p.amount, kind:p.kind, datum:toISO(p.datum), belegnr:p.belegnr||'', note:p.note||'', category:p.category||'', netto:'', mwst:'', info:''})); };
+  // Gespeicherte Umsätze eines Kontoauszugs im Format der Bank-Entwürfe (Zwischenspeicher: PDF muss nicht erneut gelesen werden)
+  const stmtRowsOf = (st)=> (st.rows||[]).map(r=>({name:r.n, amount:r.a, kind:r.k==='e'?'ein':'aus', datum:r.d, belegnr:'', note:r.z||'', category:'', netto:'', mwst:'', info:''}));
+  // Kontoauszug (PDF/Foto) von der KI lesen lassen → Umsätze im Format der Bank-Entwürfe; bereits gelesene Auszüge kommen aus dem Zwischenspeicher
+  const aiBankRows = async (file, force)=>{
+    if(!force){ const hit=(data.bankStatements||[]).find(x=>x.fileName===file.name && x.size===file.size && (x.rows||[]).length); if(hit) return stmtRowsOf(hit); }
+    const r=await aiExtractPosten(file); return (r.list||[]).map(p=>({name:p.name, amount:p.amount, kind:p.kind, datum:toISO(p.datum), belegnr:p.belegnr||'', note:p.note||'', category:p.category||'', netto:'', mwst:'', info:''})); };
+  // Kontoauszug samt gelesenen Umsätzen ablegen (Datei im Speicher, Umsätze als Zwischenspeicher in den Daten)
+  const registerStatement = async (file, rows)=>{
+    try{
+      const list=(rows||[]).map(r=>({name:r.name, amount:num(r.amount), kind:r.kind, datum:toISO(r.datum)||'', note:r.note||r.info||''}));
+      const dates=list.map(r=>r.datum).filter(Boolean).sort(); const y=(dates[0]||new Date().toISOString()).slice(0,4);
+      let path=null; try{ path=['Kontoauszüge',y,safeName(file.name)].join('/'); const {error}=await sb.storage.from('belege').upload(path, file, {upsert:true, contentType:file.type||'application/octet-stream'}); if(error) throw error; }catch(e){ path=null; }
+      setData(prev=>({...prev, bankStatements:[...(prev.bankStatements||[]).filter(x=>!(x.fileName===file.name && x.size===file.size)), {id:uid(), fileName:file.name, size:file.size, path, year:+y, from:dates[0]||'', to:dates[dates.length-1]||'', count:list.length, rows:list.slice(0,3000).map(compactRow), importedAt:new Date().toISOString()}]}));
+    }catch(e){}
+  };
+  // Kontoauszug neu lesen (z. B. wenn beim Hochladen ein Monat nicht geklappt hat)
+  const rereadStatement = async (st)=>{
+    if(!st.path){ setToast('Die Datei ist nicht gespeichert – bitte neu hochladen.'); return; }
+    setBankBusy(st.id);
+    try{
+      const {data:blob,error}=await sb.storage.from('belege').download(st.path); if(error||!blob) throw (error||new Error('Datei nicht gefunden'));
+      const f=new File([blob], st.fileName, {type:blob.type||'application/pdf'});
+      const rows=await aiBankRows(f,true); const list=rows.map(r=>({name:r.name, amount:num(r.amount), kind:r.kind, datum:toISO(r.datum)||'', note:r.note||''})); const dates=list.map(r=>r.datum).filter(Boolean).sort();
+      setData(prev=>({...prev, bankStatements:(prev.bankStatements||[]).map(x=>x.id===st.id?{...x, size:f.size, count:list.length, from:dates[0]||x.from, to:dates[dates.length-1]||x.to, rows:list.slice(0,3000).map(compactRow)}:x)}));
+      setToast(list.length?list.length+' Umsätze gelesen: '+st.fileName:'Keine Umsätze erkannt: '+st.fileName);
+    }catch(e){ setToast('Neu lesen fehlgeschlagen: '+(e.message||e)); }
+    setBankBusy(null);
+  };
   /* ── Umzug aus sevDesk: Buchungen, Rechnungen, Kunden anlegen und PDFs ablegen (Payload aus SevdeskImport) ── */
   const sevdeskExisting = ()=>({
     belege: existingBookings().map(b=>({nummer:b.it.belegnr||'', brutto:num(b.it.amount), name:b.it.name||'', datum:toISO(b.it.datum)||''})),
@@ -2627,7 +2663,7 @@ function App({session}) {
       let rows=b.rows; if(!rows){ try{ rows=await aiBankRows(b.file); }catch(e){ rows=[]; } }
       rows=rows||[]; if(payload.year&&payload.year!=='alle') rows=rows.filter(r=>String(r.datum||'').startsWith(String(payload.year))); const dates=rows.map(r=>r.datum).filter(Boolean).sort(); const y=(dates[0]||new Date().toISOString().slice(0,10)).slice(0,4);
       let path=null; try{ path=['Kontoauszüge',y,safeName(b.name)].join('/'); const {error}=await sb.storage.from('belege').upload(path, b.file, {upsert:true, contentType:b.file.type||'application/octet-stream'}); if(error) throw error; files++; }catch(e){ path=null; fehler++; }
-      stmts.push({id:uid(), fileName:b.name, path, year:+y, from:dates[0]||'', to:dates[dates.length-1]||'', count:rows.length, importedAt:new Date().toISOString()});
+      stmts.push({id:uid(), fileName:b.name, size:b.file.size, rows:rows.slice(0,3000).map(compactRow), path, year:+y, from:dates[0]||'', to:dates[dates.length-1]||'', count:rows.length, importedAt:new Date().toISOString()});
       bankDrafts=bankDrafts.concat(rows.map(r=>({id:uid(), ...r}))); }
     if(stmts.length) setData(prev=>({...prev, bankStatements:[...(prev.bankStatements||[]), ...stmts]}));
     if(bankDrafts.length) setTimeout(()=>{ try{ addDraftsRef.current&&addDraftsRef.current(bankDrafts); }catch(e){} }, 1200);
@@ -2805,20 +2841,80 @@ function App({session}) {
       if(tracked && !seen.has(t.autoKey)){ changed=true; return {...t, done:true, doneAt:new Date().toISOString(), autoResolved:true}; } return t; });
     return changed ? {...prev, todos:list} : prev;
   }); };
-  const addTodoComment = (id, text, author) => { const tt=String(text||'').trim(); if(!tt) return; setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>t.id===id?{...t, comments:[...(t.comments||[]), {id:uid(), author:author||'user', text:tt, createdAt:new Date().toISOString()}]}:t)})); };
+  const addTodoComment = (id, text, author, extra) => { const tt=String(text||'').trim(); if(!tt) return; setData(prev=>({...prev, todos:(prev.todos||[]).map(t=>t.id===id?{...t, comments:[...(t.comments||[]), {id:uid(), author:author||'user', text:tt, createdAt:new Date().toISOString(), ...(extra||{})}]}:t)})); };
   // KI-Frage zu einer konkreten Aufgabe – Antwort landet als Kommentar (gleiches aiInvoke wie askInvoiceTax)
   const askTodoAI = async (todo, question) => { const qq=String(question||'').trim(); if(!qq){ setToast('Bitte eine Frage eingeben.'); return; }
     addTodoComment(todo.id, qq, 'user'); setTodoAiBusy(true);
     try{
+      // Gespeicherte Kontoauszüge durchsuchen (ohne die PDFs erneut zu lesen)
+      const sts=(data.bankStatements||[]); const rowsAll=sts.flatMap(st=>(st.rows||[]));
+      const found=rowsAll.length?searchBank(rowsAll, qq+' '+(todo.title||''), {limit:25}):null;
       const sys="Du bist ein hilfreicher Buchhaltungs-Assistent für eine deutsche Selbstständigen-/Kleinunternehmer-App. Beantworte Fragen zu einer konkreten Aufgabe kurz und konkret in Klartext (KEIN Markdown, keine Aufzählungszeichen). Geht es um Steuern, weise kurz darauf hin, dass eine verbindliche Einschätzung nur der Steuerberater geben kann.";
-      const usr="Aufgabe: \""+(todo.title||'')+"\". Notiz: \""+(todo.note||'')+"\". Bisherige Kommentare: "+((todo.comments||[]).map(c=>(c.author==='ai'?'KI':'Nutzer')+': '+c.text).join(' | ')||'—')+". Frage: \""+qq+"\"";
-      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:600, system:sys, messages:[{ role:'user', content:[{ type:'text', text:usr }] }] } });
+      let usr="Aufgabe: \""+(todo.title||'')+"\". Notiz: \""+(todo.note||'')+"\". Bisherige Kommentare: "+((todo.comments||[]).map(c=>(c.author==='ai'?'KI':'Nutzer')+': '+c.text).join(' | ')||'—')+". Frage: \""+qq+"\"";
+      if(found&&found.hits.length){
+        usr+="\n\nIch habe in den gespeicherten Kontoauszügen ("+sts.length+" Auszüge, "+rowsAll.length+" Umsätze) diese Treffer gefunden (Summe "+fmt(found.total)+", "+found.hits.length+" von "+found.count+"):\n"+found.hits.map(h=>h.idx+'|'+h.d+'|'+h.n+'|'+h.a.toFixed(2)+'|'+(h.k==='e'?'Eingang':'Ausgang')+'|'+(h.z||'')).join('\n')+"\n\nFasse die Treffer knapp zusammen (Anzahl, Zeitraum, Summe) und prüfe, ob sie zur Frage passen. Frage am Ende, ob ich die Zahlungen verbuchen, eine Rechnung dafür erstellen oder nur ablegen soll. Hänge in der letzten Zeile exakt an: TREFFER:[Liste der passenden idx, z. B. 3,4,5]";
+      }else if(rowsAll.length){ usr+="\n\nIn den gespeicherten Kontoauszügen ("+sts.length+" Auszüge, "+rowsAll.length+" Umsätze) habe ich dazu nichts gefunden. Sage kurz, was der Nutzer ergänzen kann (Name wie im Kontoauszug, Betrag, Zeitraum)."; }
+      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:700, system:sys, messages:[{ role:'user', content:[{ type:'text', text:usr }] }] } });
       if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
-      const t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'(keine Antwort)';
-      addTodoComment(todo.id, t, 'ai');
+      let t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'(keine Antwort)';
+      let cand=null; const mt=t.match(/TREFFER:\s*\[([^\]]*)\]/);
+      if(found&&found.hits.length){ const ids=mt?mt[1].split(',').map(x=>parseInt(x,10)).filter(n=>!isNaN(n)):[]; const rows=(ids.length?found.hits.filter(h=>ids.includes(h.idx)):found.hits).map(h=>({d:h.d,n:h.n,a:h.a,k:h.k,z:h.z})); if(rows.length) cand={ rows, total:Math.round(rows.reduce((x,r)=>x+r.a,0)*100)/100 }; }
+      t=t.replace(/\n?\s*TREFFER:\s*\[[^\]]*\]\s*$/,'').trim();
+      addTodoComment(todo.id, t, 'ai', cand?{cand}:undefined);
     }catch(e){ addTodoComment(todo.id, 'Konnte nicht antworten: '+(e.message||e), 'ai'); }
     setTodoAiBusy(false);
   };
+  // Gefundene Kontoauszug-Umsätze (aus dem To-do-Kommentar) verbuchen / als Rechnung erfassen / ablegen
+  const bookCand = (rows, acct)=>{
+    setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev));
+      rows.forEach(r=>{ const dt=new Date(r.d); const ty=isNaN(dt)?yr:dt.getFullYear(), tm=isNaN(dt)?mo:dt.getMonth(); if(!nd[ty])nd[ty]={}; if(!nd[ty][tm])nd[ty][tm]=emptyMonth();
+        const item={...newItem((r.n||'Zahlung').slice(0,90)), amount:r.a, netto:r.a, mwst:'', datum:r.d, status:'bezahlt', bankConfirmed:true, note:['Aus Kontoauszug',r.z].filter(Boolean).join(' · ')+' · Beleg noch nachreichen'};
+        _bookKind(nd[ty][tm], acct, r.k==='e'?'ein':'aus', item); });
+      return nd; });
+    setToast(rows.length+' Zahlung'+(rows.length>1?'en':'')+' verbucht ('+accLabel(acct)+') – Beleg bitte nachreichen.');
+  };
+  const invoiceFromCand = (rows)=>{ const inv=newInvoice('unter'); inv.items=rows.map(r=>({desc:[r.n,r.d.split('-').reverse().join('.'),r.z].filter(Boolean).join(' · '),qty:1,price:r.a,mwst:defMwstFor('unter')})); setTodoDetail(null); setTab('rechnung'); setInvEdit(inv); };
+  const fileCand = (rows)=>{ const res=addImportDrafts(rows.map(r=>({id:uid(), name:r.n, amount:r.a, kind:r.k==='e'?'ein':'aus', datum:r.d, belegnr:'', note:r.z||'', category:'', netto:'', mwst:'', info:''}))); setToast((res&&res.added!=null?res.added:rows.length)+' Umsätze unter Bank abgelegt – dort kannst du sie später zuordnen.'); };
+  const askCandAction = (rows)=>{
+    const accts=['unter',...PROPS.filter(acctCreated),'privat'];
+    askChoice('Was soll ich mit den '+rows.length+' Zahlungen tun?','Summe '+fmt(rows.reduce((x,r)=>x+r.a,0))+'. Wähle, wie sie angelegt werden sollen.',[
+      ...accts.map(k=>({label:'Verbuchen: '+accLabel(k), fn:()=>bookCand(rows,k)})),
+      ...(rows.every(r=>r.k==='e')?[{label:'Rechnung erstellen', fn:()=>invoiceFromCand(rows)}]:[]),
+      {label:'Nur ablegen (Bank)', fn:()=>fileCand(rows)}]);
+  };
+
+  // Beim Öffnen einer automatisch erzeugten Aufgabe: KI erklärt kurz das Problem (einmal pro Aufgabe, Antwort bleibt als Kommentar stehen)
+  const explainTodoRef = useRef({});
+  const explainTodo = async (todo)=>{
+    if(!todo||todo.isNew||todo.source==='user'||explainTodoRef.current[todo.id]||(todo.comments||[]).some(c=>c.author==='ai')) return;
+    explainTodoRef.current[todo.id]=true; setTodoAiBusy(true);
+    try{
+      const bk=todo.ref&&todo.ref.type==='booking'?allBookingsFlat().find(b=>b.id===todo.ref.id):null;
+      const sys="Du bist ein hilfreicher Buchhaltungs-Assistent für eine deutsche Selbstständigen-App. Erkläre in 2 bis 4 kurzen Sätzen in Klartext (KEIN Markdown, keine Aufzählungszeichen), was bei dieser Aufgabe das Problem ist, woran man es erkennt und was der Nutzer konkret tun kann. Erfinde keine Zahlen. Bei Steuerfragen: verbindliche Auskunft gibt nur der Steuerberater.";
+      const usr="Aufgabe: \""+(todo.title||'')+"\". Details: \""+(todo.note||'—')+"\". Quelle: "+(todo.source||'—')+"."+(bk?" Verknüpfte Buchung: "+bk.name+", "+fmt(bk.amount)+", "+bk.date+", Konto "+bk.acctLabel+(bk.item&&bk.item.mwst!==undefined&&bk.item.mwst!==''?", MwSt "+bk.item.mwst+" %":", MwSt nicht erkannt")+(bk.item&&(bk.item.filePath||bk.item.fileData)?", Beleg vorhanden":", kein Beleg")+".":"");
+      const { data:resp, error } = await aiInvoke({ body:{ model:'claude-haiku-4-5', max_tokens:400, system:sys, messages:[{ role:'user', content:[{ type:'text', text:usr }] }] } });
+      if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
+      const t=((resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'').trim();
+      if(t) addTodoComment(todo.id, t, 'ai');
+    }catch(e){ explainTodoRef.current[todo.id]=false; }
+    setTodoAiBusy(false);
+  };
+  // Problemart einer Aufgabe (für die Gruppierung)
+  const todoProblem = (t)=>{ const x=((t.title||'')+' '+(t.note||'')).toLowerCase();
+    if(/mwst|mehrwertsteuer|umsatzsteuer|steuersatz/.test(x)) return 'MwSt / Umsatzsteuer';
+    if(/pdf fehlt|beleg fehlt|kein beleg|ohne beleg|beleg nachreichen/.test(x)) return 'Beleg fehlt';
+    if(/doppel|dublette/.test(x)) return 'Mögliche Doppelung';
+    if(/storno|gutschrift/.test(x)) return 'Storno / Gutschrift';
+    if(/weicht .*ab|abweich|betrag laut pdf|datum laut pdf/.test(x)) return 'Betrag/Datum weicht ab';
+    if(/datev/.test(x)) return 'DATEV-Abgleich';
+    if(/kontoauszug|bank|abbuchung|lastschrift/.test(x)||t.source==='bank') return 'Kontoauszug / Bank';
+    if(t.source==='brief') return 'Briefe';
+    if(t.source==='ustva') return 'Steuer';
+    if(t.source==='payable') return 'Zahlungen';
+    if(t.source==='user') return 'Eigene Aufgaben';
+    return 'Sonstiges'; };
+  // Name einer Aufgabe ohne Vorsatz („Prüfen: …") und ohne Betrag – gleiche Namen werden gruppiert
+  const todoSubject = (t)=> String(t.title||'').replace(/^(prüfen|beleg fehlt|in datev, aber nicht im import)\s*:\s*/i,'').split(' · ')[0].trim() || 'Ohne Namen';
 
   /* ── Ratenzahlungen & Kredite (Sonstiges): Übersicht laufender Raten mit Buchungs-Verknüpfung ── */
   const installments = data.installments || [];
@@ -2957,12 +3053,12 @@ function App({session}) {
   const belBerKeys = ['unter', ...PROPS, 'privat'];
   const belBerLabel = k => k==='unter' ? (names.unternehmen||'Firma') : k==='privat' ? (names.privatLabel||'Privat') : (names[k]||k);
   const belYears = ()=>{ const ys=Object.keys(data).filter(k=>/^\d+$/.test(k)).map(Number); if(!ys.includes(yr)) ys.push(yr); return ys.sort((a,b)=>b-a); };
-  const belegesLeaf = (ber,y2,m2,kind)=>{ const md=getMD(y2,m2)||{}; const list = ber==='unter' ? (kind==='ein'?md.unternehmen?.clients:md.unternehmen?.items) : ber==='privat' ? (kind==='ein'?md.privat?.einnahmen:md.privat?.items) : (kind==='ein'?md.props?.[ber]?.einnahmen:md.props?.[ber]?.expenses);
-    const items=(list||[]).filter(it=>it.filePath||it.fileData).map(it=>({id:it.id,name:it.name||'Beleg',date:it.datum,amount:num(it.amount),recurring:it.recurring,filePath:it.filePath,fileData:it.fileData,fileName:it.fileName,_ber:ber,_y:y2,_m:m2,_kind:kind}));
+  const belegesLeaf = (ber,y2,m2,kind,all)=>{ const md=getMD(y2,m2)||{}; const list = ber==='unter' ? (kind==='ein'?md.unternehmen?.clients:md.unternehmen?.items) : ber==='privat' ? (kind==='ein'?md.privat?.einnahmen:md.privat?.items) : (kind==='ein'?md.props?.[ber]?.einnahmen:md.props?.[ber]?.expenses);
+    const items=(list||[]).filter(it=>all?!it.invId:(it.filePath||it.fileData)).map(it=>({id:it.id,name:it.name||'Beleg',date:it.datum,amount:num(it.amount),recurring:it.recurring,filePath:it.filePath,fileData:it.fileData,fileName:it.fileName,status:it.status,belegnr:it.belegnr,category:it.category,imported:/Import aus sevDesk/.test(it.note||''),_ber:ber,_y:y2,_m:m2,_kind:kind}));
     const dom = ber==='privat'?null:normAcct(ber);
-    if(kind==='ein' && dom){ (data.invoices||[]).forEach(iv=>{ if(iv.pdfPath && normAcct(iv.domain)===dom){ const dt=new Date(iv.sentDate||iv.date); if(!isNaN(dt)&&dt.getFullYear()===y2&&dt.getMonth()===m2) items.push({id:iv.id,name:'Rechnung '+iv.number,date:iv.sentDate||iv.date,amount:(iv.total||0),filePath:iv.pdfPath,_ber:ber,_y:y2,_m:m2,_kind:kind}); } }); }
+    if(!all && kind==='ein' && dom){ (data.invoices||[]).forEach(iv=>{ if(iv.pdfPath && normAcct(iv.domain)===dom){ const dt=new Date(iv.sentDate||iv.date); if(!isNaN(dt)&&dt.getFullYear()===y2&&dt.getMonth()===m2) items.push({id:iv.id,name:'Rechnung '+iv.number,date:iv.sentDate||iv.date,amount:(iv.total||0),filePath:iv.pdfPath,_ber:ber,_y:y2,_m:m2,_kind:kind}); } }); }
     return items; };
-  const belegesUnder = (p)=>{ const out=[]; const bers=p[0]?[p[0]]:belBerKeys; const yl=belYears(); bers.forEach(ber=>{ const yrs=p[1]!=null?[p[1]]:yl; yrs.forEach(y2=>{ const mos=p[2]!=null?[p[2]]:[0,1,2,3,4,5,6,7,8,9,10,11]; mos.forEach(m2=>{ const kinds=p[3]?[p[3]]:['ein','aus']; kinds.forEach(kind=>{ belegesLeaf(ber,y2,m2,kind).forEach(b=>out.push(b)); }); }); }); }); return out; };
+  const belegesUnder = (p,all)=>{ const out=[]; const bers=p[0]?[p[0]]:belBerKeys; const yl=belYears(); bers.forEach(ber=>{ const yrs=p[1]!=null?[p[1]]:yl; yrs.forEach(y2=>{ const mos=p[2]!=null?[p[2]]:[0,1,2,3,4,5,6,7,8,9,10,11]; mos.forEach(m2=>{ const kinds=p[3]?[p[3]]:['ein','aus']; kinds.forEach(kind=>{ belegesLeaf(ber,y2,m2,kind,all).forEach(b=>out.push(b)); }); }); }); }); return out; };
   // Vollständiges Buchungs-Item zu einem Beleg laden (für Detail-Bearbeitung)
   // P2.3: Buchung anhand ihrer id finden (für Steuerberater-Rückfragen, die sich auf eine konkrete Buchung beziehen)
   const findItemLocation = (id, year)=>{
@@ -4147,7 +4243,7 @@ function App({session}) {
           <button onClick={()=>setSideOpen(o=>!o)} title={sideOpen?'Menü einklappen':'Menü ausklappen'} style={{...topIconBtn,background:'none',border:'none'}}><Ic p={P.panel} sz={19} col={C.sub}/></button>
           <div style={{display:'flex',alignItems:'center',gap:2,background:C.surf,border:'1px solid '+C.bdr,borderRadius:999,padding:3,boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03)'}}>
             <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>‹</button>
-            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {(yearAll&&tab==='rechnung')?'Ganzes Jahr':MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
+            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {(yearAll&&(tab==='rechnung'||tab==='belege'))?'Ganzes Jahr':MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
             <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>›</button>
           </div>
           <div style={{flex:1}}/>
@@ -4198,7 +4294,7 @@ function App({session}) {
                 }}>{mn.slice(0,3)}</button>
               ); })}
             </div>
-            <button onClick={()=>{ setYr(calYr); setYearAll(true); setCalOpen(false); }} title="Alle Monate des Jahres anzeigen (Rechnungen)" style={{marginTop:8,width:'100%',background:(yearAll&&calYr===yr)?C.accent:C.surf2,color:(yearAll&&calYr===yr)?C.accentTxt:C.txt,border:'none',borderRadius:9,padding:'10px 0',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700}}>Ganzes Jahr {calYr}</button>
+            <button onClick={()=>{ setYr(calYr); setYearAll(true); setCalOpen(false); }} title="Alle Monate des Jahres anzeigen (Rechnungen, Belege)" style={{marginTop:8,width:'100%',background:(yearAll&&calYr===yr)?C.accent:C.surf2,color:(yearAll&&calYr===yr)?C.accentTxt:C.txt,border:'none',borderRadius:9,padding:'10px 0',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700}}>Ganzes Jahr {calYr}</button>
           </div>
         </div>
       )}
@@ -4948,6 +5044,47 @@ function App({session}) {
                 })()}
 
                 {importTab==='bank' && (<>
+                {(()=>{ const sts=(data.bankStatements||[]).slice(); const by=bankYear||(sts.length?Math.max(...sts.map(x=>+x.year||0)):yr)||yr; const nowYm=new Date().toISOString().slice(0,7);
+                  const monthsOf=(st)=>{ const set=[]; const f=(st.from||'').slice(0,7), t=(st.to||'').slice(0,7); if(f&&t){ let [y,m]=f.split('-').map(Number); const [ty,tm]=t.split('-').map(Number); let g=0; while((y<ty||(y===ty&&m<=tm))&&g++<36){ set.push(y+'-'+String(m).padStart(2,'0')); m++; if(m>12){m=1;y++;} } } return set; };
+                  const fnMonth=(st)=>{ const m=String(st.fileName).match(/(20\d\d)[-_. ]?(0[1-9]|1[0-2])/); return m?m[1]+'-'+m[2]:null; };
+                  const state=(i)=>{ const key=by+'-'+String(i+1).padStart(2,'0'); const ok=sts.filter(st=>(st.count||0)>0 && monthsOf(st).includes(key)); if(ok.length) return {k:'ok',n:ok.reduce((a,x)=>a+x.count,0)}; if(sts.some(st=>!(st.count>0) && fnMonth(st)===key)) return {k:'bad'}; return {k:key>nowYm?'future':'miss'}; };
+                  const yList=sts.filter(st=>+st.year===+by || monthsOf(st).some(k=>k.startsWith(by+'-'))).sort((a,b)=>String(a.from||a.fileName).localeCompare(String(b.from||b.fileName)));
+                  const miss=MONTHS.filter((_,i)=>state(i).k==='miss').length, bad=MONTHS.filter((_,i)=>state(i).k==='bad').length;
+                  const csvOf=(list)=>{ const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"'; const lines=[]; list.forEach(st=>(st.rows||[]).forEach(r=>lines.push([r.d.split('-').reverse().join('.'),r.n,String(r.a).replace('.',','),r.k==='e'?'Eingang':'Ausgang',r.z,st.fileName].map(q).join(';')))); return '﻿'+[['Datum','Name','Betrag','Art','Verwendungszweck','Kontoauszug'].map(q).join(';'),...lines].join('\r\n'); };
+                  const dlCsv=(list,name)=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csvOf(list)],{type:'text/csv;charset=utf-8'})); a.download=name; document.body.appendChild(a); a.click(); a.remove(); };
+                  return (
+                  <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:16,padding:'16px 18px',marginBottom:16}}>
+                    <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                      <div style={{fontSize:17,fontWeight:800}}>Hochgeladene Kontoauszüge</div>
+                      <span style={{flex:1}}/>
+                      <button onClick={()=>setBankYear(by-1)} style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'5px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>‹</button>
+                      <span style={{fontSize:15,fontWeight:700,minWidth:46,textAlign:'center'}}>{by}</span>
+                      <button onClick={()=>setBankYear(by+1)} style={{background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'5px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:15}}>›</button>
+                    </div>
+                    <div style={{fontSize:12.5,color:C.sub,marginTop:4}}>{yList.length} Auszug/Auszüge · {yList.reduce((a,x)=>a+(x.count||0),0)} Umsätze gespeichert{miss?' · ':''}{miss?<b style={{color:C.red}}>{miss} Monat{miss>1?'e':''} fehl{miss>1?'en':'t'}</b>:null}{bad?' · ':''}{bad?<b style={{color:C.amb}}>{bad} nicht lesbar</b>:null}. Die gelesenen Umsätze sind gespeichert – die PDFs müssen nicht noch einmal von der KI gelesen werden.</div>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(112px,1fr))',gap:8,marginTop:12}}>
+                      {MONTHS.map((mn,i)=>{ const st=state(i); const col=st.k==='ok'?C.grn:st.k==='bad'?C.amb:st.k==='miss'?C.red:C.mut; return (
+                        <div key={i} style={{background:hexA(col,st.k==='future'?0.05:0.12),border:'1px solid '+hexA(col,st.k==='future'?0.15:0.4),borderRadius:10,padding:'8px 10px'}}>
+                          <div style={{fontSize:12.5,fontWeight:700,color:C.txt}}>{mn.slice(0,3)}</div>
+                          <div style={{fontSize:11.5,fontWeight:700,color:col,marginTop:2}}>{st.k==='ok'?('✓ '+st.n+' Umsätze'):st.k==='bad'?'nicht lesbar':st.k==='miss'?'fehlt':'–'}</div>
+                        </div>); })}
+                    </div>
+                    {yList.length>0 && <div style={{marginTop:12}}>
+                      {yList.map(st=>(
+                        <div key={st.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 2px',borderTop:'1px solid '+C.sep,flexWrap:'wrap'}}>
+                          <div style={{flex:1,minWidth:180}}>
+                            <div style={{fontSize:13.5,fontWeight:700,color:C.txt}}>{st.fileName}</div>
+                            <div style={{fontSize:12,color:C.sub}}>{st.from?st.from.split('-').reverse().join('.')+' – '+(st.to||'').split('-').reverse().join('.'):'Zeitraum unbekannt'} · {st.count||0} Umsätze · {st.path?'Datei gespeichert':'Datei nicht gespeichert'}</div>
+                          </div>
+                          {(st.count>0) ? <span style={{fontSize:11,fontWeight:700,color:C.grn,background:hexA(C.grn,0.13),border:'1px solid '+hexA(C.grn,0.35),borderRadius:6,padding:'2px 7px'}}>Umsätze gespeichert</span> : <span style={{fontSize:11,fontWeight:700,color:C.amb,background:hexA(C.amb,0.13),border:'1px solid '+hexA(C.amb,0.35),borderRadius:6,padding:'2px 7px'}}>nicht lesbar</span>}
+                          {st.path && <button onClick={()=>openFile(st.path,st.fileName)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>PDF</button>}
+                          {st.path && <button onClick={()=>rereadStatement(st)} disabled={bankBusy===st.id} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:bankBusy===st.id?0.6:1}}>{bankBusy===st.id?'Liest …':'Neu lesen'}</button>}
+                          {(st.rows||[]).length>0 && <button onClick={()=>dlCsv([st],'kontoauszug-'+String(st.fileName).replace(/\.[a-z0-9]+$/i,'')+'.csv')} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>CSV</button>}
+                          <button onClick={()=>askConfirm('Kontoauszug „'+st.fileName+'" aus der Übersicht entfernen? Bereits gebuchte Zuordnungen bleiben erhalten.',async()=>{ try{ if(st.path) await sb.storage.from('belege').remove([st.path]); }catch(e){} setData(prev=>({...prev,bankStatements:(prev.bankStatements||[]).filter(x=>x.id!==st.id)})); })} title="Entfernen" style={{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:15,fontFamily:'inherit'}}>🗑</button>
+                        </div>))}
+                      <div style={{marginTop:8}}><button onClick={()=>dlCsv(yList,'kontoauszuege-'+by+'.csv')} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle {by} als CSV laden</button></div>
+                    </div>}
+                  </div>); })()}
                 <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
                   <div style={{flex:1,minWidth:200,display:'flex',alignItems:'center',gap:9,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:'11px 14px'}}><Ic p={P.search} sz={15} col={C.mut}/><input value={draftSearch} onChange={e=>setDraftSearch(e.target.value)} placeholder="Kontoauszug durchsuchen…" style={{flex:1,background:'none',border:'none',outline:'none',color:C.txt,fontSize:14,fontFamily:'inherit'}}/></div>
                   <label style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:importBusy?'default':'pointer',fontFamily:'inherit',flexShrink:0,opacity:importBusy?0.6:1}}>
@@ -5377,7 +5514,6 @@ function App({session}) {
                       <button key={o.k} onClick={()=>{setInvDomain(o.k);setInvSearch('');}} style={{display:'flex',alignItems:'center',gap:8,background:on?hexA(c,0.22):C.surf,border:'1px solid '+(on?hexA(c,0.6):C.bdr),color:C.txt,borderRadius:999,padding:'8px 14px',fontSize:13.5,fontWeight:on?700:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',flexShrink:0}}>{o.k==='alle'?<Ic p={P.grid} sz={14} col={C.sub}/>:<span style={{width:9,height:9,borderRadius:'50%',background:c}}/>}{o.label}</button>); })}
                   </div>
                 )}
-                <div style={{marginBottom:16}}><PillTabs tabs={[['einzel','Einmalig'],['wied','Wiederkehrend']]} value={invKind} onChange={(k)=>{setInvKind(k);setInvSearch('');}} /></div>
                 <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}>
                   <div style={{flex:1,minWidth:180,position:'relative'}}>
                     <span style={{position:'absolute',left:13,top:'50%',transform:'translateY(-50%)',pointerEvents:'none',display:'inline-flex'}}><Ic p={P.search} sz={15} col={C.mut}/></span>
@@ -5386,16 +5522,12 @@ function App({session}) {
                   </div>
                   <button onClick={()=> invKind==='wied' ? setRecInvEdit(newRecInvoice(invDomain==='alle'?'unter':invDomain)) : setInvEdit(newInvoice(invDomain))} style={{...primBtn,width:'auto',padding:'12px 18px'}}>+ {invKind==='wied'?'Neue wiederkehrende':'Neue Rechnung'}</button>
                   <div style={{position:'relative'}}>
-                    {(()=>{ const active=invKind!=='einzel'||invStatusF!=='alle'; return (
+                    {(()=>{ const active=invStatusF!=='alle'; return (
                     <button onClick={()=>setInvFilterOpen(o=>!o)} title="Filter" style={{display:'inline-flex',alignItems:'center',gap:6,background:(active||invFilterOpen)?hexA(C.pri,0.16):C.surf2,border:'1px solid '+((active||invFilterOpen)?hexA(C.pri,0.45):C.bdr),color:active?C.pri:C.sub,borderRadius:11,padding:'12px 14px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.filter} sz={15} col={active?C.pri:C.sub}/> Filter</button>
                     ); })()}
                     {invFilterOpen && (<>
                       <div onClick={()=>setInvFilterOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
                       <div style={{position:'absolute',right:0,top:'100%',marginTop:8,width:250,background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:14,boxShadow:'0 12px 32px rgba(0,0,0,0.12)',zIndex:85}}>
-                        <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:7,letterSpacing:'0.03em'}}>ART</div>
-                        <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
-                          {[['einzel','Einmalig'],['wied','Wiederkehrend']].map(([k,l])=>{const on=invKind===k;return <button key={k} onClick={()=>{setInvKind(k);setInvSearch('');}} style={{background:on?C.pri:C.surf2,color:on?C.priTxt:C.sub,border:'1px solid '+(on?C.pri:C.bdr),borderRadius:8,padding:'6px 11px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>;})}
-                        </div>
                         {invKind==='einzel' && (<>
                         <div style={{fontSize:11,fontWeight:700,color:C.sub,marginBottom:7,letterSpacing:'0.03em'}}>STATUS</div>
                         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
@@ -5629,40 +5761,13 @@ function App({session}) {
           })()}
           {/* ══ AUFGABEN (manuell + automatisch aus überfälligen Rechnungen/offenen Belegen/Dubletten) ══ */}
           {tab==='aufgaben' && (()=>{
-            const openDetail = (t) => { setBotOpen(false); setTodoDetail({...t, comments:t.comments||[], flaggedByAdvisor:!!t.flaggedByAdvisor, advisorNote:t.advisorNote||''}); };
+            const openDetail = (t) => { setBotOpen(false); setTodoDetail({...t, comments:t.comments||[], flaggedByAdvisor:!!t.flaggedByAdvisor, advisorNote:t.advisorNote||''}); explainTodo(t); };
             const openNew = () => { setBotOpen(false); setTodoDetail({isNew:true, title:'', note:'', ref:null, comments:[], flaggedByAdvisor:false, advisorNote:''}); };
             const allT = todos;
             const openT = allT.filter(t=>!t.done);
             const doneT = allT.filter(t=>t.done);
             const shown = todoFilter==='offen'?openT:todoFilter==='erledigt'?doneT:allT;
-            return (
-              <>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
-                  <div>
-                    <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>To-do</div>
-                    <div style={{fontSize:13,color:C.sub,marginTop:4}}>Eigene Aufgaben und automatische Hinweise der KI an einem Ort – nur sichtbar, wenn wirklich etwas ansteht.</div>
-                  </div>
-                  <button onClick={openNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> To-do erstellen</button>
-                </div>
-                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
-                  {[['offen','Offen',openT.length],['erledigt','Erledigt',doneT.length],['alle','Alle',allT.length]].map(([k,label,n])=>{ const on=todoFilter===k; return (
-                    <button key={k} onClick={()=>setTodoFilter(k)} style={{background:on?hexA(C.pri,0.16):C.surf2,border:'1px solid '+(on?hexA(C.pri,0.4):C.bdr),color:on?C.pri:C.mut,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}{n?' · '+n:''}</button>
-                  ); })}
-                  <span style={{flex:1}}/>
-                  {doneT.length>0 && !todoSelMode && <button onClick={()=>askConfirm('Alle '+doneT.length+' erledigten To-dos endgültig löschen?',()=>removeTodos(doneT.map(t=>t.id)),'Erledigte löschen?')} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.red,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Erledigte löschen · {doneT.length}</button>}
-                  <button onClick={()=>{ setTodoSelMode(m=>!m); setTodoSel([]); }} style={{background:todoSelMode?C.txt:C.surf2,border:'1px solid '+(todoSelMode?C.txt:C.bdr),color:todoSelMode?C.bg:C.sub,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{todoSelMode?'Fertig':'Auswählen'}</button>
-                </div>
-                {todoSelMode && (
-                  <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'10px 12px'}}>
-                    <button onClick={()=>setTodoSel(todoSel.length===shown.length?[]:shown.map(t=>t.id))} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{todoSel.length===shown.length&&shown.length>0?'Auswahl aufheben':'Alle auswählen ('+shown.length+')'}</button>
-                    <span style={{fontSize:13,color:C.sub,flex:1}}>{todoSel.length} ausgewählt</span>
-                    <button disabled={!todoSel.length} onClick={()=>{ doneTodos(todoSel,true); setTodoSel([]); }} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:todoSel.length?'pointer':'not-allowed',opacity:todoSel.length?1:0.45,fontFamily:'inherit'}}>Als erledigt markieren</button>
-                    <button disabled={!todoSel.length} onClick={()=>askConfirm(todoSel.length+' To-dos endgültig löschen?',()=>{ removeTodos(todoSel); setTodoSel([]); })} style={{background:C.redL,color:C.red,border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:todoSel.length?'pointer':'not-allowed',opacity:todoSel.length?1:0.45,fontFamily:'inherit'}}>Löschen</button>
-                  </div>
-                )}
-                {shown.length? (
-                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                    {shown.map(t=>(
+            const renderRow = (t)=>(
                       <div key={t.id} onClick={()=>{ if(todoSelMode) setTodoSel(sel=>sel.includes(t.id)?sel.filter(x=>x!==t.id):[...sel,t.id]); else openDetail(t); }} style={{display:'flex',alignItems:'flex-start',gap:12,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',opacity:t.done?0.6:1,cursor:'pointer'}}>
                         {todoSelMode && <span style={{width:22,height:22,flexShrink:0,marginTop:1,borderRadius:7,border:'1.5px solid '+(todoSel.includes(t.id)?C.pri:C.bdrM),background:todoSel.includes(t.id)?C.pri:'none',display:'flex',alignItems:'center',justifyContent:'center'}}>{todoSel.includes(t.id)&&<Ic p={P.check} sz={14} col={C.priTxt}/>}</span>}
                         {!todoSelMode && <button onClick={e=>{e.stopPropagation();toggleTodoDone(t.id);}} title={t.done?'Als offen markieren':'Erledigt'} style={{width:22,height:22,flexShrink:0,marginTop:1,borderRadius:'50%',border:'1.5px solid '+(t.done?C.accent:C.bdrM),background:t.done?C.accent:'none',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}>{t.done && <Ic p={P.check} sz={13} col={C.accentTxt}/>}</button>}
@@ -5685,7 +5790,49 @@ function App({session}) {
                         </div>
                         <button onClick={e=>{e.stopPropagation();askConfirm('Aufgabe „'+(t.title||'')+'" löschen?',()=>removeTodo(t.id));}} title="Löschen" style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.red,cursor:'pointer',width:30,height:30,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Ic p={P.trash} sz={13} col={C.red}/></button>
                       </div>
-                    ))}
+            );
+            return (
+              <>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:10}}>
+                  <div>
+                    <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>To-do</div>
+                    <div style={{fontSize:13,color:C.sub,marginTop:4}}>Eigene Aufgaben und automatische Hinweise der KI an einem Ort – nur sichtbar, wenn wirklich etwas ansteht.</div>
+                  </div>
+                  <button onClick={openNew} style={{display:'inline-flex',alignItems:'center',gap:7,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> To-do erstellen</button>
+                </div>
+                <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
+                  {[['offen','Offen',openT.length],['erledigt','Erledigt',doneT.length],['alle','Alle',allT.length]].map(([k,label,n])=>{ const on=todoFilter===k; return (
+                    <button key={k} onClick={()=>setTodoFilter(k)} style={{background:on?hexA(C.pri,0.16):C.surf2,border:'1px solid '+(on?hexA(C.pri,0.4):C.bdr),color:on?C.pri:C.mut,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{label}{n?' · '+n:''}</button>
+                  ); })}
+                  <span style={{flex:1}}/>
+                  {doneT.length>0 && !todoSelMode && <button onClick={()=>askConfirm('Alle '+doneT.length+' erledigten To-dos endgültig löschen?',()=>removeTodos(doneT.map(t=>t.id)),'Erledigte löschen?')} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.red,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Erledigte löschen · {doneT.length}</button>}
+                  <button onClick={()=>{ setTodoSelMode(m=>!m); setTodoSel([]); }} style={{background:todoSelMode?C.txt:C.surf2,border:'1px solid '+(todoSelMode?C.txt:C.bdr),color:todoSelMode?C.bg:C.sub,borderRadius:10,padding:'7px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{todoSelMode?'Fertig':'Auswählen'}</button>
+                </div>
+                <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+                  <span style={{fontSize:12.5,color:C.sub,fontWeight:600}}>Gruppieren:</span>
+                  {[['problem','Nach Problem'],['name','Nach Name'],['liste','Liste']].map(([k,l])=>{ const on=todoGroupBy===k; return <button key={k} onClick={()=>setTodoGroupBy(k)} style={{background:on?C.txt:C.surf2,color:on?C.bg:C.txt,border:'1px solid '+(on?C.txt:C.bdr),borderRadius:999,padding:'6px 13px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>; })}
+                </div>
+                {todoSelMode && (
+                  <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'10px 12px'}}>
+                    <button onClick={()=>setTodoSel(todoSel.length===shown.length?[]:shown.map(t=>t.id))} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{todoSel.length===shown.length&&shown.length>0?'Auswahl aufheben':'Alle auswählen ('+shown.length+')'}</button>
+                    <span style={{fontSize:13,color:C.sub,flex:1}}>{todoSel.length} ausgewählt</span>
+                    <button disabled={!todoSel.length} onClick={()=>{ doneTodos(todoSel,true); setTodoSel([]); }} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:todoSel.length?'pointer':'not-allowed',opacity:todoSel.length?1:0.45,fontFamily:'inherit'}}>Als erledigt markieren</button>
+                    <button disabled={!todoSel.length} onClick={()=>askConfirm(todoSel.length+' To-dos endgültig löschen?',()=>{ removeTodos(todoSel); setTodoSel([]); })} style={{background:C.redL,color:C.red,border:'none',borderRadius:9,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:todoSel.length?'pointer':'not-allowed',opacity:todoSel.length?1:0.45,fontFamily:'inherit'}}>Löschen</button>
+                  </div>
+                )}
+                {shown.length? (
+                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                    {(()=>{ const mode=todoGroupBy; const gm=new Map(); shown.forEach(t=>{ const k=mode==='problem'?todoProblem(t):mode==='name'?todoSubject(t):'__'; if(!gm.has(k)) gm.set(k,[]); gm.get(k).push(t); }); const groups=[...gm.entries()].sort((x,y)=>y[1].length-x[1].length);
+                      return groups.map(([k,items])=>{ if(mode==='liste'||(mode==='name'&&items.length<2)) return items.map(t=>renderRow(t)); const open=todoGroupOpen[mode+k]!==false; return (
+                        <div key={mode+k} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'4px 10px 10px'}}>
+                          <div onClick={()=>setTodoGroupOpen(o=>({...o,[mode+k]:!open}))} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 4px',cursor:'pointer'}}>
+                            <span style={{color:C.mut,fontSize:14,width:14}}>{open?'▾':'▸'}</span>
+                            <span style={{fontSize:14.5,fontWeight:800,color:C.txt,flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{k}</span>
+                            <span style={{fontSize:12,fontWeight:700,color:C.pri,background:hexA(C.pri,0.14),borderRadius:8,padding:'3px 9px'}}>{items.length}</span>
+                            {items.some(t=>!t.done) && <button onClick={e=>{e.stopPropagation();askConfirm('Alle '+items.filter(t=>!t.done).length+' To-dos in „'+k+'" als erledigt markieren?',()=>doneTodos(items.filter(t=>!t.done).map(t=>t.id),true),'Gruppe erledigen?');}} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle erledigt</button>}
+                          </div>
+                          {open && <div style={{display:'flex',flexDirection:'column',gap:10}}>{items.map(t=>renderRow(t))}</div>}
+                        </div>); }); })()}
                   </div>
                 ) : <div style={{...SC,fontSize:13,color:C.mut,textAlign:'center',padding:'30px 24px'}}>{todoFilter==='offen'?'Keine offenen To-dos – alles erledigt. ✔':todoFilter==='erledigt'?'Noch keine erledigten To-dos.':'Noch keine To-dos. Lege oben das erste an.'}</div>}
               </>
@@ -5735,6 +5882,13 @@ function App({session}) {
                           <div key={c.id} style={{background:c.author==='ai'?hexA(C.pri,0.10):C.surf2,border:'1px solid '+(c.author==='ai'?hexA(C.pri,0.25):C.bdr),borderRadius:10,padding:'9px 11px'}}>
                             <div style={{fontSize:10.5,fontWeight:700,color:c.author==='ai'?C.pri:C.mut,marginBottom:3}}>{c.author==='ai'?'KI':'Du'}</div>
                             <div style={{fontSize:13,color:C.txt,whiteSpace:'pre-wrap',lineHeight:1.45}}>{c.text}</div>
+                            {c.cand && c.cand.rows && c.cand.rows.length>0 && (
+                              <div style={{marginTop:8,background:C.surf,border:'1px solid '+C.bdr,borderRadius:9,padding:'8px 10px'}}>
+                                <div style={{fontSize:11.5,fontWeight:700,color:C.sub,marginBottom:4}}>GEFUNDEN IM KONTOAUSZUG · {c.cand.rows.length} Zahlung{c.cand.rows.length>1?'en':''} · {fmt(c.cand.total)}</div>
+                                {c.cand.rows.slice(0,8).map((r,i)=>(<div key={i} style={{display:'flex',gap:8,fontSize:12,color:C.txt}}><span style={{...NUM,color:C.sub,whiteSpace:'nowrap'}}>{String(r.d).split('-').reverse().join('.')}</span><span style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.n}</span><span style={{...NUM,whiteSpace:'nowrap'}}>{r.k==='e'?'+':'−'}{fmt(r.a)}</span></div>))}
+                                {c.cand.rows.length>8 && <div style={{fontSize:11.5,color:C.mut}}>… und {c.cand.rows.length-8} weitere</div>}
+                                <button onClick={()=>askCandAction(c.cand.rows)} style={{marginTop:8,background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'8px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Verbuchen / Rechnung / Ablegen …</button>
+                              </div>)}
                           </div>
                         ))}
                         {todoAiBusy && <div style={{fontSize:12.5,color:C.mut,display:'flex',alignItems:'center',gap:6}}><Ic p={P.spark} sz={13} col={C.pri}/> Ich denk grad nach…</div>}
@@ -6069,22 +6223,26 @@ function App({session}) {
             const crumbLabel=(i)=>{ if(i===0) return belBerLabel(belPath[0]); if(i===1) return String(belPath[1]); if(i===2) return MONTHS[belPath[2]]; if(i===3) return belPath[3]==='ein'?'Einnahmen':'Ausgaben'; return ''; };
             const zipLabel=()=> ['Belege',...belPath.map((_,i)=>crumbLabel(i))].join('_');
             // Alle Belege flach, nach Modus (einmalig/wiederkehrend) + Suche gefiltert
-            const allBel=belegesUnder([]);
+            // Alle gebuchten Belege (auch ohne PDF) des gewählten Zeitraums – wie die Rechnungsseite
+            const allBel=belegesUnder([], true);
             const q=belegSearch.trim().toLowerCase();
-            const ymKey=yr+'-'+String(mo+1).padStart(2,'0');
-            const shown=(()=>{ let list=allBel.slice();
-              if(belAcct!=='alle') list=list.filter(b=>normAcct(b._ber)===normAcct(belAcct));
+            const inPeriod=(b)=> b._y===yr && (yearAll || b._m===mo);
+            const base=allBel.filter(b=>(belAcct==='alle'||normAcct(b._ber)===normAcct(belAcct)) && (q || inPeriod(b)));
+            const hasFile=(b)=>!!(b.filePath||b.fileData);
+            const isDone=(b)=>b.status==='bezahlt'||b.status==='abgebucht';
+            const cnt={ all:base.length, miss:base.filter(b=>!hasFile(b)).length, open:base.filter(b=>b.status==='offen').length, rec:base.filter(b=>b.recurring).length };
+            const shownAll=(()=>{ let list=base.slice();
               if(belKindF==='einmalig') list=list.filter(b=>!b.recurring);
               else if(belKindF==='wied') list=list.filter(b=>!!b.recurring);
               if(belStatusF==='offen') list=list.filter(b=>b.status==='offen');
-              else if(belStatusF==='erledigt') list=list.filter(b=>b.status==='bezahlt'||b.status==='abgebucht');
-              // wiederkehrende Vorlagen nur einmal zeigen
-              { const seen=new Set(); list=list.filter(b=>{ if(!b.recurring) return true; const key=(b.name||'')+'|'+(b.amount||'')+'|'+(b._ber||''); if(seen.has(key))return false; seen.add(key); return true; }); }
+              else if(belStatusF==='erledigt') list=list.filter(isDone);
+              if(belFileF==='fehlt') list=list.filter(b=>!hasFile(b));
+              else if(belFileF==='mit') list=list.filter(hasFile);
               if(q){ list=list.filter(b=>((b.name||'')+' '+(b.amount||'')+' '+(b.belegnr||'')+' '+belBerLabel(b._ber)).toLowerCase().includes(q)); }
-              else { list=list.filter(b=>{ const iso=toISO(b.date)||b.date||''; return !iso || iso.slice(0,7)===ymKey; }); }
-              return list;
+              return list.sort((a,b)=>String(toISO(b.date)||b.date||'').localeCompare(String(toISO(a.date)||a.date||'')));
             })();
-            const groups={}; shown.forEach(b=>{ const iso=toISO(b.date)||b.date||''; const key=/^\d{4}-\d{2}/.test(iso)?iso.slice(0,7):'0000-00'; (groups[key]=groups[key]||[]).push(b); });
+            const shown=shownAll.slice(0,belLimit);
+            const groups={}; shown.forEach(b=>{ const key=b._y+'-'+String(b._m+1).padStart(2,'0'); (groups[key]=groups[key]||[]).push(b); });
             const gkeys=Object.keys(groups).sort().reverse();
             return (
               <>
@@ -6106,7 +6264,7 @@ function App({session}) {
                   </div>
                   <button onClick={()=>openCapture({mode:'import',kind:'aus',account:(belAcct!=='alle'&&belAcct?belAcct:''),recurring:belKindF==='wied'})} style={{display:'inline-flex',alignItems:'center',justifyContent:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:12,padding:'12px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}><Ic p={P.plus} sz={15} col={C.actTxt}/> Beleg erfassen</button>
                   <div style={{position:'relative'}}>
-                    {(()=>{ const active=belKindF!=='alle'||belStatusF!=='alle'; return (
+                    {(()=>{ const active=belKindF!=='alle'||belStatusF!=='alle'||belFileF!=='alle'; return (
                     <button onClick={()=>setBelFilterOpen(o=>!o)} title="Filter" style={{display:'inline-flex',alignItems:'center',gap:6,background:(active||belFilterOpen)?hexA(C.pri,0.16):C.surf2,border:'1px solid '+((active||belFilterOpen)?hexA(C.pri,0.45):C.bdr),color:active?C.pri:C.sub,borderRadius:11,padding:'12px 14px',fontSize:13.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.filter} sz={15} col={active?C.pri:C.sub}/> Filter</button>
                     ); })()}
                     {belFilterOpen && (<>
@@ -6120,26 +6278,49 @@ function App({session}) {
                         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                           {[['alle','Alle'],['offen','Offen'],['erledigt','Erledigt']].map(([k,l])=>{const on=belStatusF===k;return <button key={k} onClick={()=>setBelStatusF(k)} style={{background:on?C.pri:C.surf2,color:on?C.priTxt:C.sub,border:'1px solid '+(on?C.pri:C.bdr),borderRadius:8,padding:'6px 11px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>;})}
                         </div>
+                        <div style={{fontSize:11,fontWeight:700,color:C.sub,margin:'14px 0 7px',letterSpacing:'0.03em'}}>BELEG (PDF)</div>
+                        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                          {[['alle','Alle'],['mit','Vorhanden'],['fehlt','Fehlt']].map(([k,l])=>{const on=belFileF===k;return <button key={k} onClick={()=>setBelFileF(k)} style={{background:on?C.pri:C.surf2,color:on?C.priTxt:C.sub,border:'1px solid '+(on?C.pri:C.bdr),borderRadius:8,padding:'6px 11px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{l}</button>;})}
+                        </div>
                       </div>
                     </>)}
                   </div>
                 </div>
-                {shown.length? <div style={{display:'flex',flexDirection:'column',gap:20}}>{gkeys.map(gk=>{ const mm=gk.split('-')[1]; const yy=gk.split('-')[0]; const lbl=(mm==='00'||!mm)?'Ohne Datum':(MONTHS[+mm-1]+' '+yy); return (
+                {/* Überblick: gebucht / ohne Beleg / offen / wiederkehrend */}
+                <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+                  {[['Gebucht',cnt.all,C.grn,()=>{setBelFileF('alle');setBelStatusF('alle');setBelKindF('alle');}],['Beleg fehlt',cnt.miss,C.red,()=>{setBelFileF('fehlt');}],['Offen',cnt.open,C.amb,()=>{setBelStatusF('offen');}],['Wiederkehrend',cnt.rec,C.pri,()=>{setBelKindF('wied');}]].map(([l,n,col,fn])=>(
+                    <button key={l} onClick={fn} style={{display:'inline-flex',alignItems:'center',gap:8,background:hexA(col,0.1),border:'1px solid '+hexA(col,0.35),color:C.txt,borderRadius:999,padding:'7px 13px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><span style={{...NUM,fontWeight:800,color:col}}>{n}</span>{l}</button>))}
+                </div>
+                {shown.length? <div style={{display:'flex',flexDirection:'column',gap:20}}>{gkeys.map(gk=>{ const mm=gk.split('-')[1]; const yy=gk.split('-')[0]; const lbl=MONTHS[+mm-1]+' '+yy; return (
                   <div key={gk}>
-                    <div style={{fontSize:11,fontWeight:700,color:C.mut,letterSpacing:'0.06em',marginBottom:9,textTransform:'uppercase'}}>{lbl} · {groups[gk].length}</div>
-                    <div style={{display:'flex',flexDirection:'column',gap:10}}>{groups[gk].map(r=>{ const bc=acol(r._ber); const aus=r._kind==='aus'; return (
-                      <div key={r.id+r._y+r._m} onClick={()=>openCaptureEdit(r)} style={{display:'flex',alignItems:'center',gap:13,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',cursor:'pointer'}}>
+                    <div style={{fontSize:13,fontWeight:700,color:C.sub,marginBottom:10}}>{lbl} · {groups[gk].length}</div>
+                    <div style={{display:'flex',flexDirection:'column',gap:10}}>{groups[gk].map(r=>{ const bc=acol(r._ber); const aus=r._kind==='aus'; const file=hasFile(r); const tag=(t,col)=><span key={t} style={{fontSize:11,fontWeight:700,color:col,background:hexA(col,0.13),border:'1px solid '+hexA(col,0.35),borderRadius:6,padding:'2px 7px',whiteSpace:'nowrap'}}>{t}</span>; return (
+                      <div key={r.id+r._y+r._m} onClick={()=>file?openFile(r.filePath||r.fileData,r.fileName||r.name,{replace:null,remove:null}):openCaptureEdit(r)} title={file?'Beleg ansehen':'Kein Beleg – anklicken zum Bearbeiten und Hochladen'} style={{display:'flex',alignItems:'center',gap:13,background:C.surf2,border:'1px solid '+C.bdr,borderRadius:14,padding:'13px 15px',cursor:'pointer'}}>
                         <div style={{width:46,height:46,flexShrink:0,borderRadius:12,background:hexA(bc,0.18),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.clip} sz={20} col={bc}/></div>
                         <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:15.5,fontWeight:700,color:C.txt,display:'flex',alignItems:'center',gap:6,minWidth:0}}><span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}</span>{r.recurring&&<Ic p={P.repeat} sz={13} col={bc}/>}</div>
-                          <div style={{fontSize:12.5,color:C.sub,marginTop:3,display:'flex',alignItems:'center',gap:6}}><span style={{color:bc,fontWeight:600}}>{belBerLabel(r._ber)}</span><span style={{color:C.mut}}>·</span>{(r.date&&(toISO(r.date)||r.date))||'—'}</div>
+                          <div style={{fontSize:15.5,fontWeight:700,color:C.txt,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.name}</div>
+                          <div style={{fontSize:12.5,color:C.sub,marginTop:3,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+                            <span style={{color:bc,fontWeight:600}}>{belBerLabel(r._ber)}</span>
+                            {r.belegnr && <span style={{display:'flex',alignItems:'center',gap:4}}><Ic p={P.doc} sz={12} col={C.mut}/>{r.belegnr}</span>}
+                            <span style={{display:'flex',alignItems:'center',gap:4}}><Ic p={P.cal} sz={12} col={C.mut}/>{(r.date&&(toISO(r.date)||r.date))?String(toISO(r.date)||r.date).split('-').reverse().join('.'):MONTHS[r._m].slice(0,3)+' '+r._y}</span>
+                            {r.category && <span>{r.category}</span>}
+                          </div>
+                          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:7}}>
+                            {tag('Verbucht',C.grn)}
+                            {r.status==='offen'?tag('Offen',C.amb):tag(r.status==='abgebucht'?'Abgebucht':'Bezahlt',C.grn)}
+                            {r.recurring && tag('Wiederkehrend',C.pri)}
+                            {file?tag('Beleg ✓',C.grn):tag('Beleg fehlt',C.red)}
+                            {r.imported && tag('Import',C.mut)}
+                          </div>
                         </div>
-                        <div style={{fontSize:16,fontWeight:800,...NUM,color:aus?C.exp:C.txt,whiteSpace:'nowrap'}}>{aus?'-':''}{fmt(Math.abs(r.amount))}</div>
-                        <span style={{color:C.mut,fontSize:18,flexShrink:0}}>›</span>
+                        <div style={{fontSize:16,fontWeight:800,...NUM,color:(aus!==(r.amount<0))?C.exp:C.txt,whiteSpace:'nowrap'}}>{(aus!==(r.amount<0))?'-':''}{fmt(Math.abs(r.amount))}</div>
+                        <button onClick={e=>{e.stopPropagation();openCaptureEdit(r);}} title="Bearbeiten" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,width:30,height:30,borderRadius:7,fontSize:15,fontFamily:'inherit'}}>✎</button>
                       </div>
                     ); })}</div>
                   </div>
-                ); })}</div> : <div style={{...SC,textAlign:'center',color:C.mut,fontSize:14,padding:'34px 24px'}}>{belKindF==='wied'?'Noch keine wiederkehrenden Belege.':(belegSearch?'Keine Treffer.':'Noch keine Belege. Hänge Belege an Buchungen an – sie erscheinen hier automatisch.')}</div>}
+                ); })}
+                {shownAll.length>shown.length && <button onClick={()=>setBelLimit(l=>l+100)} style={{width:'100%',background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:12,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Mehr anzeigen ({shown.length} von {shownAll.length})</button>}
+                </div> : <div style={{...SC,textAlign:'center',color:C.mut,fontSize:14,padding:'34px 24px'}}>{belegSearch?'Keine Treffer.':(base.length?'Keine Belege mit diesem Filter.':(yearAll?'Keine Belege in diesem Jahr.':'Keine Belege in diesem Monat – oben den Monat wählen oder „Ganzes Jahr".'))}</div>}
               </>
             );
           })()}
