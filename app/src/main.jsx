@@ -1355,6 +1355,7 @@ function App({session}) {
   const [todoSel,setTodoSel]= useState([]);
   const [packBusy,setPackBusy]= useState(false);       // Steuerberater-Paket wird gepackt
   const [packY,setPackY]= useState(new Date().getFullYear()); const [packM,setPackM]= useState('');  // Zeitraum fürs Paket ('' = ganzes Jahr)
+  const [taxUp,setTaxUp]= useState(null);            // Steuerunterlage hochladen: {file,year,cat,title,acct,ki,busy,msg}
   const [taxDocY,setTaxDocY]= useState(null);        // Steuerunterlagen: gewähltes Jahr
   const [wiedF,setWiedF]= useState('alle');          // Wiederkehrend: Filter
   const [flyout,setFlyout]= useState(null);           // Overlay neben der Navigation {kind:'konten'|'mehr', top}
@@ -2536,6 +2537,31 @@ function App({session}) {
             return nd; });
     return {ch, diff};
   };
+  // Steuerunterlage (EÜR, BWA, Bescheid …) hochladen; die KI liest sie aus, damit der Assistent später damit arbeiten kann
+  const uploadTaxDoc = async ()=>{
+    const t=taxUp; if(!t||!t.file||t.busy) return;
+    setTaxUp(x=>({...x,busy:true,msg:'Lade hoch …'}));
+    try{
+      const year=Number(t.year)||new Date().getFullYear(); const cat=t.cat; const title=(t.title||t.file.name.replace(/\.[a-z0-9]+$/i,'')).slice(0,120);
+      const fi=await storeAttachment(t.file, ['Steuer',String(year),cat], title+'_'+new Date().toISOString().slice(0,10));
+      let summary='';
+      if(t.ki){
+        setTaxUp(x=>({...x,msg:'KI liest das Dokument …'}));
+        try{
+          const f=t.file; const isPdf=/\.pdf$/i.test(f.name)||f.type==='application/pdf'; const isImg=/^image\//.test(f.type)||/\.(png|jpe?g|webp)$/i.test(f.name);
+          let content;
+          const prompt='Dies ist ein Steuer-/Buchhaltungsdokument (Kategorie: '+cat+', Jahr: '+year+'). Fasse in höchstens 8 kurzen Sätzen bzw. Stichpunkten (Deutsch) die steuerlich wichtigen Kennzahlen und Aussagen zusammen, z. B. Betriebseinnahmen, Betriebsausgaben, Gewinn/Verlust, Umsatzsteuer, Vorauszahlungen, Fristen, Auffälligkeiten. Nenne nur Zahlen, die tatsächlich im Dokument stehen.';
+          if(isPdf||isImg){ const b64=await fileToB64(f); const mt=isPdf?'application/pdf':(f.type||'image/jpeg'); content=[isPdf?{type:'document',source:{type:'base64',media_type:mt,data:b64}}:{type:'image',source:{type:'base64',media_type:mt,data:b64}},{type:'text',text:prompt}]; }
+          else { const txt=(await f.text()).slice(0,40000); content=[{type:'text',text:prompt+'\n\nInhalt:\n'+txt}]; }
+          const {data:resp}=await aiInvoke({body:{model:'claude-sonnet-4-6',max_tokens:900,messages:[{role:'user',content}]}});
+          summary=((resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'').trim();
+        }catch(e){ summary=''; }
+      }
+      const id=uid();
+      setData(prev=>({...prev, taxDocs:[{id, account:t.acct||'unter', year, category:cat, title, amount:null, note:'', summary:summary.slice(0,900), filePath:fi.path, fileName:fi.fname, createdAt:new Date().toISOString().slice(0,10)}, ...(prev.taxDocs||[])]}));
+      setTaxDocY(year); setTaxUp(null); setToast('Gespeichert in Steuerunterlagen'+(summary?' – KI hat das Dokument ausgewertet':''));
+    }catch(e){ setTaxUp(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
+  };
   // DATEV-Datei (Steuerberater) gegen die Buqo-Buchungen prüfen; Abweichungen landen in „Zu prüfen", die KI fasst Fehlermuster zusammen
   const runDatevCheck = async (file)=>{
     if(!file||datevCkBusy) return;
@@ -3302,6 +3328,7 @@ function App({session}) {
     ctx.finance=buildFinanceContext();
     ctx.counts=(d.customers||[]).length+' Kunden, '+(d.invoices||[]).length+' Rechnungen, '+(d.recurInvoices||[]).length+' wiederkehrende Rechnungen, '+(d.todos||[]).filter(t=>!t.done).length+' offene To-dos';
     const p=botPendingRef.current; if(p&&p.inv){ ctx.pendingInvoice=p.inv.number+' an '+(p.inv.custName||'?')+' über '+fmt(invTotals(p.inv.items).gross); }
+    try{ const tds=(d.taxDocs||[]).filter(t=>t.summary||['EÜR / Gewinnermittlung','BWA / Auswertung','Jahresabschluss','Steuerbescheid','Umsatzsteuer'].includes(t.category)).slice(0,14); if(tds.length) ctx.taxDocs=tds.map(t=>'• '+t.year+' · '+t.category+' · '+t.title+(t.summary?' – '+String(t.summary).replace(/\s+/g,' ').slice(0,450):'')); }catch(e){}
     try{ ctx.letters=ACT.letterMemoryLines(d, 8); const op=(d.payables||[]).filter(x=>x.status==='offen').slice(0,8); if(op.length) ctx.letters=[...(ctx.letters||[]), ...op.map(x=>'• Offene Zahlung · '+accLabel(x.account)+' · '+x.payee+' '+fmt(x.amount)+(x.due?' · fällig '+x.due:''))]; }catch(e){}
     if(attachment) ctx.attachment=attachment.name+' ('+attachment.kind+')';
     return ctx; };
@@ -5800,13 +5827,35 @@ function App({session}) {
           {tab==='steuerdocs' && (()=>{ const docs=(data.taxDocs||[]).slice().sort((a,b)=>(b.year-a.year)||String(a.category).localeCompare(b.category)); const years=[...new Set(docs.map(d=>d.year))]; const yF=(taxDocY&&years.includes(taxDocY))?taxDocY:(years[0]||null); const shown=docs.filter(d=>d.year===yF); const cats=[...new Set(shown.map(d=>d.category))];
             return (<>
               <div style={{fontSize:isMobile?28:34,fontWeight:800,letterSpacing:'-0.03em'}}>Steuerunterlagen</div>
-              <div style={{fontSize:13,color:C.sub,marginTop:4,marginBottom:16}}>Alles, was du für die Steuererklärung brauchst – sortiert nach Jahr und Kategorie. Lade Belege im Assistenten hoch, er legt sie hier ab.</div>
+              <div style={{fontSize:13,color:C.sub,marginTop:4,marginBottom:16}}>Alles, was du für die Steuererklärung brauchst – sortiert nach Jahr und Kategorie. Lade hier z. B. deine EÜR, BWA oder einen Steuerbescheid hoch – die KI liest sie aus und der Assistent nutzt sie als Steuerberater. Belege kannst du auch im Assistenten hochladen, er legt sie hier ab.</div>
+              <button onClick={()=>setTaxUp({file:null,year:new Date().getFullYear()-1,cat:'EÜR / Gewinnermittlung',title:'',acct:'unter',ki:true,busy:false,msg:''})} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:16}}>+ Dokument hochladen</button>
+              {taxUp && (
+                <div onClick={()=>!taxUp.busy&&setTaxUp(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:170,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+                  <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'20px 22px',maxWidth:460,width:'100%',boxShadow:'0 24px 60px rgba(0,0,0,0.3)'}}>
+                    <div style={{fontSize:17,fontWeight:800,marginBottom:12}}>Steuerunterlage hochladen</div>
+                    <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                      <label style={{display:'block',border:'1.5px dashed '+C.bdrM,borderRadius:12,padding:'14px',textAlign:'center',cursor:'pointer',fontSize:13.5,color:taxUp.file?C.txt:C.sub,fontWeight:taxUp.file?700:500}}>{taxUp.file?taxUp.file.name:'Datei wählen (PDF, Foto, CSV)'}<input type="file" accept=".pdf,.csv,.txt,image/*" onChange={e=>{ const f=e.target.files&&e.target.files[0]; if(f) setTaxUp(x=>({...x,file:f,title:x.title||f.name.replace(/\.[a-z0-9]+$/i,'')})); }} style={{display:'none'}}/></label>
+                      <select value={taxUp.cat} onChange={e=>setTaxUp(x=>({...x,cat:e.target.value}))} style={{...SS,textAlign:'left'}}>{ACT.TAX_CATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
+                      <div style={{display:'flex',gap:10}}>
+                        <select value={taxUp.year} onChange={e=>setTaxUp(x=>({...x,year:+e.target.value}))} style={{...SS,textAlign:'left',flex:1}}>{[0,1,2,3,4,5].map(i=>{ const y=new Date().getFullYear()-i; return <option key={y} value={y}>{y}</option>; })}</select>
+                        <select value={taxUp.acct} onChange={e=>setTaxUp(x=>({...x,acct:e.target.value}))} style={{...SS,textAlign:'left',flex:1.4}}>{['unter',...PROPS.filter(acctCreated),'privat'].map(k=><option key={k} value={k}>{accLabel(k)}</option>)}</select>
+                      </div>
+                      <input value={taxUp.title} onChange={e=>setTaxUp(x=>({...x,title:e.target.value}))} placeholder="Bezeichnung, z. B. EÜR 2025 vom Steuerberater" style={{...SS,textAlign:'left'}}/>
+                      <label style={{display:'flex',gap:8,alignItems:'center',fontSize:13,cursor:'pointer'}}><input type="checkbox" checked={taxUp.ki} onChange={e=>setTaxUp(x=>({...x,ki:e.target.checked}))}/> KI soll das Dokument auslesen (verbraucht KI-Guthaben)</label>
+                      {taxUp.msg && <div style={{fontSize:12.5,color:C.sub}}>{taxUp.msg}</div>}
+                      <div style={{display:'flex',gap:8,marginTop:4}}>
+                        <button onClick={uploadTaxDoc} disabled={!taxUp.file||taxUp.busy} style={{flex:1,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:(!taxUp.file||taxUp.busy)?0.55:1}}>{taxUp.busy?'Läuft …':'Hochladen'}</button>
+                        <button onClick={()=>setTaxUp(null)} disabled={taxUp.busy} style={{background:C.surf2,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'12px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>)}
               {years.length>0 && <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>{years.map(y=>{ const on=y===yF; return <button key={y} onClick={()=>setTaxDocY(y)} style={{background:on?C.txt:C.surf,border:'1px solid '+(on?C.txt:C.bdr),color:on?C.bg:C.sub,borderRadius:999,padding:'7px 15px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{y}</button>; })}</div>}
               {docs.length===0 ? <div style={{...SC,textAlign:'center',padding:'34px 20px',color:C.sub,fontSize:14,lineHeight:1.6}}>Noch keine Unterlagen. Häng im Assistenten z. B. eine Spendenquittung oder einen Steuerbescheid an – er erkennt, ob es steuerrelevant ist, und legt es hier ab.</div>
               : cats.map(c=>(<div key={c} style={{...SC,marginBottom:12,padding:'8px 8px'}}>
                 <div style={{fontSize:12,fontWeight:700,color:C.sub,letterSpacing:'0.03em',padding:'8px 10px'}}>{c.toUpperCase()}</div>
                 {shown.filter(d=>d.category===c).map((d,i)=>(<div key={d.id} style={{display:'flex',alignItems:'center',gap:10,padding:'11px 10px',borderTop:'1px solid '+C.sep}}>
-                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:14.5,fontWeight:600,color:C.txt}}>{d.title}</div><div style={{fontSize:12,color:C.sub}}>{accLabel(d.account)}{d.note?' · '+d.note:''}</div></div>
+                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:14.5,fontWeight:600,color:C.txt}}>{d.title}</div><div style={{fontSize:12,color:C.sub}}>{accLabel(d.account)}{d.note?' · '+d.note:''}</div>{d.summary && <div style={{fontSize:12,color:C.txt,marginTop:5,lineHeight:1.5,whiteSpace:'pre-wrap',background:C.surf3,borderRadius:8,padding:'6px 9px'}}>🤖 {d.summary}</div>}</div>
                   {d.amount!=null && <div style={{fontSize:14.5,fontWeight:700,...NUM}}>{fmt(d.amount)}</div>}
                   {d.filePath && <button onClick={()=>openFile(d.filePath,d.fileName)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 12px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Ansehen</button>}
                   <button onClick={()=>askConfirm('„'+d.title+'" löschen? Die Datei wird ebenfalls entfernt.',async()=>{ try{ if(d.filePath) await sb.storage.from('belege').remove([d.filePath]); }catch(e){} setData(prev=>({...prev,taxDocs:(prev.taxDocs||[]).filter(x=>x.id!==d.id)})); })} title="Löschen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:18,fontFamily:'inherit'}}>×</button>
