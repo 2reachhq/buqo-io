@@ -22,6 +22,7 @@ export function matchBank(rows, bankRows) {
     });
     if (best != null) { used.add(best); res.set(r.key, bankRows[best]); }
   });
+  res.used = used; // Indizes der zugeordneten Umsätze (der Rest sind Umsätze ohne Gegenstück in der CSV)
   return res;
 }
 

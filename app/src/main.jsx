@@ -152,6 +152,19 @@ const evalAmount = s => {
   try { const r = Function('"use strict"; return ('+cleaned+')')(); return (typeof r==='number'&&isFinite(r)) ? Math.round(r*100)/100 : NaN; } catch(e) { return NaN; }
 };
 const uid  = () => Math.random().toString(36).slice(2,9);
+// Kleiner Markdown-Renderer für Chat-Antworten: Absätze mit Abstand, Listen, **fett**
+const mdInline = (txt)=> String(txt).split(/(\*\*[^*]+\*\*)/g).map((p,i)=> /^\*\*[^*]+\*\*$/.test(p) ? <strong key={i} style={{fontWeight:700}}>{p.slice(2,-2)}</strong> : <React.Fragment key={i}>{p}</React.Fragment>);
+const renderMd = (text)=>{
+  const blocks=[]; let list=null;
+  String(text||'').replace(/\r/g,'').split('\n').forEach(line=>{
+    const m=line.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/); const num=/^\s*\d+[.)]\s/.test(line);
+    if(m){ if(!list||list.num!==num){ list={num,items:[]}; blocks.push(list); } list.items.push(m[1]); }
+    else if(!line.trim()){ list=null; blocks.push(null); }
+    else { list=null; const h=line.replace(/^#{1,3}\s+/,''); const last=blocks[blocks.length-1]; if(last&&last.p!==undefined) last.p+='\n'+h; else blocks.push({p:h}); }
+  });
+  const out=blocks.filter(Boolean);
+  return out.map((b,i)=> b.items ? (b.num?<ol key={i} style={{margin:'6px 0',paddingLeft:20}}>{b.items.map((x,j)=><li key={j} style={{margin:'3px 0'}}>{mdInline(x)}</li>)}</ol>:<ul key={i} style={{margin:'6px 0',paddingLeft:18}}>{b.items.map((x,j)=><li key={j} style={{margin:'3px 0'}}>{mdInline(x)}</li>)}</ul>) : <p key={i} style={{margin:i?'8px 0 0':0,whiteSpace:'pre-wrap'}}>{mdInline(b.p)}</p>);
+};
 const newItem = (name='') => ({id:uid(), name, amount:0, recurring:false, note:'', filePath:null, fileName:'', fileData:null});
 const CATS = ['Allgemein','Miete','Nebenkosten','Versicherung','Material','Personal','Steuern','Software','Marketing','Reise','Bewirtung','Bank & Gebühren','Sonstiges'];
 // Kategorie aus Name/Verwendungszweck automatisch erraten (lokal, keyword-basiert)
@@ -1393,6 +1406,7 @@ function App({session}) {
   const [belStatusF,setBelStatusF]= useState('alle');      // Belege-Status: alle|offen|erledigt
   const [belAcct,setBelAcct]= useState('alle');            // Belege-Konten-Filter ('alle' | Konto-Key)
   const [todoDetail,setTodoDetail]= useState(null);  // Aufgabe im Detailpanel (rechts angedockt) geöffnet
+  const [todoFix,setTodoFix]= useState(null);        // Schnell beheben im To-do: {id, mwst, cat, busy, msg}
   const [todoGroupBy,setTodoGroupBy]= useState('problem'); // To-dos gruppieren: problem | name | liste
   const [todoGroupOpen,setTodoGroupOpen]= useState({});
   const [todoAiBusy,setTodoAiBusy]= useState(false); // KI-Frage zu einer Aufgabe läuft
@@ -2587,6 +2601,10 @@ function App({session}) {
       setWipe(null); setToast('Zurückgesetzt'+(o.files?' · '+removed+' Dateien gelöscht':'')+'. Die Sicherung wurde heruntergeladen. Jetzt kannst du den Import neu starten.');
     }catch(e){ setWipe(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
   };
+  // Allgemeine KI-Anfrage (Text rein, Text raus) – z. B. für den KI-Helfer der Import-Liste
+  const aiAsk = async (system, user, opts)=>{ const {data:resp,error}=await aiInvoke({body:{model:(opts&&opts.model)||'claude-sonnet-4-6', max_tokens:(opts&&opts.max)||1200, system, messages:[{role:'user',content:[{type:'text',text:user}]}]}}); if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler'); return (resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; };
+  // Was der Nutzer der KI erklärt hat (z. B. im Import) – der Assistent nutzt es später für Steuer-Hinweise
+  const rememberFacts = (lines)=>{ const add=(lines||[]).map(x=>String(x).trim().slice(0,300)).filter(Boolean); if(!add.length) return; setData(prev=>{ const cur=prev.taxContext||[]; const seen=new Set(cur.map(x=>x.text)); const fresh=add.filter(t=>!seen.has(t)).map(t=>({id:uid(), text:t, createdAt:new Date().toISOString(), source:'import'})); return fresh.length?{...prev, taxContext:[...cur,...fresh].slice(-80)}:prev; }); };
   // Gespeicherte Umsätze eines Kontoauszugs im Format der Bank-Entwürfe (Zwischenspeicher: PDF muss nicht erneut gelesen werden)
   const stmtRowsOf = (st)=> (st.rows||[]).map(r=>({name:r.n, amount:r.a, kind:r.k==='e'?'ein':'aus', datum:r.d, belegnr:'', note:r.z||'', category:'', netto:'', mwst:'', info:''}));
   // Kontoauszug (PDF/Foto) von der KI lesen lassen → Umsätze im Format der Bank-Entwürfe; bereits gelesene Auszüge kommen aus dem Zwischenspeicher
@@ -2653,7 +2671,7 @@ function App({session}) {
       nd.recurInvoices=recs0;
       nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
       // Für später (aus dem Abgleich): To-dos
-      if(payload.todos&&payload.todos.length) nd.todos=[...payload.todos.map(t=>({id:uid(), done:false, source:'import', createdAt:now2, ref:null, title:String(t.title||'').slice(0,160), note:String(t.note||'').slice(0,600), comments:[]})), ...(nd.todos||[])];
+      if(payload.todos&&payload.todos.length) nd.todos=[...payload.todos.map(t=>{ const hit=t.rowKey?[...bel,...rec].find(x=>x.rowKey===t.rowKey):null; return {id:uid(), done:false, source:'import', createdAt:now2, ref:hit?{type:'booking',id:hit._id,year:hit.y}:null, title:String(t.title||'').slice(0,160), note:String(t.note||'').slice(0,600), comments:[]}; }), ...(nd.todos||[])];
       return nd; });
     // Weitere Unterlagen (EÜR, BWA …): in die Steuerunterlagen, die KI liest sie aus
     for(const f of (payload.extraDocs||[])){ prog('Unterlage: '+f.name); try{ await fileTaxDoc(f,{ year:(payload.year&&payload.year!=='alle')?+payload.year:new Date().getFullYear()-1, cat:'Sonstiges', acct:'unter', title:f.name.replace(/\.[a-z0-9]+$/i,''), ki:true }); }catch(e){ fehler++; } }
@@ -2882,6 +2900,35 @@ function App({session}) {
       ...(rows.every(r=>r.k==='e')?[{label:'Rechnung erstellen', fn:()=>invoiceFromCand(rows)}]:[]),
       {label:'Nur ablegen (Bank)', fn:()=>fileCand(rows)}]);
   };
+
+  // Zur Aufgabe gehörende Buchung samt Beleg: über die Verknüpfung, bei älteren Aufgaben (deep) automatisch über Name + Betrag aus dem Titel
+  const todoBooking = (t, deep)=>{
+    if(!t) return null; let loc=null;
+    if(t.ref&&t.ref.type==='booking'){ loc=findItemLocation(t.ref.id,t.ref.year); if(!loc) for(const yk of Object.keys(data)){ if(!/^\d{4}$/.test(yk)) continue; loc=findItemLocation(t.ref.id,yk); if(loc) break; } }
+    if(!loc && deep){ const m=String(t.title||'').match(/^(?:[^:]+:\s*)?(.+?) · (\d[\d.]*,\d{2}) €/); if(m){ const nm=normName(m[1]); const amt=parseFloat(m[2].replace(/\./g,'').replace(',','.')); const hit=allBookingsFlat().find(b=>normName(b.name)===nm && Math.abs(Math.abs(b.amount)-amt)<0.01); if(hit) loc=findItemLocation(hit.id,hit.year); } }
+    if(!loc) return null; const item=fullBelegItem(loc); return item?{loc,item}:null; };
+  // Aufgabe als erledigt markieren – nach einer Korrektur wird gefragt
+  const askTodoDone = (d, text)=> askChoice('Aufgabe erledigt?', text+' Soll ich die Aufgabe „'+(d.title||'')+'" als erledigt markieren?', [{label:'Ja, erledigt', fn:()=>{ doneTodos([d.id],true); setTodoDetail(null); }},{label:'Nein, offen lassen', fn:()=>{}}]);
+  const applyTodoFix = (d, tb, fix)=>{
+    const mw=fix.mwst===''||fix.mwst==null?null:+fix.mwst; const amt=num(tb.item.amount); const patch={};
+    if(mw!=null && !Number.isNaN(mw)){ patch.mwst=mw; patch.netto=Math.round(amt/(1+mw/100)*100)/100; }
+    if(fix.cat) patch.category=fix.cat;
+    if(!Object.keys(patch).length){ setToast('Nichts zu ändern.'); return; }
+    updateBelegItem(tb.loc, patch); setTodoFix(null);
+    askTodoDone(d, 'Die Buchung wurde angepasst'+(patch.mwst!=null?' (MwSt '+patch.mwst+' %)':'')+(patch.category?' (Kategorie '+patch.category+')':'')+'.');
+  };
+  const todoUploadBeleg = async (d, tb, file)=>{
+    try{ setToast('Beleg wird hochgeladen …'); const base=[tb.item.name, tb.item.belegnr||tb.item.datum].filter(Boolean).join('_'); const fi=await storeAttachment(file,['Belege',String(tb.loc._y),String(tb.loc._m+1).padStart(2,'0')],base); updateBelegItem(tb.loc,{filePath:fi.path,fileName:fi.fname}); askTodoDone(d,'Der Beleg ist an der Buchung angehängt.'); }
+    catch(e){ setToast('Upload fehlgeschlagen: '+(e.message||e)); } };
+  // KI liest das angehängte PDF und schlägt MwSt-Satz und Kategorie vor
+  const suggestTodoFix = async (tb, fix)=>{
+    const path=tb.item.filePath; if(!path){ setTodoFix({...fix,msg:'Kein PDF angehängt – bitte erst einen Beleg hochladen.'}); return; }
+    setTodoFix({...fix,busy:true,msg:'KI liest das PDF …'});
+    try{ const {data:blob,error}=await sb.storage.from('belege').download(path); if(error||!blob) throw (error||new Error('Datei nicht gefunden')); const o=await aiReadDoc(new Uint8Array(await blob.arrayBuffer()), tb.item.fileName||path, {kind:tb.loc._kind, name:tb.item.name, brutto:num(tb.item.amount)});
+      const next={...fix,busy:false}; const parts=[]; if(o.mwst!=null){ next.mwst=String(o.mwst); parts.push('MwSt '+o.mwst+' %'); } if(o.kategorie&&CATS.includes(o.kategorie)){ next.cat=o.kategorie; parts.push('Kategorie '+o.kategorie); }
+      if(o.brutto!=null && Math.abs(o.brutto-Math.abs(num(tb.item.amount)))>0.02) parts.push('⚠ Betrag im PDF '+fmt(o.brutto)+' statt '+fmt(Math.abs(num(tb.item.amount))));
+      next.msg=parts.length?'KI-Vorschlag aus dem PDF: '+parts.join(', ')+(o.urteil?' · '+o.urteil:'')+'. Prüfen und „Übernehmen" klicken.':'Im PDF nichts Eindeutiges gefunden.'; setTodoFix(next);
+    }catch(e){ setTodoFix({...fix,busy:false,msg:'Konnte das PDF nicht lesen: '+(e.message||e)}); } };
 
   // Beim Öffnen einer automatisch erzeugten Aufgabe: KI erklärt kurz das Problem (einmal pro Aufgabe, Antwort bleibt als Kommentar stehen)
   const explainTodoRef = useRef({});
@@ -3365,6 +3412,7 @@ function App({session}) {
     ctx.finance=buildFinanceContext();
     ctx.counts=(d.customers||[]).length+' Kunden, '+(d.invoices||[]).length+' Rechnungen, '+(d.recurInvoices||[]).length+' wiederkehrende Rechnungen, '+(d.todos||[]).filter(t=>!t.done).length+' offene To-dos';
     const p=botPendingRef.current; if(p&&p.inv){ ctx.pendingInvoice=p.inv.number+' an '+(p.inv.custName||'?')+' über '+fmt(invTotals(p.inv.items).gross); }
+    try{ const pf=d.profile||{}; const L=[pf.rechtsform&&'Rechtsform/Tätigkeit: '+pf.rechtsform, pf.beruf&&'Branche: '+pf.beruf, pf.ustArt&&'Umsatzsteuer: '+pf.ustArt, pf.gewinn&&'Gewinnermittlung: '+pf.gewinn, pf.steuerNr&&'Steuernummer '+pf.steuerNr, pf.finanzamt&&'Finanzamt '+pf.finanzamt, pf.familienstand&&'Familienstand: '+pf.familienstand, (pf.kinder!=null&&pf.kinder!=='')&&'Kinder: '+pf.kinder, pf.kirche&&'Kirchensteuer: '+pf.kirche, pf.homeoffice&&'Homeoffice/Arbeitszimmer: '+pf.homeoffice, pf.fahrzeug&&'Fahrzeug: '+pf.fahrzeug, pf.wissen&&'Wichtig laut Nutzer: '+String(pf.wissen).replace(/\s+/g,' ').slice(0,600)].filter(Boolean); const accs=[['unter',n.unternehmen],...PROPS.filter(acctCreated).map(k=>[k,n[k]]),['privat',n.privatLabel]].map(([k,nm])=>{ const c=(k==='unter'?d.company:k==='privat'?d.companyPrivat:d['company_'+k])||{}; return c.aiInfo?(nm||k)+': '+String(c.aiInfo).replace(/\s+/g,' ').slice(0,400):null; }).filter(Boolean); if(L.length) ctx.profile=L.join(' · '); if(accs.length) ctx.accountInfo=accs; const kn=(d.taxContext||[]).slice(-25).map(x=>'• '+x.text); if(kn.length) ctx.know=kn; }catch(e){}
     try{ const tds=(d.taxDocs||[]).filter(t=>t.summary||['EÜR / Gewinnermittlung','BWA / Auswertung','Jahresabschluss','Steuerbescheid','Umsatzsteuer'].includes(t.category)).slice(0,14); if(tds.length) ctx.taxDocs=tds.map(t=>'• '+t.year+' · '+t.category+' · '+t.title+(t.summary?' – '+String(t.summary).replace(/\s+/g,' ').slice(0,450):'')); }catch(e){}
     try{ ctx.letters=ACT.letterMemoryLines(d, 8); const op=(d.payables||[]).filter(x=>x.status==='offen').slice(0,8); if(op.length) ctx.letters=[...(ctx.letters||[]), ...op.map(x=>'• Offene Zahlung · '+accLabel(x.account)+' · '+x.payee+' '+fmt(x.amount)+(x.due?' · fällig '+x.due:''))]; }catch(e){}
     if(attachment) ctx.attachment=attachment.name+' ('+attachment.kind+')';
@@ -4432,7 +4480,7 @@ function App({session}) {
                   </div>
                 </div>
               )}
-              {settingsTab==='profil' && (
+              {settingsTab==='profil' && (<>
                 <div style={{...SC,marginBottom:12,maxWidth:600}}>
                   <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:14}}>Persönliches Profil</div>
                   <div style={{display:'flex',flexDirection:'column',gap:12}}>
@@ -4444,7 +4492,20 @@ function App({session}) {
                     </div>
                   </div>
                 </div>
-              )}
+                <div style={{...SC,marginBottom:12,maxWidth:600}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.txt,marginBottom:4}}>Steuerliche Situation</div>
+                  <div style={{fontSize:12.5,color:C.sub,lineHeight:1.5,marginBottom:14}}>Je genauer, desto besser berät dich der KI-Assistent und findet Lücken, um Steuern zu sparen. Alle Angaben bleiben bei dir und fließen nur in die Beratung ein.</div>
+                  {(()=>{ const row=(label,key,opts,ph)=>(<div style={{flex:1,minWidth:170}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>{label}</div>{opts?(<select value={profile[key]||''} onChange={e=>setProfile({[key]:e.target.value})} style={fldL}><option value="">— bitte wählen —</option>{opts.map(o=><option key={o} value={o}>{o}</option>)}</select>):(<input value={profile[key]||''} onChange={e=>setProfile({[key]:e.target.value})} placeholder={ph||''} style={fldL}/>)}</div>);
+                    return (<div style={{display:'flex',flexDirection:'column',gap:12}}>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{row('Tätigkeit / Rechtsform','rechtsform',['Freiberufler','Gewerbetreibender (Einzelunternehmen)','GmbH / UG','GbR','Angestellt mit Nebengewerbe','Vermieter (Privatvermögen)','Sonstiges'])}{row('Branche / Beruf','beruf',null,'z. B. Webdesign, Ferienvermietung')}</div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{row('Umsatzsteuer','ustArt',['Kleinunternehmer (§ 19 UStG)','Regelbesteuerung – monatliche Voranmeldung','Regelbesteuerung – vierteljährliche Voranmeldung','Ist-Versteuerung','Soll-Versteuerung'])}{row('Gewinnermittlung','gewinn',['EÜR (Einnahmenüberschussrechnung)','Bilanz','Weiß ich nicht'])}</div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{row('Steuernummer','steuerNr',null,'optional')}{row('Finanzamt','finanzamt',null,'z. B. Köln-Mitte')}</div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{row('Familienstand','familienstand',['Ledig','Verheiratet / Lebenspartnerschaft','Geschieden','Verwitwet'])}{row('Kinder (Anzahl)','kinder',null,'0')}{row('Kirchensteuer','kirche',['Nein','Ja'])}</div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{row('Homeoffice / Arbeitszimmer','homeoffice',['Nein','Ja – Homeoffice-Pauschale','Ja – häuslisches Arbeitszimmer'])}{row('Fahrzeug','fahrzeug',['Keins','Privat-Pkw (Fahrtenbuch)','Privat-Pkw (km-Pauschale)','Firmenwagen'])}</div>
+                      <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Was soll die KI sonst noch über dich wissen?</div><textarea value={profile.wissen||''} onChange={e=>setProfile({wissen:e.target.value})} rows={4} placeholder="z. B. Ich vermiete zwei Ferienwohnungen, Kauf 2019, plane 2026 ein Auto zu kaufen, nebenbei angestellt mit 30.000 € brutto …" style={{...fldL,resize:'vertical',lineHeight:1.5}}/></div>
+                    </div>); })()}
+                </div>
+              </>)}
 
               {settingsTab==='abo' && (()=>{
                 const st = (sub&&sub.status)||'none';
@@ -4525,6 +4586,7 @@ function App({session}) {
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
                 <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Name / Bezeichnung</div><input value={co.name||''} onChange={e=>setCompanyFor(dom,{name:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
                 <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Adresse</div><textarea value={co.address||''} onChange={e=>setCompanyFor(dom,{address:e.target.value})} rows={3} style={{...SS,textAlign:'left',resize:'vertical'}}/></div>
+                <div><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Details für die KI (Art des Kontos, Besonderheiten)</div><textarea value={co.aiInfo||''} onChange={e=>setCompanyFor(dom,{aiInfo:e.target.value})} rows={3} placeholder={PROPS.includes(dom)?'z. B. Ferienwohnung Sylt, gekauft 2019 für 320.000 €, Gebäude-AfA 2 %, Inserate bei Airbnb und Booking, Darlehenszinsen ca. 4.800 €/Jahr':'z. B. Webdesign-Agentur, 3 freie Mitarbeiter, Homeoffice, Software-Abos laufen monatlich'} style={{...SS,textAlign:'left',resize:'vertical',lineHeight:1.5}}/></div>
                 <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
                   <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>Steuernummer</div><input value={co.taxId||''} onChange={e=>setCompanyFor(dom,{taxId:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
                   <div style={{flex:1,minWidth:140}}><div style={{fontSize:12,color:C.sub,marginBottom:5}}>USt-IdNr.</div><input value={co.ustId||''} onChange={e=>setCompanyFor(dom,{ustId:e.target.value})} style={{...SS,textAlign:'left'}}/></div>
@@ -4981,7 +5043,7 @@ function App({session}) {
                   <SevdeskImport ui={{C,SC,SS,NUM,fmt,Ic,P,hexA,AI_GRADIENT,MONTHS}} isMobile={isMobile} defaultYear={now.getFullYear()-1}
                     accounts={[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>({key:pp,label:names[pp]})),{key:'privat',label:names.privatLabel||'Privat'}]}
                     existing={sevdeskExisting()} onImport={runSevdeskImport}
-                    aiReadDoc={aiReadDoc} aiBankRows={aiBankRows} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
+                    aiReadDoc={aiReadDoc} aiBankRows={aiBankRows} aiAsk={aiAsk} onRemember={rememberFacts} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
                 )}
 
                 {importTab==='sevdesk' && (
@@ -5784,7 +5846,7 @@ function App({session}) {
                           </div>
                           {t.note && <div style={{fontSize:12.5,color:C.sub,marginTop:3,textDecoration:t.done?'line-through':'none',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden',whiteSpace:'pre-line'}}>{t.note}</div>}
                           <div style={{display:'flex',alignItems:'center',gap:10,marginTop:6}}>
-                            {t.ref && <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11.5,color:C.mut}}><Ic p={P.clip} sz={12} col={C.mut}/> Buchung verknüpft</span>}
+                            {t.ref && (()=>{ const tb=t.ref.type==='booking'?todoBooking(t,false):null; const hasF=tb&&(tb.item.filePath||tb.item.fileData); return (<><span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:11.5,color:C.mut}}><Ic p={P.clip} sz={12} col={C.mut}/> Buchung verknüpft</span>{tb && (hasF ? <button onClick={e=>{e.stopPropagation();openFile(tb.item.filePath||tb.item.fileData,tb.item.fileName||tb.item.name);}} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:7,padding:'2px 8px',fontSize:11.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Beleg ansehen</button> : <span style={{fontSize:11,fontWeight:700,color:C.red,background:hexA(C.red,0.12),borderRadius:6,padding:'2px 7px'}}>Beleg fehlt</span>)}</>); })()}
                             {(t.comments||[]).length>0 && <span style={{fontSize:11.5,color:C.mut}}>{(t.comments||[]).length} Kommentar{(t.comments||[]).length>1?'e':''}</span>}
                           </div>
                         </div>
@@ -5862,6 +5924,32 @@ function App({session}) {
                       {d.replyDraft && <button onClick={()=>openLetterReply(d.id)} style={{display:'inline-flex',alignItems:'center',gap:6,background:C.act,color:C.actTxt,border:'none',borderRadius:10,padding:'9px 13px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.send} sz={14} col={C.actTxt}/> {d.repliedAt?'Erneut antworten':'Antwort per E-Mail'}</button>}
                     </div>
                   )}
+                  {!d.isNew && (()=>{ const tb=todoBooking(d,true); if(!tb) return null; const it=tb.item; const hasF=!!(it.filePath||it.fileData); const prob=todoProblem(d);
+                    const fix=(todoFix&&todoFix.id===d.id)?todoFix:{id:d.id, mwst:(it.mwst===undefined||it.mwst===null)?'':String(it.mwst), cat:it.category||'', busy:false, msg:''};
+                    const set=(patch)=>setTodoFix({...fix,...patch});
+                    const hl=(on)=>({...SS,textAlign:'left',padding:'8px 10px',fontSize:13,border:on?'1.5px solid '+C.pri:undefined,width:'100%'});
+                    return (
+                    <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:12,padding:'12px 13px',display:'flex',flexDirection:'column',gap:9}}>
+                      <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap'}}>
+                        <span style={{fontSize:13.5,fontWeight:800,color:C.txt}}>{it.name}</span>
+                        <span style={{...NUM,fontSize:13,color:C.sub}}>{fmt(Math.abs(num(it.amount)))} · {it.datum?String(it.datum).split('-').reverse().join('.'):MONTHS[tb.loc._m]+' '+tb.loc._y} · {belBerLabel(tb.loc._ber)}</span>
+                      </div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                        {hasF ? <button onClick={()=>openFile(it.filePath||it.fileData,it.fileName||it.name)} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'8px 12px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>📎 Beleg ansehen</button>
+                          : <label style={{background:hexA(C.red,0.12),color:C.red,border:'1px solid '+hexA(C.red,0.4),borderRadius:9,padding:'8px 12px',fontSize:13,fontWeight:700,cursor:'pointer'}}>Beleg fehlt – hochladen<input type="file" accept=".pdf,image/*" style={{display:'none'}} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=''; if(f) todoUploadBeleg(d,tb,f); }}/></label>}
+                        <button onClick={()=>openCaptureEdit(tb.loc,it)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'8px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Buchung öffnen</button>
+                      </div>
+                      <div style={{fontSize:11.5,fontWeight:700,color:C.sub,letterSpacing:'0.03em',marginTop:2}}>SCHNELL BEHEBEN{prob!=='Sonstiges'?' · '+prob.toUpperCase():''}</div>
+                      <div style={{display:'flex',gap:8}}>
+                        <div style={{flex:1}}><div style={{fontSize:11.5,color:C.sub,marginBottom:3}}>MwSt-Satz</div><select value={fix.mwst} onChange={e=>set({mwst:e.target.value})} style={hl(prob==='MwSt / Umsatzsteuer')}><option value="">— unbekannt —</option><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></select></div>
+                        <div style={{flex:1.4}}><div style={{fontSize:11.5,color:C.sub,marginBottom:3}}>Kategorie</div><select value={fix.cat} onChange={e=>set({cat:e.target.value})} style={hl(false)}><option value="">— keine —</option>{CATS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                      </div>
+                      {fix.msg && <div style={{fontSize:12,color:C.sub,lineHeight:1.45}}>{fix.msg}</div>}
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                        {hasF && <button onClick={()=>suggestTodoFix(tb,fix)} disabled={fix.busy} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:9,padding:'8px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:fix.busy?0.6:1}}>{fix.busy?'KI liest …':'KI aus PDF vorschlagen'}</button>}
+                        <button onClick={()=>applyTodoFix(d,tb,fix)} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:9,padding:'8px 14px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Übernehmen</button>
+                      </div>
+                    </div>); })()}
                   <BookingSelect bookings={bookings} value={d.ref&&d.ref.type==='booking'?d.ref:null} onPick={b=>setTodoDetail({...d, ref: b?{type:'booking',id:b.id,year:b.year}:null})}/>
                   {d.ref && !d.isNew && <button onClick={()=>openTodoRef(d)} style={{alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:5,background:C.surf3,border:'none',color:C.txt,borderRadius:8,padding:'6px 10px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.clip} sz={12} col={C.sub}/> Verknüpfte Buchung ansehen</button>}
                   <label style={{display:'flex',alignItems:'center',gap:9,fontSize:13,color:C.txt,cursor:'pointer',background:C.surf2,border:'1px solid '+C.bdr,borderRadius:10,padding:'10px 12px'}}>
@@ -6246,14 +6334,11 @@ function App({session}) {
             const gkeys=Object.keys(groups).sort().reverse();
             return (
               <>
-                <div style={{marginBottom:16}}>
-                  <div style={{fontSize:34,fontWeight:700,letterSpacing:'-0.02em'}}>Belege</div>
-                </div>
+                <div style={{fontSize:isMobile?28:34,fontWeight:800,letterSpacing:'-0.03em',marginBottom:14}}>Belege</div>
                 {showAcctSel && (
-                  <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
-                    {[{k:'alle',label:'Alle'},...bizAccts.map(k=>({k,label:acctNameOf(k)})),{k:'privat',label:acctNameOf('privat')}].map(o=>{const on=belAcct===o.k; const col=o.k==='alle'?C.pri:acol(o.k); const ic=o.k==='alle'?P.grid:acctIconOf(o.k); return (
-                      <button key={o.k} onClick={()=>{setBelAcct(o.k);setBelegSearch('');}} style={{display:'flex',alignItems:'center',gap:6,background:on?hexA(col,0.16):C.surf2,border:'1px solid '+(on?hexA(col,0.4):C.bdr),color:on?col:C.mut,borderRadius:10,padding:'7px 12px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}><Ic p={ic} sz={13} col={on?col:C.surf3}/>{o.label}</button>
-                    ); })}
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:isMobile?'nowrap':'wrap',overflowX:isMobile?'auto':'visible',marginBottom:14}}>
+                    {[{k:'alle',label:'Alle'},...bizAccts.map(k=>({k,label:acctNameOf(k)})),{k:'privat',label:acctNameOf('privat')}].map(o=>{ const on=belAcct===o.k; const c=o.k==='alle'?C.pri:acol(o.k); return (
+                      <button key={o.k} onClick={()=>{setBelAcct(o.k);setBelegSearch('');}} style={{display:'flex',alignItems:'center',gap:8,background:on?hexA(c,0.22):C.surf,border:'1px solid '+(on?hexA(c,0.6):C.bdr),color:C.txt,borderRadius:999,padding:'8px 14px',fontSize:13.5,fontWeight:on?700:600,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',flexShrink:0}}>{o.k==='alle'?<Ic p={P.grid} sz={14} col={C.sub}/>:<span style={{width:9,height:9,borderRadius:'50%',background:c}}/>}{o.label}</button>); })}
                   </div>
                 )}
                 <div style={{display:'flex',gap:10,marginBottom:18,flexWrap:'wrap',alignItems:'center'}}>
@@ -6313,8 +6398,8 @@ function App({session}) {
                             {r.imported && tag('Import',C.mut)}
                           </div>
                         </div>
-                        <div style={{fontSize:16,fontWeight:800,...NUM,color:(aus!==(r.amount<0))?C.exp:C.txt,whiteSpace:'nowrap'}}>{(aus!==(r.amount<0))?'-':''}{fmt(Math.abs(r.amount))}</div>
-                        <button onClick={e=>{e.stopPropagation();openCaptureEdit(r);}} title="Bearbeiten" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,width:30,height:30,borderRadius:7,fontSize:15,fontFamily:'inherit'}}>✎</button>
+                        <div style={{fontSize:20,fontWeight:800,...NUM,color:(aus!==(r.amount<0))?C.exp:C.txt,whiteSpace:'nowrap'}}>{(aus!==(r.amount<0))?'-':''}{fmt(Math.abs(r.amount))}</div>
+                        <button onClick={e=>{e.stopPropagation();openCaptureEdit(r);}} title="Bearbeiten (MwSt, Kategorie, Beleg …)" style={{background:'none',border:'none',color:C.sub,cursor:'pointer',flexShrink:0,width:26,height:26,borderRadius:6,fontSize:18,lineHeight:1,fontFamily:'inherit'}}>⋮</button>
                       </div>
                     ); })}</div>
                   </div>
@@ -7510,7 +7595,7 @@ function App({session}) {
           <div style={{flex:1,overflowY:'auto',padding:'14px 16px',display:'flex',flexDirection:'column',gap:10}}>
             {botMsgs.map((m,i)=>{ const primBot={background:C.pri,color:C.priTxt,border:'none',borderRadius:9,padding:'8px 13px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}; const ghostBot={background:C.surf3,border:'1px solid '+C.bdr,color:C.sub,borderRadius:9,padding:'8px 13px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}; const a=m.action; const isLast=i===botMsgs.length-1; return (
               <div key={i} style={{display:'flex',flexDirection:'column',alignItems:m.role==='user'?'flex-end':'flex-start',gap:7}}>
-                <div style={{maxWidth:'88%',background:m.role==='user'?C.act:C.surf2,color:m.role==='user'?C.actTxt:C.txt,borderRadius:m.role==='user'?'13px 13px 4px 13px':'13px 13px 13px 4px',padding:'9px 12px',fontSize:13.5,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{m.content}{m.attachmentName && <span style={{display:'block',marginTop:4,fontSize:12,opacity:0.8}}>📎 {m.attachmentName}</span>}</div>
+                <div style={{maxWidth:'88%',background:m.role==='user'?C.act:C.surf2,color:m.role==='user'?C.actTxt:C.txt,borderRadius:m.role==='user'?'13px 13px 4px 13px':'13px 13px 13px 4px',padding:'10px 13px',fontSize:13.5,lineHeight:1.55,whiteSpace:m.role==='user'?'pre-wrap':'normal'}}>{m.role==='user'?m.content:renderMd(m.content)}{m.attachmentName && <span style={{display:'block',marginTop:4,fontSize:12,opacity:0.8}}>📎 {m.attachmentName}</span>}</div>
                 {m.role==='assistant' && m.steps && m.steps.length>0 && <div style={{display:'flex',flexWrap:'wrap',gap:5,maxWidth:'88%'}}>{m.steps.map((st,si)=>{ const bad=st.result&&st.result.ok===false; return <span key={si} style={{fontSize:11,fontWeight:600,color:bad?C.red:C.sub,background:C.surf,border:'1px solid '+C.bdr,borderRadius:99,padding:'3px 9px'}}>{bad?'':'✓ '}{st.label||st.name}</span>; })}</div>}
                 {a && isLast && a.type==='import' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>applyBotImport(a.drafts)} style={primBot}>In Import übernehmen</button><button onClick={()=>setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x))} style={ghostBot}>Abbrechen</button></div>}
                 {a && isLast && a.type==='confirmInvoice' && <div style={{display:'flex',gap:7,flexWrap:'wrap'}}><button onClick={()=>setBotInvPreview(a.inv||(botPendingRef.current&&botPendingRef.current.inv)||null)} style={ghostBot}>👁 Anschauen</button><button onClick={finalizeBotInvoice} style={primBot}>Ja, erstellen</button><button onClick={()=>{ setPending(null); setBotMsgs(mm=>mm.map((x,xi)=>xi===i?{...x,action:null}:x).concat([{role:'assistant',content:'Okay, abgebrochen.'}])); }} style={ghostBot}>Abbrechen</button></div>}
