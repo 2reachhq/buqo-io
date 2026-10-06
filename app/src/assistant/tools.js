@@ -415,6 +415,7 @@ export function buildSystemPrompt(ctx) {
   if (c.counts) lines.push('Bestand: ' + c.counts + '.');
   if (c.pendingInvoice) lines.push('Es liegt ein unbestätigter Rechnungsentwurf vor: ' + c.pendingInvoice + '. Bestätigt der Nutzer, rufe confirm_invoice auf; will er etwas ändern, rufe create_invoice erneut mit den korrigierten Daten auf.');
   if (c.letters && c.letters.length) lines.push('Offene Briefe (Gedächtnis, Details über search_letters):\n' + c.letters.join('\n'));
+  if (c.taxDocs && c.taxDocs.length) lines.push('Hochgeladene Steuerunterlagen (EÜR, BWA, Bescheide … – nutze sie für Steuerfragen und prüfe Buchungen dagegen):\n' + c.taxDocs.join('\n'));
   if (c.attachment) lines.push('An die aktuelle Nachricht ist eine Datei angehängt: ' + c.attachment + '.');
   return lines.join('\n');
 }

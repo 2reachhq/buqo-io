@@ -7,6 +7,7 @@ import TaxCockpit from './tax/TaxCockpit.jsx';
 import { YEARS as TAX_YEARS, berechneSteuer } from './tax/estg.js';
 import SevdeskImport from './import/SevdeskImport.jsx';
 import { classifyRows } from './import/classify.js';
+import { parseDatev, compareDatev } from './import/datevCompare.js';
 import * as ACT from './assistant/actions.js';
 import { ASSISTANT_TOOLS, ASSISTANT_MODELS, DEFAULT_ASSISTANT_MODEL, buildSystemPrompt, buildSystemBlocks, toolsWithCache, usageCost, addUsage, stepLabel } from './assistant/tools.js';
 import { runAssistantTurn, buildApiMessages, attachmentFromFile } from './assistant/agent.js';
@@ -1354,6 +1355,8 @@ function App({session}) {
   const [todoSel,setTodoSel]= useState([]);
   const [packBusy,setPackBusy]= useState(false);       // Steuerberater-Paket wird gepackt
   const [packY,setPackY]= useState(new Date().getFullYear()); const [packM,setPackM]= useState('');  // Zeitraum fürs Paket ('' = ganzes Jahr)
+  const [wipe,setWipe]= useState(null);            // Neu anfangen: {year,opts,text,busy,msg}
+  const [taxUp,setTaxUp]= useState(null);            // Steuerunterlage hochladen: {file,year,cat,title,acct,ki,busy,msg}
   const [taxDocY,setTaxDocY]= useState(null);        // Steuerunterlagen: gewähltes Jahr
   const [wiedF,setWiedF]= useState('alle');          // Wiederkehrend: Filter
   const [flyout,setFlyout]= useState(null);           // Overlay neben der Navigation {kind:'konten'|'mehr', top}
@@ -1509,6 +1512,7 @@ function App({session}) {
   const [botModel,setBotModel]= useState(DEFAULT_ASSISTANT_MODEL); // KI-Modell des Assistenten (in data.assistant.model gespeichert)
   const startKiJobsRef=useRef(null); const kiRunRef=useRef(false); const kiCancelRef=useRef(false);
   const [showRevDone,setShowRevDone]=useState(false);
+  const [datevCkBusy,setDatevCkBusy]=useState(false); const [datevCkMsg,setDatevCkMsg]=useState('');
   const [kiJob,setKiJob]=useState(null);               // Hintergrund-KI nach dem Import: {total,done,errs,changed,running}
   const addDraftsRef=useRef(null);                     // aktuelle addImportDrafts (für verzögerten Aufruf nach dem Import)
   const calcVatRef=useRef(null);                       // aktuelle UStVA-Berechnung (für Hintergrund-Erinnerung)
@@ -1532,6 +1536,9 @@ function App({session}) {
   const belegMetaRef= useRef({name:'beleg.jpg', isPdf:false, media:'image/jpeg'});
   const quellenScrollRef= useRef(null);            // Konten-Karten horizontal scrollen
   const [calOpen,setCalOpen]= useState(false);     // Monats-Kalender-Popover
+  const [yearAll,setYearAll]= useState(false);        // „Ganzes Jahr" (Rechnungen: alle Monate des gewählten Jahres)
+  const [invLimit,setInvLimit]= useState(100);        // Rechnungsliste: so viele auf einmal anzeigen
+  const [invPdfUrl,setInvPdfUrl]= useState(null);     // Original-PDF (Import) der geöffneten Rechnung
   const [calYr,setCalYr]= useState(now.getFullYear());
   const [profOpen,setProfOpen]= useState(false);   // Profil-Menü
   const [taxBusy,setTaxBusy]= useState(false);     // Steuer-KI-Analyse
@@ -1739,7 +1746,9 @@ function App({session}) {
   },[ready]);
 
   const getMD = (y,m) => data[y]?.[m] || emptyMonth();
-  const goMonth = (delta) => { let m=mo+delta, y=yr; if(m<0){m=11;y=yr-1;} else if(m>11){m=0;y=yr+1;} setMo(m); setYr(y); };
+  useEffect(()=>{ setInvLimit(100); },[yr,mo,yearAll,invDomain,invStatusF,invSearch]);
+  useEffect(()=>{ let alive=true; setInvPdfUrl(null); if(invView&&invView.pdfPath){ sb.storage.from('belege').createSignedUrl(invView.pdfPath,3600).then(({data:d})=>{ if(alive&&d) setInvPdfUrl(d.signedUrl); }).catch(()=>{}); } return ()=>{ alive=false; }; },[invView&&invView.id,invView&&invView.pdfPath]);
+  const goMonth = (delta) => { if(yearAll&&tab==='rechnung'){ setYr(yr+delta); return; } let m=mo+delta, y=yr; if(m<0){m=11;y=yr-1;} else if(m>11){m=0;y=yr+1;} setMo(m); setYr(y); };
   const upd = fn => setData(prev=>{const yd=prev[yr]||{};const md=yd[mo]||emptyMonth();return{...prev,[yr]:{...yd,[mo]:fn(md)}};});
   const updAll = fn => setData(prev=>{
     const nd=JSON.parse(JSON.stringify(prev));
@@ -2515,27 +2524,138 @@ function App({session}) {
     setBelegBusy(false);
   };
   /* ── KI liest importierte PDFs im Hintergrund und verbessert Name/Kategorie/Beschreibung/Nummer/MwSt. Betrag und Datum bleiben unverändert (Abweichung → To-do) ── */
+  // Ergebnis der KI-Lesung auf die Buchung anwenden (nie Betrag/Datum) und im Bereich „Zu prüfen" festhalten
+  const applyKiResult=(j,r,o)=>{
+    const patchItem=(id,fn)=>{ const walk=(o)=>{ if(Array.isArray(o)){ for(const it of o){ if(it&&typeof it==='object'&&it.id===id&&('amount' in it)){ fn(it); return true; } if(walk(it)) return true; } } else if(o&&typeof o==='object'){ for(const k of Object.keys(o)){ if(walk(o[k])) return true; } } return false; }; return walk; };
+          const diff=[]; if(o.brutto!=null && Math.abs(o.brutto-r.brutto)>0.02) diff.push('Betrag laut PDF '+fmt(o.brutto)+' statt '+fmt(r.brutto)); if(o.datum && r.datum && o.datum!==r.datum) diff.push('Datum laut PDF '+o.datum.split('-').reverse().join('.')+' statt '+r.datum.split('-').reverse().join('.'));
+          let ch=false; const chs=[];
+          setData(prev=>{ chs.length=0; const nd=JSON.parse(JSON.stringify(prev)); const M=(nd[r.y]&&nd[r.y][r.m])||{}; let hit=false;
+            patchItem(j.id, it=>{ hit=true; if(j.kind==='b'){ if(o.name && normName(o.name)!==normName(it.name)){ chs.push('Name „'+it.name+'“ → „'+String(o.name).slice(0,90)+'“'); it.name=String(o.name).slice(0,90); ch=true; } if(o.kategorie && r.kind==='aus' && CATS.includes(o.kategorie) && o.kategorie!==it.category){ chs.push('Kategorie → '+o.kategorie); it.category=o.kategorie; ch=true; } if(o.mwst!=null && o.brutto!=null && Math.abs(o.brutto-r.brutto)<0.02 && o.mwst!==it.mwst){ chs.push('MwSt → '+o.mwst+' %'); it.mwst=o.mwst; it.netto=Math.round(r.brutto/(1+o.mwst/100)*100)/100; ch=true; } }
+              if(o.nummer && !it.belegnr){ it.belegnr=String(o.nummer).slice(0,40); ch=true; }
+              if(o.beschreibung && !String(it.note||'').includes(o.beschreibung)){ it.note=[o.beschreibung.slice(0,120), it.note].filter(Boolean).join(' · '); ch=true; }
+              if(diff.length && !String(it.note||'').includes('⚠ '+diff.join('; '))){ it.note=[it.note, '⚠ '+diff.join('; ')].filter(Boolean).join(' · '); } })(M);
+            { const rv=(nd.importReview=nd.importReview||[]); let ex=rv.find(x=>x.itemId===j.id); const add=[]; if(chs.length||diff.length) add.push('KI: '+[...chs,...diff].join('; ')); if(o.storno) add.push('PDF ist Storno/Gutschrift/Korrektur – keine echte Doppelung'); if(add.length||ex||o.urteil){ if(!ex){ ex={id:uid(), inv:j.kind==='r', itemId:j.id, y:r.y, m:r.m, acct:r.acct, kind:j.kind==='r'?'ein':r.kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:[], path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:new Date().toISOString()}; rv.push(ex); } const have=new Set(ex.reasons||[]); const fresh=add.filter(x=>!have.has(x)); ex.reasons=[...(ex.reasons||[]),...fresh]; if(fresh.length) ex.done=false; if(o.urteil) ex.verdict=String(o.urteil).slice(0,300); ex.storno=!!o.storno; ex.checkedAt=new Date().toISOString(); } }
+            return nd; });
+    return {ch, diff};
+  };
+  // Steuerunterlage (EÜR, BWA, Bescheid …) hochladen; die KI liest sie aus, damit der Assistent später damit arbeiten kann
+  const uploadTaxDoc = async ()=>{
+    const t=taxUp; if(!t||!t.file||t.busy) return;
+    setTaxUp(x=>({...x,busy:true,msg:'Lade hoch …'}));
+    try{
+      const year=Number(t.year)||new Date().getFullYear(); const cat=t.cat; const title=(t.title||t.file.name.replace(/\.[a-z0-9]+$/i,'')).slice(0,120);
+      const fi=await storeAttachment(t.file, ['Steuer',String(year),cat], title+'_'+new Date().toISOString().slice(0,10));
+      let summary='';
+      if(t.ki){
+        setTaxUp(x=>({...x,msg:'KI liest das Dokument …'}));
+        try{
+          const f=t.file; const isPdf=/\.pdf$/i.test(f.name)||f.type==='application/pdf'; const isImg=/^image\//.test(f.type)||/\.(png|jpe?g|webp)$/i.test(f.name);
+          let content;
+          const prompt='Dies ist ein Steuer-/Buchhaltungsdokument (Kategorie: '+cat+', Jahr: '+year+'). Fasse in höchstens 8 kurzen Sätzen bzw. Stichpunkten (Deutsch) die steuerlich wichtigen Kennzahlen und Aussagen zusammen, z. B. Betriebseinnahmen, Betriebsausgaben, Gewinn/Verlust, Umsatzsteuer, Vorauszahlungen, Fristen, Auffälligkeiten. Nenne nur Zahlen, die tatsächlich im Dokument stehen.';
+          if(isPdf||isImg){ const b64=await fileToB64(f); const mt=isPdf?'application/pdf':(f.type||'image/jpeg'); content=[isPdf?{type:'document',source:{type:'base64',media_type:mt,data:b64}}:{type:'image',source:{type:'base64',media_type:mt,data:b64}},{type:'text',text:prompt}]; }
+          else { const txt=(await f.text()).slice(0,40000); content=[{type:'text',text:prompt+'\n\nInhalt:\n'+txt}]; }
+          const {data:resp}=await aiInvoke({body:{model:'claude-sonnet-4-6',max_tokens:900,messages:[{role:'user',content}]}});
+          summary=((resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'').trim();
+        }catch(e){ summary=''; }
+      }
+      const id=uid();
+      setData(prev=>({...prev, taxDocs:[{id, account:t.acct||'unter', year, category:cat, title, amount:null, note:'', summary:summary.slice(0,900), filePath:fi.path, fileName:fi.fname, createdAt:new Date().toISOString().slice(0,10)}, ...(prev.taxDocs||[])]}));
+      setTaxDocY(year); setTaxUp(null); setToast('Gespeichert in Steuerunterlagen'+(summary?' – KI hat das Dokument ausgewertet':''));
+    }catch(e){ setTaxUp(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
+  };
+  // ── Neu anfangen: Buchungen/Rechnungen/To-dos eines Jahres (oder aller Jahre) löschen, damit der sevDesk-Import neu laufen kann ──
+  const wipeYears = (w)=> w.year==='alle' ? Object.keys(data||{}).filter(k=>/^\d{4}$/.test(k)).map(Number) : [Number(w.year)];
+  const wipeCounts = (w)=>{ const ys=new Set(wipeYears(w)); return { book:existingBookings().filter(b=>ys.has(b.y)).length, inv:(data.invoices||[]).filter(iv=>ys.has(new Date(iv.sentDate||iv.date).getFullYear())).length, todo:(data.todos||[]).length, rev:(data.importReview||[]).length, bank:(data.bankStatements||[]).filter(x=>ys.has(+x.year)).length, drafts:(data.drafts||[]).length }; };
+  const runWipe = async ()=>{
+    const w=wipe; if(!w||w.busy||w.text.trim().toUpperCase()!=='LÖSCHEN') return;
+    setWipe(x=>({...x,busy:true,msg:'Sicherung wird erstellt …'}));
+    try{
+      // 1) Sicherung als Datei herunterladen (alles, was jetzt in der App steht)
+      const snap=JSON.stringify({savedAt:new Date().toISOString(), names, data}, null, 1);
+      const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([snap],{type:'application/json'})); a.download='buqo-sicherung-'+new Date().toISOString().slice(0,10)+'.json'; document.body.appendChild(a); a.click(); a.remove();
+      await new Promise(r=>setTimeout(r,600));
+      setWipe(x=>({...x,msg:'Löscht …'}));
+      const ys=new Set(wipeYears(w)); const o=w.opts; const paths=new Set();
+      const collect=(v)=>{ if(Array.isArray(v)) v.forEach(collect); else if(v&&typeof v==='object'){ Object.keys(v).forEach(k=>{ if((k==='filePath'||k==='pdfPath'||k==='path')&&typeof v[k]==='string'&&v[k]) paths.add(v[k]); else collect(v[k]); }); } };
+      const invOf=(iv)=>ys.has(new Date(iv.sentDate||iv.date).getFullYear());
+      if(o.book) ys.forEach(y=>{ if(data[y]) collect(data[y]); });
+      if(o.inv) collect((data.invoices||[]).filter(invOf));
+      if(o.bank) collect((data.bankStatements||[]).filter(x=>ys.has(+x.year)));
+      setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev));
+        if(o.book) ys.forEach(y=>{ if(nd[y]) Object.keys(nd[y]).forEach(m=>{ nd[y][m]=emptyMonth(); }); });
+        if(o.inv){ nd.invoices=(nd.invoices||[]).filter(iv=>!invOf(iv)); nd.recurInvoices=(nd.recurInvoices||[]).filter(r=>!ys.has(+r.fromY)); }
+        if(o.todo) nd.todos=[];
+        if(o.rev){ nd.importReview=[]; nd.datevChecks=[]; nd.importLog=[]; }
+        if(o.bank){ nd.bankStatements=(nd.bankStatements||[]).filter(x=>!ys.has(+x.year)); nd.drafts=[]; }
+        if(o.cust) nd.customers=[];
+        return nd; });
+      let removed=0; const list=[...paths];
+      if(o.files){ for(let i=0;i<list.length;i+=100){ try{ const {error}=await sb.storage.from('belege').remove(list.slice(i,i+100)); if(!error) removed+=Math.min(100,list.length-i); }catch(e){} } }
+      setWipe(null); setToast('Zurückgesetzt'+(o.files?' · '+removed+' Dateien gelöscht':'')+'. Die Sicherung wurde heruntergeladen. Jetzt kannst du den Import neu starten.');
+    }catch(e){ setWipe(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
+  };
+  // DATEV-Datei (Steuerberater) gegen die Buqo-Buchungen prüfen; Abweichungen landen in „Zu prüfen", die KI fasst Fehlermuster zusammen
+  const runDatevCheck = async (file)=>{
+    if(!file||datevCkBusy) return;
+    setDatevCkBusy(true); setDatevCkMsg('Datei wird gelesen …');
+    try{
+      const rows=parseDatev(await file.arrayBuffer());
+      const bookings=existingBookings().map(b=>({id:b.it.id,y:b.y,m:b.m,kind:b.kind,acct:b.acct,name:b.it.name||'',amount:num(b.it.amount),datum:b.it.datum||'',nummer:b.it.belegnr||'',category:b.it.category||'',mwst:b.it.mwst,item:b.it}));
+      const res=compareDatev(rows,bookings);
+      const now2=new Date().toISOString();
+      const mk=(o)=>({id:uid(), inv:false, itemId:null, y:null, m:null, acct:'', kind:'aus', name:'', datum:'', brutto:0, nummer:'', reasons:[], path:null, fileName:'', done:false, createdAt:now2, source:'datev', ...o});
+      const entries=[
+        ...res.diffs.slice(0,300).map(x=>mk({itemId:x.b.id, y:x.b.y, m:x.b.m, acct:x.b.acct, kind:x.b.kind, name:x.b.name, datum:x.b.datum, brutto:Math.abs(x.b.amount), nummer:x.b.nummer, path:x.b.item.filePath||null, fileName:x.b.item.fileName||'', reasons:x.why.map(w=>'DATEV: '+w)})),
+        ...res.missing.slice(0,200).map(d=>mk({key:'dm|'+d.datum+'|'+d.brutto+'|'+d.nummer, kind:d.kind, name:d.name||d.beschreibung||'Posten', datum:d.datum, brutto:d.brutto, nummer:d.nummer||'', reasons:['DATEV: steht in der DATEV-Datei, aber nicht in Buqo gebucht (Buchung fehlt?)']})),
+        ...res.extra.slice(0,200).map(b=>mk({itemId:b.id, y:b.y, m:b.m, acct:b.acct, kind:b.kind, name:b.name, datum:b.datum, brutto:Math.abs(b.amount), nummer:b.nummer, path:b.item.filePath||null, fileName:b.item.fileName||'', reasons:['DATEV: in Buqo gebucht, aber nicht in der DATEV-Datei (falsch gebucht, anderer Zeitraum oder doppelt?)']})),
+      ];
+      setDatevCkMsg('KI wertet die Abweichungen aus …');
+      let summary='';
+      try{
+        const lines=[...res.diffs.slice(0,40).map(x=>'ABWEICHUNG '+x.b.name+' '+fmt(Math.abs(x.b.amount))+' · '+x.why.join('; ')), ...res.missing.slice(0,25).map(d=>'FEHLT IN BUQO '+(d.name||'')+' '+fmt(d.brutto)+' '+d.datum), ...res.extra.slice(0,25).map(b=>'NUR IN BUQO '+b.name+' '+fmt(Math.abs(b.amount))+' '+(b.datum||''))].join('\n');
+        const prompt='Du bist Assistent für die Buchhaltung eines deutschen Unternehmers. Die DATEV-Datei (Zeitraum '+res.range[0]+' bis '+res.range[1]+') wurde mit den Buchungen in Buqo verglichen. Treffer: '+res.matched.length+', Abweichungen: '+res.diffs.length+', fehlen in Buqo: '+res.missing.length+', nur in Buqo: '+res.extra.length+'.\nBeispiele:\n'+lines+'\n\nFasse in höchstens 8 kurzen Stichpunkten (Deutsch) die wahrscheinlichsten Fehlermuster zusammen (z. B. falsche Kategorie bei bestimmten Lieferanten, falscher MwSt-Satz, falscher Monat, Stornobuchungen, doppelte Buchungen) und sage, was zuerst geprüft werden sollte. Erfinde nichts, was nicht in den Beispielen steht.';
+        const {data:resp}=await aiInvoke({body:{model:'claude-sonnet-4-6',max_tokens:900,messages:[{role:'user',content:prompt}]}});
+        summary=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'';
+      }catch(e){ summary=''; }
+      setData(prev=>{ const rv=[...(prev.importReview||[])]; entries.forEach(e=>{ const ex=e.itemId?rv.find(x=>x.itemId===e.itemId):rv.find(x=>x.key&&x.key===e.key); if(ex){ const have=new Set(ex.reasons||[]); const fresh=e.reasons.filter(r=>!have.has(r)); if(fresh.length){ ex.reasons=[...(ex.reasons||[]),...fresh]; ex.done=false; } } else rv.push(e); });
+        return {...prev, importReview:rv, datevChecks:[...(prev.datevChecks||[]), {ts:now2, file:file.name, rows:rows.length, matched:res.matched.length, diffs:res.diffs.length, missing:res.missing.length, extra:res.extra.length, summary}]}; });
+      setDatevCkMsg('Fertig: '+res.matched.length+' passen, '+res.diffs.length+' weichen ab, '+res.missing.length+' fehlen in Buqo, '+res.extra.length+' nur in Buqo – siehe „Zu prüfen".');
+    }catch(e){ setDatevCkMsg('DATEV-Abgleich fehlgeschlagen: '+(e.message||e)); }
+    setDatevCkBusy(false);
+  };
+  // „Zu prüfen": PDF erneut von der KI lesen lassen, mit deinem Hinweis. Betrag/Datum bleiben unverändert.
+  const [revBusy,setRevBusy]=useState({});
+  const reanalyzeReview = async (ids)=>{
+    const list=(dataRef.current.importReview||[]).filter(x=>ids.includes(x.id));
+    if(!list.length) return;
+    setRevBusy(b=>{ const n={...b}; list.forEach(x=>{ n[x.id]=true; }); return n; });
+    let ok=0, fail=0, noPdf=0, idx=0;
+    const worker=async()=>{ while(idx<list.length){ const x=list[idx++];
+      try{
+        if(!x.path){ noPdf++; setData(prev=>({...prev, importReview:(prev.importReview||[]).map(y=>y.id===x.id?{...y, verdict:'Kein PDF zu dieser Buchung gespeichert – KI kann nur mit deinem Hinweis nicht prüfen. Bitte PDF nachladen.', checkedAt:new Date().toISOString()}:y)})); continue; }
+        const {data:blob,error}=await sb.storage.from('belege').download(x.path); if(error||!blob) throw (error||new Error('Download'));
+        const bytes=new Uint8Array(await blob.arrayBuffer());
+        const o=await aiReadDoc(bytes, x.fileName||x.path, {kind:x.kind, name:x.name, brutto:x.brutto, note:x.hint||'', context:(x.reasons||[]).join(' | ').slice(0,400)});
+        applyKiResult({id:x.itemId, kind:x.inv?'r':'b'}, {y:x.y,m:x.m,acct:x.acct,kind:x.kind,name:x.name,brutto:x.brutto,datum:x.datum,nummer:x.nummer,filePath:x.path,fileName:x.fileName}, o);
+        ok++;
+      }catch(e){ fail++; }
+      setRevBusy(b=>{ const n={...b}; delete n[x.id]; return n; });
+    } };
+    await Promise.all([worker(),worker(),worker()]);
+    setRevBusy(b=>{ const n={...b}; list.forEach(x=>{ delete n[x.id]; }); return n; });
+    setToast('KI-Prüfung fertig: '+ok+' geprüft'+(noPdf?', '+noPdf+' ohne PDF':'')+(fail?', '+fail+' Fehler':''));
+  };
   const startKiJobs = async (jobs)=>{
     if(kiRunRef.current){ setToast('Die KI liest noch – bitte kurz warten.'); return; }
     kiRunRef.current=true; kiCancelRef.current=false;
     let done=0, errs=0, changed=0; const mism=[]; let idx=0;
     setKiJob({total:jobs.length, done:0, errs:0, changed:0, running:true});
-    const patchItem=(id,fn)=>{ const walk=(o)=>{ if(Array.isArray(o)){ for(const it of o){ if(it&&typeof it==='object'&&it.id===id&&('amount' in it)){ fn(it); return true; } if(walk(it)) return true; } } else if(o&&typeof o==='object'){ for(const k of Object.keys(o)){ if(walk(o[k])) return true; } } return false; }; return walk; };
     const worker=async()=>{
       while(idx<jobs.length && !kiCancelRef.current){
         const j=jobs[idx++]; const r=j.r;
         try{
           const bytes=await r.file.data(); const o=await aiReadDoc(bytes, r.file.name, {kind:j.kind==='r'?'ein':r.kind, name:r.name, brutto:r.brutto});
-          const diff=[]; if(o.brutto!=null && Math.abs(o.brutto-r.brutto)>0.02) diff.push('Betrag laut PDF '+fmt(o.brutto)+' statt '+fmt(r.brutto)); if(o.datum && r.datum && o.datum!==r.datum) diff.push('Datum laut PDF '+o.datum.split('-').reverse().join('.')+' statt '+r.datum.split('-').reverse().join('.'));
-          if(diff.length) mism.push({name:r.name||'Beleg', nummer:r.nummer||'', diff});
-          let ch=false; const chs=[];
-          setData(prev=>{ chs.length=0; const nd=JSON.parse(JSON.stringify(prev)); const M=nd[r.y]&&nd[r.y][r.m]; if(!M) return prev; let hit=false;
-            patchItem(j.id, it=>{ hit=true; if(j.kind==='b'){ if(o.name && normName(o.name)!==normName(it.name)){ chs.push('Name „'+it.name+'“ → „'+String(o.name).slice(0,90)+'“'); it.name=String(o.name).slice(0,90); ch=true; } if(o.kategorie && r.kind==='aus' && CATS.includes(o.kategorie) && o.kategorie!==it.category){ chs.push('Kategorie → '+o.kategorie); it.category=o.kategorie; ch=true; } if(o.mwst!=null && o.brutto!=null && Math.abs(o.brutto-r.brutto)<0.02 && o.mwst!==it.mwst){ chs.push('MwSt → '+o.mwst+' %'); it.mwst=o.mwst; it.netto=Math.round(r.brutto/(1+o.mwst/100)*100)/100; ch=true; } }
-              if(o.nummer && !it.belegnr){ it.belegnr=String(o.nummer).slice(0,40); ch=true; }
-              if(o.beschreibung && !String(it.note||'').includes(o.beschreibung)){ it.note=[o.beschreibung.slice(0,120), it.note].filter(Boolean).join(' · '); ch=true; }
-              if(diff.length){ it.note=[it.note, '⚠ '+diff.join('; ')].filter(Boolean).join(' · '); } })(M);
-            if(hit && (chs.length||diff.length)){ const why='KI: '+[...chs,...diff].join('; '); const rv=(nd.importReview=nd.importReview||[]); const ex=rv.find(x=>x.itemId===j.id); if(ex){ ex.reasons=[...(ex.reasons||[]),why]; ex.done=false; } else rv.push({id:uid(), itemId:j.id, y:r.y, m:r.m, acct:r.acct, kind:j.kind==='r'?'ein':r.kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:[why], path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:new Date().toISOString()}); }
-            return hit?nd:prev; });
+          const diffR=applyKiResult(j,r,o); if(diffR.diff.length) mism.push({name:r.name||'Beleg', nummer:r.nummer||'', diff:diffR.diff}); const ch=diffR.ch;
           if(ch) changed++;
         }catch(e){ errs++; }
         done++; setKiJob({total:jobs.length, done, errs, changed, running:true});
@@ -2586,7 +2706,7 @@ function App({session}) {
       nd.recurInvoices=recs0;
       nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
       // Zu prüfen: Zeilen mit KI-Haken, Notiz „anschauen" oder Doppelungs-Verdacht (Buchung ist bereits drin, nichts geht verloren)
-      const revNew=[...bel.map(r=>({r,kind:r.kind})), ...rec.map(r=>({r,kind:'ein'}))].filter(x=>x.r.review&&x.r.review.length).map(({r,kind})=>({id:uid(), itemId:r._id, y:r.y, m:r.m, acct:r.acct, kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:r.review, path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:now2}));
+      const revNew=[...bel.map(r=>({r,kind:r.kind,inv:false})), ...rec.map(r=>({r,kind:'ein',inv:true}))].filter(x=>x.r.review&&x.r.review.length).map(({r,kind,inv})=>({id:uid(), inv, itemId:r._id, y:r.y, m:r.m, acct:r.acct, kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:r.review, path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:now2}));
       if(revNew.length) nd.importReview=[...(nd.importReview||[]), ...revNew];
       return nd; });
     // Kontoauszüge: Datei für den Steuerberater ablegen, Umsätze als Bank-Entwürfe (Abgleich mit den frisch importierten Belegen/Rechnungen)
@@ -3240,6 +3360,7 @@ function App({session}) {
     ctx.finance=buildFinanceContext();
     ctx.counts=(d.customers||[]).length+' Kunden, '+(d.invoices||[]).length+' Rechnungen, '+(d.recurInvoices||[]).length+' wiederkehrende Rechnungen, '+(d.todos||[]).filter(t=>!t.done).length+' offene To-dos';
     const p=botPendingRef.current; if(p&&p.inv){ ctx.pendingInvoice=p.inv.number+' an '+(p.inv.custName||'?')+' über '+fmt(invTotals(p.inv.items).gross); }
+    try{ const tds=(d.taxDocs||[]).filter(t=>t.summary||['EÜR / Gewinnermittlung','BWA / Auswertung','Jahresabschluss','Steuerbescheid','Umsatzsteuer'].includes(t.category)).slice(0,14); if(tds.length) ctx.taxDocs=tds.map(t=>'• '+t.year+' · '+t.category+' · '+t.title+(t.summary?' – '+String(t.summary).replace(/\s+/g,' ').slice(0,450):'')); }catch(e){}
     try{ ctx.letters=ACT.letterMemoryLines(d, 8); const op=(d.payables||[]).filter(x=>x.status==='offen').slice(0,8); if(op.length) ctx.letters=[...(ctx.letters||[]), ...op.map(x=>'• Offene Zahlung · '+accLabel(x.account)+' · '+x.payee+' '+fmt(x.amount)+(x.due?' · fällig '+x.due:''))]; }catch(e){}
     if(attachment) ctx.attachment=attachment.name+' ('+attachment.kind+')';
     return ctx; };
@@ -3383,13 +3504,13 @@ function App({session}) {
     const isPdf=/\.pdf$/i.test(fileName); const ext=(fileName.split('.').pop()||'jpg').toLowerCase(); const mt=isPdf?'application/pdf':ext==='png'?'image/png':ext==='webp'?'image/webp':'image/jpeg';
     const blob=new Blob([bytes],{type:mt}); if(blob.size>12*1024*1024) throw new Error('Datei zu groß (>12 MB)'); const b64=await fileToB64(blob);
     const art=hint&&hint.kind==='ein'?'eine AUSGANGSRECHNUNG des Nutzers (er ist Rechnungssteller; "n" = Name des Empfängers/Kunden)':'ein BELEG bzw. eine EINGANGSRECHNUNG (der Nutzer hat bezahlt; "n" = Name des Ausstellers/Lieferanten)';
-    const prompt='Dies ist '+art+' (Deutschland). Lies das Dokument und antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown: {"n":"Name (max 60 Zeichen, korrekt geschrieben, ohne Rechtsform-Zusätze wie Adresse)","d":"TT.MM.JJJJ (Rechnungs-/Belegdatum, leer wenn unklar)","r":"Rechnungs-/Belegnummer (leer wenn keine)","b":Bruttobetrag als Zahl mit Punkt,"nt":Nettobetrag oder null,"mw":19|7|0 (Hauptsteuersatz) oder null,"c":"genau eine Kategorie aus [Allgemein,Miete,Nebenkosten,Versicherung,Material,Personal,Steuern,Software,Marketing,Reise,Bewirtung,Bank & Gebühren,Sonstiges] oder leer","z":"Kurzbeschreibung der Leistung/Ware (max 80 Zeichen)"}. Erfinde nichts; was nicht lesbar ist, bleibt leer/null.'+(hint&&hint.name?' Zur Orientierung steht in der Liste: Name "'+hint.name+'", Betrag '+hint.brutto+' EUR.':'');
+    const prompt='Dies ist '+art+' (Deutschland). Lies das Dokument und antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown: {"n":"Name (max 60 Zeichen, korrekt geschrieben, ohne Rechtsform-Zusätze wie Adresse)","d":"TT.MM.JJJJ (Rechnungs-/Belegdatum, leer wenn unklar)","r":"Rechnungs-/Belegnummer (leer wenn keine)","b":Bruttobetrag als Zahl mit Punkt,"nt":Nettobetrag oder null,"mw":19|7|0 (Hauptsteuersatz) oder null,"c":"genau eine Kategorie aus [Allgemein,Miete,Nebenkosten,Versicherung,Material,Personal,Steuern,Software,Marketing,Reise,Bewirtung,Bank & Gebühren,Sonstiges] oder leer","z":"Kurzbeschreibung der Leistung/Ware (max 80 Zeichen)","sto":true wenn das Dokument eine Stornierung, Gutschrift, Stornorechnung oder Korrekturrechnung ist (sonst false),"u":"EIN kurzer deutscher Satz: Was ist das für ein Dokument und passt es zu den Angaben aus der Liste bzw. zum Hinweis des Nutzers? Ist es ein Storno/Gutschrift, ein echtes Duplikat oder ein eigener Beleg?"}. Erfinde nichts; was nicht lesbar ist, bleibt leer/null.'+(hint&&hint.name?' Zur Orientierung steht in der Liste: Name "'+hint.name+'", Betrag '+hint.brutto+' EUR.':'')+(hint&&hint.context?' Bisherige Auffälligkeiten: '+hint.context+'.':'')+(hint&&hint.note?' WICHTIG – Hinweis des Nutzers, bitte berücksichtigen: "'+hint.note+'".':'');
     const content=[isPdf?{type:'document',source:{type:'base64',media_type:'application/pdf',data:b64}}:{type:'image',source:{type:'base64',media_type:mt,data:b64}},{type:'text',text:prompt}];
-    const {data:resp,error}=await aiInvoke({body:{model:'claude-haiku-4-5',max_tokens:600,messages:[{role:'user',content}]}});
+    const {data:resp,error}=await aiInvoke({body:{model:'claude-haiku-4-5',max_tokens:800,messages:[{role:'user',content}]}});
     if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler');
     let t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; t=t.replace(/```json|```/g,'').trim(); const mm=t.match(/\{[\s\S]*\}/); if(mm) t=mm[0]; const p=JSON.parse(t);
     const numv=v=>{ if(v==null||v==='') return null; const n=parseFloat(String(v).replace(/\./g,(x,i,s)=>/,/.test(s)?'':x).replace(',','.')); return Number.isFinite(n)?Math.abs(n):null; };
-    return { name:String(p.n||'').trim(), datum:toISO(p.d||''), nummer:String(p.r||'').trim(), brutto:numv(p.b), netto:numv(p.nt), mwst:[0,7,19].includes(+p.mw)?+p.mw:null, kategorie:String(p.c||'').trim(), beschreibung:String(p.z||'').trim() };
+    return { name:String(p.n||'').trim(), datum:toISO(p.d||''), nummer:String(p.r||'').trim(), brutto:numv(p.b), netto:numv(p.nt), mwst:[0,7,19].includes(+p.mw)?+p.mw:null, kategorie:String(p.c||'').trim(), beschreibung:String(p.z||'').trim(), storno:p.sto===true||p.sto==='true', urteil:String(p.u||'').trim() };
   };
   const applyBotImport = (drafts)=>{ addImportDrafts(drafts||[]); setBotMsgs(m=>[...m,{role:'assistant',content:(drafts||[]).length+' Posten in den Kontoauszug übernommen – ich öffne den Bereich.'}]); setTab('import'); setImportTab('bank'); };
 
@@ -4117,7 +4238,7 @@ function App({session}) {
           <button onClick={()=>setSideOpen(o=>!o)} title={sideOpen?'Menü einklappen':'Menü ausklappen'} style={{...topIconBtn,background:'none',border:'none'}}><Ic p={P.panel} sz={19} col={C.sub}/></button>
           <div style={{display:'flex',alignItems:'center',gap:2,background:C.surf,border:'1px solid '+C.bdr,borderRadius:999,padding:3,boxShadow:isDark?'none':'0 1px 2px rgba(0,0,0,0.03)'}}>
             <button onClick={()=>goMonth(-1)} title="Voriger Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>‹</button>
-            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
+            <button onClick={()=>{ setCalYr(yr); setCalOpen(o=>!o); }} title="Monat wählen" style={{display:'flex',alignItems:'center',gap:8,background:'none',border:'none',padding:'5px 8px',fontFamily:'inherit',fontSize:14,fontWeight:700,color:C.txt,cursor:'pointer',whiteSpace:'nowrap'}}><Ic p={P.cal} sz={15} col={C.pri}/> {(yearAll&&tab==='rechnung')?'Ganzes Jahr':MONTHS[mo]} {yr} <Ic p={P.down} sz={13} col={C.sub}/></button>
             <button onClick={()=>goMonth(1)} title="Nächster Monat" style={{background:'none',border:'none',color:C.sub,width:30,height:30,borderRadius:9,cursor:'pointer',fontFamily:'inherit',fontSize:17,lineHeight:1}}>›</button>
           </div>
           <div style={{flex:1}}/>
@@ -4162,12 +4283,13 @@ function App({session}) {
             </div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
               {MONTHS.map((mn,i)=>{ const sel=(i===mo&&calYr===yr); return (
-                <button key={i} onClick={()=>{ setMo(i); setYr(calYr); setCalOpen(false); }} style={{
+                <button key={i} onClick={()=>{ setMo(i); setYr(calYr); setYearAll(false); setCalOpen(false); }} style={{
                   background:sel?C.accent:C.surf2, color:sel?C.accentTxt:C.txt, border:'none', borderRadius:9,
                   padding:'10px 0', cursor:'pointer', fontFamily:'inherit', fontSize:13, fontWeight:sel?700:500,
                 }}>{mn.slice(0,3)}</button>
               ); })}
             </div>
+            <button onClick={()=>{ setYr(calYr); setYearAll(true); setCalOpen(false); }} title="Alle Monate des Jahres anzeigen (Rechnungen)" style={{marginTop:8,width:'100%',background:(yearAll&&calYr===yr)?C.accent:C.surf2,color:(yearAll&&calYr===yr)?C.accentTxt:C.txt,border:'none',borderRadius:9,padding:'10px 0',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:700}}>Ganzes Jahr {calYr}</button>
           </div>
         </div>
       )}
@@ -4857,13 +4979,64 @@ function App({session}) {
                     aiReadDoc={aiReadDoc} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
                 )}
 
+                {importTab==='sevdesk' && (
+                  <div style={{background:C.surf2,border:'1px solid '+hexA(C.exp,0.45),borderRadius:16,padding:'16px 18px',marginTop:16}}>
+                    <div style={{fontSize:17,fontWeight:800}}>Neu anfangen</div>
+                    <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>Löscht Buchungen, Rechnungen, To-dos usw. eines Jahres (oder aller Jahre), damit du den Umzug aus sevDesk sauber neu machen kannst. Dein Zwischenspeicher hier (geladene CSV/ZIP, Zuordnungen, Notizen, KI-Haken), Einstellungen, Konten und Steuerunterlagen bleiben erhalten – du musst nichts neu hochladen oder zuordnen. Vorher wird automatisch eine Sicherung als Datei heruntergeladen.</div>
+                    <button onClick={()=>setWipe({year:String(yr),opts:{book:true,inv:true,todo:true,rev:true,bank:true,files:true,cust:false},text:'',busy:false,msg:''})} style={{marginTop:10,background:'none',border:'1px solid '+C.exp,color:C.exp,borderRadius:10,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Zurücksetzen …</button>
+                  </div>)}
+                {wipe && (()=>{ const cnt=wipeCounts(wipe); const yrs=[...new Set([...Object.keys(data||{}).filter(k=>/^\d{4}$/.test(k)), String(yr)])].sort(); const set=(k)=>(e)=>setWipe(x=>({...x,opts:{...x.opts,[k]:e.target.checked}}));
+                  const row=(k,label,n)=>(<label key={k} style={{display:'flex',gap:9,alignItems:'center',fontSize:13.5,cursor:'pointer'}}><input type="checkbox" checked={!!wipe.opts[k]} onChange={set(k)} disabled={wipe.busy}/> <span style={{flex:1}}>{label}</span>{n!=null && <span style={{color:C.sub,...NUM}}>{n}</span>}</label>);
+                  const ok=wipe.text.trim().toUpperCase()==='LÖSCHEN';
+                  return (
+                  <div onClick={()=>!wipe.busy&&setWipe(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:180,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+                    <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'20px 22px',maxWidth:480,width:'100%',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 24px 60px rgba(0,0,0,0.3)'}}>
+                      <div style={{fontSize:17,fontWeight:800,color:C.exp,marginBottom:4}}>Wirklich zurücksetzen?</div>
+                      <div style={{fontSize:13,color:C.sub,lineHeight:1.5,marginBottom:12}}>Das kann nicht rückgängig gemacht werden (außer mit der Sicherungsdatei). Schließe vorher alle anderen Buqo-Tabs und Geräte, sonst können sie alte Daten zurückschreiben.</div>
+                      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}><span style={{fontSize:13,fontWeight:700}}>Zeitraum</span><select value={wipe.year} onChange={e=>setWipe(x=>({...x,year:e.target.value}))} disabled={wipe.busy} style={{...SS,width:'auto'}}>{yrs.map(y=><option key={y} value={y}>{y}</option>)}<option value="alle">Alle Jahre</option></select></div>
+                      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                        {row('book','Buchungen in allen Konten (Einnahmen/Ausgaben, inkl. Mieteinnahmen-Felder)',cnt.book)}
+                        {row('inv','Rechnungen + wiederkehrende Serien dieses Zeitraums',cnt.inv)}
+                        {row('todo','Alle To-dos',cnt.todo)}
+                        {row('rev','Zu-prüfen-Liste, DATEV-Prüfungen, Import-Protokoll',cnt.rev)}
+                        {row('bank','Kontoauszüge dieses Zeitraums + Bank-Entwürfe',cnt.bank+cnt.drafts)}
+                        {row('files','Zugehörige Beleg-/Rechnungs-Dateien im Speicher löschen',null)}
+                        {row('cust','Auch alle Kunden löschen',(data.customers||[]).length)}
+                      </div>
+                      <div style={{fontSize:12.5,color:C.sub,margin:'14px 0 6px'}}>Zur Bestätigung <b>LÖSCHEN</b> eintippen:</div>
+                      <input value={wipe.text} onChange={e=>setWipe(x=>({...x,text:e.target.value}))} disabled={wipe.busy} style={{...SS,width:'100%',textAlign:'left',boxSizing:'border-box'}}/>
+                      {wipe.msg && <div style={{fontSize:12.5,color:C.sub,marginTop:8}}>{wipe.msg}</div>}
+                      <div style={{display:'flex',gap:8,marginTop:14}}>
+                        <button onClick={runWipe} disabled={wipe.busy||!ok} style={{flex:1,background:C.exp,color:'#fff',border:'none',borderRadius:11,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:(wipe.busy||!ok)?0.5:1}}>{wipe.busy?'Läuft …':'Sicherung laden und löschen'}</button>
+                        <button onClick={()=>setWipe(null)} disabled={wipe.busy} style={{background:C.surf2,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'12px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+                      </div>
+                    </div>
+                  </div>); })()}
+
+                {importTab==='sevdesk' && (()=>{ const dc=(data.datevChecks||[]).slice(-1)[0]; return (
+                  <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:16,padding:'16px 18px',marginTop:16}}>
+                    <div style={{fontSize:17,fontWeight:800}}>DATEV-Abgleich mit KI</div>
+                    <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>Lade die DATEV-Datei (Buchungsstapel, CSV), die an den Steuerberater ging oder von ihm kommt. Buqo vergleicht sie mit deinen Buchungen und findet falsche Kategorien, MwSt-Sätze, Monate sowie fehlende oder überzählige Buchungen. Die KI fasst die typischen Fehler zusammen; alle Abweichungen stehen danach unten in „Zu prüfen". Es wird nichts verändert.</div>
+                    <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
+                      <label style={{display:'inline-flex',alignItems:'center',gap:8,background:AI_GRADIENT,color:'#fff',borderRadius:10,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:datevCkBusy?'default':'pointer',opacity:datevCkBusy?0.6:1}}>
+                        {datevCkBusy?'Läuft …':'DATEV-Datei wählen'}
+                        <input type="file" accept=".csv,.txt,text/csv" disabled={datevCkBusy} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=''; if(f) runDatevCheck(f); }} style={{display:'none'}}/>
+                      </label>
+                      <span style={{fontSize:12.5,color:C.sub}}>{datevCkMsg}</span>
+                    </div>
+                    {dc && dc.summary && <div style={{marginTop:12,fontSize:13,lineHeight:1.55,color:C.txt,whiteSpace:'pre-wrap',background:C.surf3,borderRadius:10,padding:'10px 12px'}}><b>🤖 Auswertung der KI ({dc.file})</b>{'\n'}{dc.summary}</div>}
+                  </div>); })()}
+
                 {importTab==='sevdesk' && (data.importReview||[]).length>0 && (()=>{ const rv=data.importReview||[]; const open=rv.filter(x=>!x.done); const shown=showRevDone?rv:open;
+                  const setRevHint=(id,v)=>setData(prev=>({...prev, importReview:(prev.importReview||[]).map(x=>x.id===id?{...x,hint:v}:x)}));
                   const setDone=(ids,v)=>setData(prev=>({...prev, importReview:(prev.importReview||[]).map(x=>ids.includes(x.id)?{...x,done:v}:x)}));
                   return (
                   <div style={{background:C.surf2,border:'1px solid '+hexA(C.amb,0.5),borderRadius:16,padding:'16px 18px',marginTop:16}}>
                     <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
                       <div style={{fontSize:17,fontWeight:800,flex:1,minWidth:200}}>Zu prüfen · {open.length} offen</div>
                       <label style={{fontSize:12.5,color:C.sub,display:'flex',gap:6,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={showRevDone} onChange={e=>setShowRevDone(e.target.checked)}/> Erledigte zeigen ({rv.length-open.length})</label>
+                      {open.some(x=>x.hint) && <button onClick={()=>reanalyzeReview(open.filter(x=>x.hint).map(x=>x.id))} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle mit Hinweis neu prüfen ({open.filter(x=>x.hint).length})</button>}
+                      {open.length>0 && <button onClick={()=>reanalyzeReview(open.filter(x=>x.path).map(x=>x.id))} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle offenen mit KI prüfen</button>}
                       {open.length>0 && <button onClick={()=>setDone(open.map(x=>x.id),true)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle erledigt</button>}
                     </div>
                     <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>Diese Buchungen sind bereits verbucht. Hier siehst du, was du oder die KI noch einmal anschauen sollte: Zeilen mit KI-Haken, deine Notizen mit „anschauen", mögliche Doppelungen und alles, was die KI am PDF geändert oder anders gelesen hat.</div>
@@ -4874,6 +5047,11 @@ function App({session}) {
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:14,fontWeight:700,color:C.txt}}>{x.name||'—'} <span style={{fontWeight:600,color:C.sub,fontSize:12.5}}>· {x.datum?x.datum.split('-').reverse().join('.'):''} · {fmt(x.brutto)} · {accLabel(x.acct)}</span></div>
                             <div style={{fontSize:12,color:C.amb,marginTop:2,lineHeight:1.45}}>{(x.reasons||[]).join(' · ')}</div>
+                            {x.verdict && <div style={{fontSize:12,color:C.txt,marginTop:4,lineHeight:1.45,background:C.surf3,borderRadius:8,padding:'5px 9px'}}>🤖 {x.verdict}{x.storno?' (Storno/Gutschrift)':''}</div>}
+                            <div style={{display:'flex',gap:6,marginTop:6,alignItems:'center'}}>
+                              <input value={x.hint||''} onChange={e=>setRevHint(x.id,e.target.value)} placeholder="Hinweis für die KI, z. B. „Storno – Gegenbuchung zu RE-1269“" style={{...SS,flex:1,minWidth:0,fontSize:12,padding:'5px 8px',textAlign:'left'}} />
+                              <button onClick={()=>reanalyzeReview([x.id])} disabled={!!revBusy[x.id]} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:8,padding:'5px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',opacity:revBusy[x.id]?0.6:1}}>{revBusy[x.id]?'KI liest…':'KI prüfen'}</button>
+                            </div>
                           </div>
                           {x.path && <button onClick={()=>openFile(x.path,x.fileName||x.name)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>PDF ansehen</button>}
                           <button onClick={()=>setDone([x.id],!x.done)} style={{background:x.done?'none':C.act,color:x.done?C.sub:C.actTxt,border:x.done?'1px solid '+C.bdr:'none',borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{x.done?'Wieder öffnen':'Erledigt'}</button>
@@ -5407,14 +5585,15 @@ function App({session}) {
                     if(invStatusF==='offen' && inv.paid) return false;
                     if(invStatusF==='bezahlt' && !inv.paid) return false;
                     const d=new Date(inv.sentDate||inv.date); const mKey=isNaN(d)?'0000-99':(d.getFullYear()+'-'+String(d.getMonth()).padStart(2,'0'));
-                    if(!q && mKey!=='0000-99' && mKey!==curMKey) return false;
+                    if(!q && mKey!=='0000-99'){ const fy=+mKey.slice(0,4), fm=+mKey.slice(5); if(fy!==yr || (!yearAll && fm!==mo)) return false; }
                     if(!q) return true;
                     const c=customers.find(x=>x.id===inv.customerId);
                     const total=inv.total!=null?inv.total:invTotals(inv.items).gross;
                     return [inv.number,inv.custName,(c&&c.name),String(total)].filter(Boolean).some(s=>String(s).toLowerCase().includes(q));
                   });
-                  if(!filtered.length) return <div style={{...SC,fontSize:13,color:C.mut}}>{allInv.length?(q?'Keine Treffer.':'Keine Rechnungen in diesem Monat.'):'Noch keine Rechnungen in diesem Bereich.'}</div>;
-                  const groups={}; filtered.forEach(inv=>{ const d=new Date(inv.sentDate||inv.date); const key=isNaN(d)?'0000-99':(d.getFullYear()+'-'+String(d.getMonth()).padStart(2,'0')); (groups[key]=groups[key]||[]).push(inv); });
+                  if(!filtered.length) return <div style={{...SC,fontSize:13,color:C.mut}}>{allInv.length?(q?'Keine Treffer.':(yearAll?'Keine Rechnungen in diesem Jahr.':'Keine Rechnungen in diesem Monat – oben den Monat wählen oder „Ganzes Jahr".')):'Noch keine Rechnungen in diesem Bereich.'}</div>;
+                  const totalFiltered=filtered.length; const shownInv=filtered.slice().sort((a,b)=>String(b.sentDate||b.date).localeCompare(String(a.sentDate||a.date))).slice(0,invLimit);
+                  const groups={}; shownInv.forEach(inv=>{ const d=new Date(inv.sentDate||inv.date); const key=isNaN(d)?'0000-99':(d.getFullYear()+'-'+String(d.getMonth()).padStart(2,'0')); (groups[key]=groups[key]||[]).push(inv); });
                   const keys=Object.keys(groups).sort().reverse();
                   const monthLabel=(key)=>{ if(key==='0000-99')return 'Ohne Datum'; const [y,m]=key.split('-'); return MONTHS[+m]+' '+y; };
                   return keys.map(key=>(
@@ -5440,7 +5619,7 @@ function App({session}) {
                         })}
                       </div>
                     </div>
-                  ));
+                  )).concat(totalFiltered>shownInv.length?[<button key="more" onClick={()=>setInvLimit(l=>l+100)} style={{width:'100%',background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:12,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:12}}>Mehr anzeigen ({shownInv.length} von {totalFiltered})</button>]:[]);
                 })()}
                 </>)}
                 <button onClick={()=>setTab('kunden')} style={{display:'flex',alignItems:'center',gap:8,width:'100%',background:C.surf,border:'1px solid '+C.bdr,borderRadius:14,padding:'14px 16px',cursor:'pointer',fontFamily:'inherit',color:C.txt,fontSize:14,fontWeight:600,textAlign:'left',marginTop:14}}><Ic p={P.prson} sz={17} col={C.sub}/> <span style={{flex:1}}>Kunden verwalten</span> <span style={{color:C.mut}}>{customersFor(invDomain).length} ›</span></button>
@@ -5714,13 +5893,35 @@ function App({session}) {
           {tab==='steuerdocs' && (()=>{ const docs=(data.taxDocs||[]).slice().sort((a,b)=>(b.year-a.year)||String(a.category).localeCompare(b.category)); const years=[...new Set(docs.map(d=>d.year))]; const yF=(taxDocY&&years.includes(taxDocY))?taxDocY:(years[0]||null); const shown=docs.filter(d=>d.year===yF); const cats=[...new Set(shown.map(d=>d.category))];
             return (<>
               <div style={{fontSize:isMobile?28:34,fontWeight:800,letterSpacing:'-0.03em'}}>Steuerunterlagen</div>
-              <div style={{fontSize:13,color:C.sub,marginTop:4,marginBottom:16}}>Alles, was du für die Steuererklärung brauchst – sortiert nach Jahr und Kategorie. Lade Belege im Assistenten hoch, er legt sie hier ab.</div>
+              <div style={{fontSize:13,color:C.sub,marginTop:4,marginBottom:16}}>Alles, was du für die Steuererklärung brauchst – sortiert nach Jahr und Kategorie. Lade hier z. B. deine EÜR, BWA oder einen Steuerbescheid hoch – die KI liest sie aus und der Assistent nutzt sie als Steuerberater. Belege kannst du auch im Assistenten hochladen, er legt sie hier ab.</div>
+              <button onClick={()=>setTaxUp({file:null,year:new Date().getFullYear()-1,cat:'EÜR / Gewinnermittlung',title:'',acct:'unter',ki:true,busy:false,msg:''})} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:16}}>+ Dokument hochladen</button>
+              {taxUp && (
+                <div onClick={()=>!taxUp.busy&&setTaxUp(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:170,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+                  <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'20px 22px',maxWidth:460,width:'100%',boxShadow:'0 24px 60px rgba(0,0,0,0.3)'}}>
+                    <div style={{fontSize:17,fontWeight:800,marginBottom:12}}>Steuerunterlage hochladen</div>
+                    <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                      <label style={{display:'block',border:'1.5px dashed '+C.bdrM,borderRadius:12,padding:'14px',textAlign:'center',cursor:'pointer',fontSize:13.5,color:taxUp.file?C.txt:C.sub,fontWeight:taxUp.file?700:500}}>{taxUp.file?taxUp.file.name:'Datei wählen (PDF, Foto, CSV)'}<input type="file" accept=".pdf,.csv,.txt,image/*" onChange={e=>{ const f=e.target.files&&e.target.files[0]; if(f) setTaxUp(x=>({...x,file:f,title:x.title||f.name.replace(/\.[a-z0-9]+$/i,'')})); }} style={{display:'none'}}/></label>
+                      <select value={taxUp.cat} onChange={e=>setTaxUp(x=>({...x,cat:e.target.value}))} style={{...SS,textAlign:'left'}}>{ACT.TAX_CATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
+                      <div style={{display:'flex',gap:10}}>
+                        <select value={taxUp.year} onChange={e=>setTaxUp(x=>({...x,year:+e.target.value}))} style={{...SS,textAlign:'left',flex:1}}>{[0,1,2,3,4,5].map(i=>{ const y=new Date().getFullYear()-i; return <option key={y} value={y}>{y}</option>; })}</select>
+                        <select value={taxUp.acct} onChange={e=>setTaxUp(x=>({...x,acct:e.target.value}))} style={{...SS,textAlign:'left',flex:1.4}}>{['unter',...PROPS.filter(acctCreated),'privat'].map(k=><option key={k} value={k}>{accLabel(k)}</option>)}</select>
+                      </div>
+                      <input value={taxUp.title} onChange={e=>setTaxUp(x=>({...x,title:e.target.value}))} placeholder="Bezeichnung, z. B. EÜR 2025 vom Steuerberater" style={{...SS,textAlign:'left'}}/>
+                      <label style={{display:'flex',gap:8,alignItems:'center',fontSize:13,cursor:'pointer'}}><input type="checkbox" checked={taxUp.ki} onChange={e=>setTaxUp(x=>({...x,ki:e.target.checked}))}/> KI soll das Dokument auslesen (verbraucht KI-Guthaben)</label>
+                      {taxUp.msg && <div style={{fontSize:12.5,color:C.sub}}>{taxUp.msg}</div>}
+                      <div style={{display:'flex',gap:8,marginTop:4}}>
+                        <button onClick={uploadTaxDoc} disabled={!taxUp.file||taxUp.busy} style={{flex:1,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:(!taxUp.file||taxUp.busy)?0.55:1}}>{taxUp.busy?'Läuft …':'Hochladen'}</button>
+                        <button onClick={()=>setTaxUp(null)} disabled={taxUp.busy} style={{background:C.surf2,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'12px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>)}
               {years.length>0 && <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>{years.map(y=>{ const on=y===yF; return <button key={y} onClick={()=>setTaxDocY(y)} style={{background:on?C.txt:C.surf,border:'1px solid '+(on?C.txt:C.bdr),color:on?C.bg:C.sub,borderRadius:999,padding:'7px 15px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>{y}</button>; })}</div>}
               {docs.length===0 ? <div style={{...SC,textAlign:'center',padding:'34px 20px',color:C.sub,fontSize:14,lineHeight:1.6}}>Noch keine Unterlagen. Häng im Assistenten z. B. eine Spendenquittung oder einen Steuerbescheid an – er erkennt, ob es steuerrelevant ist, und legt es hier ab.</div>
               : cats.map(c=>(<div key={c} style={{...SC,marginBottom:12,padding:'8px 8px'}}>
                 <div style={{fontSize:12,fontWeight:700,color:C.sub,letterSpacing:'0.03em',padding:'8px 10px'}}>{c.toUpperCase()}</div>
                 {shown.filter(d=>d.category===c).map((d,i)=>(<div key={d.id} style={{display:'flex',alignItems:'center',gap:10,padding:'11px 10px',borderTop:'1px solid '+C.sep}}>
-                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:14.5,fontWeight:600,color:C.txt}}>{d.title}</div><div style={{fontSize:12,color:C.sub}}>{accLabel(d.account)}{d.note?' · '+d.note:''}</div></div>
+                  <div style={{flex:1,minWidth:0}}><div style={{fontSize:14.5,fontWeight:600,color:C.txt}}>{d.title}</div><div style={{fontSize:12,color:C.sub}}>{accLabel(d.account)}{d.note?' · '+d.note:''}</div>{d.summary && <div style={{fontSize:12,color:C.txt,marginTop:5,lineHeight:1.5,whiteSpace:'pre-wrap',background:C.surf3,borderRadius:8,padding:'6px 9px'}}>🤖 {d.summary}</div>}</div>
                   {d.amount!=null && <div style={{fontSize:14.5,fontWeight:700,...NUM}}>{fmt(d.amount)}</div>}
                   {d.filePath && <button onClick={()=>openFile(d.filePath,d.fileName)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 12px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Ansehen</button>}
                   <button onClick={()=>askConfirm('„'+d.title+'" löschen? Die Datei wird ebenfalls entfernt.',async()=>{ try{ if(d.filePath) await sb.storage.from('belege').remove([d.filePath]); }catch(e){} setData(prev=>({...prev,taxDocs:(prev.taxDocs||[]).filter(x=>x.id!==d.id)})); })} title="Löschen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:18,fontFamily:'inherit'}}>×</button>
@@ -7230,7 +7431,9 @@ function App({session}) {
               <button onClick={()=>setInvView(null)} title="Schließen" style={{marginLeft:'auto',background:C.surf2,border:'none',color:C.sub,width:34,height:34,borderRadius:9,cursor:'pointer',fontSize:20,lineHeight:1,fontFamily:'inherit'}}>×</button>
             </div>
             <div style={{flex:1,overflow:'auto',background:'#fff'}}>
-              <iframe title="Rechnung" srcDoc={invoiceHTML(invView,false)} style={{width:'100%',height:isMobile?'52vh':'58vh',border:'none',display:'block'}}/>
+              {invView.pdfPath
+                ? (invPdfUrl ? <iframe title="Rechnung (Original-PDF)" src={invPdfUrl} style={{width:'100%',height:isMobile?'52vh':'58vh',border:'none',display:'block'}}/> : <div style={{padding:30,color:C.mut,fontSize:13}}>Original-PDF wird geladen…</div>)
+                : <iframe title="Rechnung" srcDoc={invoiceHTML(invView,false)} style={{width:'100%',height:isMobile?'52vh':'58vh',border:'none',display:'block'}}/>}
             </div>
             <div style={{display:'flex',gap:9,padding:'13px 18px',borderTop:'1px solid '+C.sep,flexWrap:'wrap'}}>
               <button onClick={()=>openMailCompose(invView)} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:7,flex:'1 1 100%',background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.receipt} sz={16} col={C.actTxt}/> {invView.emailedAt?'Erneut per E-Mail senden':'Per E-Mail an Kunden senden'}</button>

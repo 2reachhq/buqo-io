@@ -426,11 +426,11 @@ export function matchPayables(payables, drafts, today = '') {
 }
 
 /* ── Steuerunterlagen (für die Steuererklärung richtig ablegen) ───────────────────────────── */
-export const TAX_CATS = ['Steuerbescheid', 'Spenden', 'Handwerkerleistungen', 'Krankheitskosten', 'Versicherungen', 'Betriebsausgaben/Werbungskosten', 'Vorsorge/Rente', 'Kapitalerträge', 'Sonstiges'];
+export const TAX_CATS = ['EÜR / Gewinnermittlung', 'BWA / Auswertung', 'Umsatzsteuer', 'Jahresabschluss', 'Steuerbescheid', 'Spenden', 'Handwerkerleistungen', 'Krankheitskosten', 'Versicherungen', 'Betriebsausgaben/Werbungskosten', 'Vorsorge/Rente', 'Kapitalerträge', 'Sonstiges'];
 export function addTaxDoc(data, input, { id, today, account }) {
   const title = cut(input.title, 120); if (!title) throw new Error('Bezeichnung fehlt.');
   const year = Number(input.year) || new Date(today).getFullYear();
-  const d = { id, account: account || 'unter', year, category: TAX_CATS.includes(s(input.category)) ? s(input.category) : 'Sonstiges', title, amount: input.amount != null && input.amount !== '' ? Math.abs(Number(input.amount)) || 0 : null, note: cut(input.note, 300), filePath: s(input.filePath), fileName: s(input.fileName), createdAt: today };
+  const d = { id, account: account || 'unter', year, category: TAX_CATS.includes(s(input.category)) ? s(input.category) : 'Sonstiges', title, amount: input.amount != null && input.amount !== '' ? Math.abs(Number(input.amount)) || 0 : null, note: cut(input.note, 300), summary: cut(input.summary, 900), filePath: s(input.filePath), fileName: s(input.fileName), createdAt: today };
   return { data: { ...data, taxDocs: [d, ...(data.taxDocs || [])] }, doc: d };
 }
 export const taxDocView = t => ({ id: t.id, jahr: t.year, kategorie: t.category, titel: t.title, betrag: t.amount, notiz: t.note || '', konto: t.account });

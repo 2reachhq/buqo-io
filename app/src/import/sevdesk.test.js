@@ -103,3 +103,17 @@ test('Rechnungs-CSV ohne Namensspalte: Name aus Adresse, Brutto/Netto nicht vert
   assert.equal(rows[0].name, 'FK Growth GmbH'); assert.equal(rows[0].brutto, 952); assert.equal(rows[0].netto, 800); assert.equal(rows[0].mwst, 19);
   assert.equal(rows[1].name, 'Veerle Schmitz Korte'); assert.notEqual(rows[1].name, 'Deutschland');
 });
+
+test('DATEV-Abgleich: findet fehlende, überzählige und abweichende Buchungen', async () => {
+  const { parseDatev, compareDatev } = await import('./datevCompare.js');
+  const csv = '"Rechnungs-Nr.";"Rechnungs-Datum";"Lieferant";"Bruttobetrag";"Steuersatz";"Kategorie"\nA1;02.01.2025;Adobe;71,31;19;Software\nA2;05.01.2025;Telekom;50,00;19;Software\nA3;07.01.2025;Fehlt GmbH;10,00;19;Material\n';
+  const rows = parseDatev(new TextEncoder().encode(csv));
+  const B = [
+    { id: '1', y: 2025, m: 0, kind: 'aus', name: 'Adobe', amount: 71.31, datum: '2025-01-02', nummer: 'A1', category: 'Marketing', mwst: 19 },
+    { id: '2', y: 2025, m: 0, kind: 'aus', name: 'Telekom', amount: 50, datum: '2025-01-05', nummer: 'A2', category: 'Software', mwst: 19 },
+    { id: '3', y: 2025, m: 0, kind: 'aus', name: 'Nur Buqo', amount: 99, datum: '2025-01-06', nummer: '', category: 'Material', mwst: 19 },
+  ];
+  const r = compareDatev(rows, B);
+  assert.equal(r.matched.length, 2); assert.equal(r.missing.length, 1); assert.equal(r.extra.length, 1); assert.equal(r.diffs.length, 1);
+  assert.match(r.diffs[0].why[0], /Kategorie/);
+});
