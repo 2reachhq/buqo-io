@@ -124,3 +124,21 @@ test('Stornorechnung (negativer Betrag in Rechnungs-CSV) wird als storno markier
   const p = sv.parseCSV(csv); const rows = sv.normalizeRows(p, sv.autoMap(p.header), { kind: 'ein' });
   assert.equal(rows[0].storno, false); assert.equal(rows[1].storno, true); assert.equal(rows[1].brutto, 119);
 });
+
+test('Abgleich: Kontoauszug-Umsätze und DATEV-Zeilen den Import-Zeilen zuordnen', async () => {
+  const { matchBank, matchDatev } = await import('./reconcile.js');
+  const rows = [
+    { key: 'b0', kind: 'aus', datum: '2025-01-02', brutto: 71.31, name: 'Adobe' },
+    { key: 'b1', kind: 'aus', datum: '2025-02-02', brutto: 71.31, name: 'Adobe' },
+    { key: 'r0', kind: 'ein', datum: '2025-03-01', brutto: 500, name: 'Kunde X' },
+  ];
+  const bank = [
+    { name: 'ADOBE SYSTEMS', amount: 71.31, kind: 'aus', datum: '2025-01-03' },
+    { name: 'Überweisung Kunde X', amount: 500, kind: 'ein', datum: '2025-03-20' },
+  ];
+  const m = matchBank(rows, bank);
+  assert.ok(m.has('b0')); assert.ok(!m.has('b1')); assert.ok(m.has('r0'));
+  const d = matchDatev([{ key: 'b0', y: 2025, m: 0, kind: 'aus', name: 'Adobe', amount: 71.31, datum: '2025-01-02', nummer: 'A1', category: 'Software', mwst: 19 }],
+    [{ datum: '2025-01-02', brutto: 71.31, name: 'Adobe', nummer: 'A1', kategorie: 'Marketing', mwst: 19, kind: 'aus', kindOk: false }, { datum: '2025-01-09', brutto: 12, name: 'Sonst', nummer: '', kategorie: 'Material', mwst: 19, kind: 'aus' }]);
+  assert.equal(d.byKey.get('b0').state, 'abw'); assert.equal(d.onlyDatev.length, 1);
+});

@@ -7,7 +7,6 @@ import TaxCockpit from './tax/TaxCockpit.jsx';
 import { YEARS as TAX_YEARS, berechneSteuer } from './tax/estg.js';
 import SevdeskImport from './import/SevdeskImport.jsx';
 import { classifyRows } from './import/classify.js';
-import { parseDatev, compareDatev } from './import/datevCompare.js';
 import * as ACT from './assistant/actions.js';
 import { ASSISTANT_TOOLS, ASSISTANT_MODELS, DEFAULT_ASSISTANT_MODEL, buildSystemPrompt, buildSystemBlocks, toolsWithCache, usageCost, addUsage, stepLabel } from './assistant/tools.js';
 import { runAssistantTurn, buildApiMessages, attachmentFromFile } from './assistant/agent.js';
@@ -1510,10 +1509,6 @@ function App({session}) {
   const [botUsage,setBotUsage]= useState({input:0,output:0,cacheRead:0,cacheWrite:0,calls:0}); // Token-Verbrauch dieser Sitzung (live)
   const [botCost,setBotCost]= useState(0);              // geschätzte Kosten dieser Sitzung in USD
   const [botModel,setBotModel]= useState(DEFAULT_ASSISTANT_MODEL); // KI-Modell des Assistenten (in data.assistant.model gespeichert)
-  const startKiJobsRef=useRef(null); const kiRunRef=useRef(false); const kiCancelRef=useRef(false);
-  const [showRevDone,setShowRevDone]=useState(false);
-  const [datevCkBusy,setDatevCkBusy]=useState(false); const [datevCkMsg,setDatevCkMsg]=useState('');
-  const [kiJob,setKiJob]=useState(null);               // Hintergrund-KI nach dem Import: {total,done,errs,changed,running}
   const addDraftsRef=useRef(null);                     // aktuelle addImportDrafts (für verzögerten Aufruf nach dem Import)
   const calcVatRef=useRef(null);                       // aktuelle UStVA-Berechnung (für Hintergrund-Erinnerung)
   const botCarryRef=useRef(null);                      // Datei bleibt für die Folgenachricht erhalten, wenn der Assistent mit Buttons/Formular zurückfragt
@@ -2523,44 +2518,32 @@ function App({session}) {
     }catch(e){ setToast('Speichern fehlgeschlagen: '+(e.message||e)); }
     setBelegBusy(false);
   };
-  /* ── KI liest importierte PDFs im Hintergrund und verbessert Name/Kategorie/Beschreibung/Nummer/MwSt. Betrag und Datum bleiben unverändert (Abweichung → To-do) ── */
-  // Ergebnis der KI-Lesung auf die Buchung anwenden (nie Betrag/Datum) und im Bereich „Zu prüfen" festhalten
-  const applyKiResult=(j,r,o)=>{
-    const patchItem=(id,fn)=>{ const walk=(o)=>{ if(Array.isArray(o)){ for(const it of o){ if(it&&typeof it==='object'&&it.id===id&&('amount' in it)){ fn(it); return true; } if(walk(it)) return true; } } else if(o&&typeof o==='object'){ for(const k of Object.keys(o)){ if(walk(o[k])) return true; } } return false; }; return walk; };
-          const diff=[]; if(o.brutto!=null && Math.abs(o.brutto-r.brutto)>0.02) diff.push('Betrag laut PDF '+fmt(o.brutto)+' statt '+fmt(r.brutto)); if(o.datum && r.datum && o.datum!==r.datum) diff.push('Datum laut PDF '+o.datum.split('-').reverse().join('.')+' statt '+r.datum.split('-').reverse().join('.'));
-          let ch=false; const chs=[];
-          setData(prev=>{ chs.length=0; const nd=JSON.parse(JSON.stringify(prev)); const M=(nd[r.y]&&nd[r.y][r.m])||{}; let hit=false;
-            patchItem(j.id, it=>{ hit=true; if(j.kind==='b'){ if(o.name && normName(o.name)!==normName(it.name)){ chs.push('Name „'+it.name+'“ → „'+String(o.name).slice(0,90)+'“'); it.name=String(o.name).slice(0,90); ch=true; } if(o.kategorie && r.kind==='aus' && CATS.includes(o.kategorie) && o.kategorie!==it.category){ chs.push('Kategorie → '+o.kategorie); it.category=o.kategorie; ch=true; } if(o.mwst!=null && o.brutto!=null && Math.abs(o.brutto-r.brutto)<0.02 && o.mwst!==it.mwst){ chs.push('MwSt → '+o.mwst+' %'); it.mwst=o.mwst; it.netto=Math.round(r.brutto/(1+o.mwst/100)*100)/100; ch=true; } }
-              if(o.nummer && !it.belegnr){ it.belegnr=String(o.nummer).slice(0,40); ch=true; }
-              if(o.beschreibung && !String(it.note||'').includes(o.beschreibung)){ it.note=[o.beschreibung.slice(0,120), it.note].filter(Boolean).join(' · '); ch=true; }
-              if(diff.length && !String(it.note||'').includes('⚠ '+diff.join('; '))){ it.note=[it.note, '⚠ '+diff.join('; ')].filter(Boolean).join(' · '); } })(M);
-            { const rv=(nd.importReview=nd.importReview||[]); let ex=rv.find(x=>x.itemId===j.id); const add=[]; if(chs.length||diff.length) add.push('KI: '+[...chs,...diff].join('; ')); if(o.storno) add.push('PDF ist Storno/Gutschrift/Korrektur – keine echte Doppelung'); if(add.length||ex||o.urteil){ if(!ex){ ex={id:uid(), inv:j.kind==='r', itemId:j.id, y:r.y, m:r.m, acct:r.acct, kind:j.kind==='r'?'ein':r.kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:[], path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:new Date().toISOString()}; rv.push(ex); } if(o.storno) ex.reasons=(ex.reasons||[]).filter(x=>!/^Mögliche Doppelung/.test(x)); const have=new Set(ex.reasons||[]); const fresh=add.filter(x=>!have.has(x)); ex.reasons=[...(ex.reasons||[]),...fresh]; if(fresh.length) ex.done=false; if(o.storno && ex.reasons.every(x=>/^PDF ist Storno|^Storno/.test(x))) ex.done=true; if(o.urteil) ex.verdict=String(o.urteil).slice(0,300); ex.storno=!!o.storno; ex.checkedAt=new Date().toISOString(); } }
-            return nd; });
-    return {ch, diff};
-  };
   // Steuerunterlage (EÜR, BWA, Bescheid …) hochladen; die KI liest sie aus, damit der Assistent später damit arbeiten kann
+  const fileTaxDoc = async (file, t)=>{
+    const year=Number(t.year)||new Date().getFullYear(); const cat=t.cat; const title=(t.title||file.name.replace(/\.[a-z0-9]+$/i,'')).slice(0,120);
+    const fi=await storeAttachment(file, ['Steuer',String(year),cat], title+'_'+new Date().toISOString().slice(0,10));
+    let summary='';
+    if(t.ki){
+      try{
+        const isPdf=/\.pdf$/i.test(file.name)||file.type==='application/pdf'; const isImg=/^image\//.test(file.type)||/\.(png|jpe?g|webp)$/i.test(file.name);
+        let content;
+        const prompt='Dies ist ein Steuer-/Buchhaltungsdokument (Kategorie: '+cat+', Jahr: '+year+'). Fasse in höchstens 8 kurzen Sätzen bzw. Stichpunkten (Deutsch) die steuerlich wichtigen Kennzahlen und Aussagen zusammen, z. B. Betriebseinnahmen, Betriebsausgaben, Gewinn/Verlust, Umsatzsteuer, Vorauszahlungen, Fristen, Auffälligkeiten. Nenne nur Zahlen, die tatsächlich im Dokument stehen.';
+        if(isPdf||isImg){ const b64=await fileToB64(file); const mt=isPdf?'application/pdf':(file.type||'image/jpeg'); content=[isPdf?{type:'document',source:{type:'base64',media_type:mt,data:b64}}:{type:'image',source:{type:'base64',media_type:mt,data:b64}},{type:'text',text:prompt}]; }
+        else { const txt=(await file.text()).slice(0,40000); content=[{type:'text',text:prompt+'\n\nInhalt:\n'+txt}]; }
+        const {data:resp}=await aiInvoke({body:{model:'claude-sonnet-4-6',max_tokens:900,messages:[{role:'user',content}]}});
+        summary=((resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'').trim();
+      }catch(e){ summary=''; }
+    }
+    const id=uid();
+    setData(prev=>({...prev, taxDocs:[{id, account:t.acct||'unter', year, category:cat, title, amount:null, note:'', summary:summary.slice(0,900), filePath:fi.path, fileName:fi.fname, createdAt:new Date().toISOString().slice(0,10)}, ...(prev.taxDocs||[])]}));
+    return { year, summary };
+  };
   const uploadTaxDoc = async ()=>{
     const t=taxUp; if(!t||!t.file||t.busy) return;
-    setTaxUp(x=>({...x,busy:true,msg:'Lade hoch …'}));
+    setTaxUp(x=>({...x,busy:true,msg:t.ki?'Lade hoch und lasse die KI lesen …':'Lade hoch …'}));
     try{
-      const year=Number(t.year)||new Date().getFullYear(); const cat=t.cat; const title=(t.title||t.file.name.replace(/\.[a-z0-9]+$/i,'')).slice(0,120);
-      const fi=await storeAttachment(t.file, ['Steuer',String(year),cat], title+'_'+new Date().toISOString().slice(0,10));
-      let summary='';
-      if(t.ki){
-        setTaxUp(x=>({...x,msg:'KI liest das Dokument …'}));
-        try{
-          const f=t.file; const isPdf=/\.pdf$/i.test(f.name)||f.type==='application/pdf'; const isImg=/^image\//.test(f.type)||/\.(png|jpe?g|webp)$/i.test(f.name);
-          let content;
-          const prompt='Dies ist ein Steuer-/Buchhaltungsdokument (Kategorie: '+cat+', Jahr: '+year+'). Fasse in höchstens 8 kurzen Sätzen bzw. Stichpunkten (Deutsch) die steuerlich wichtigen Kennzahlen und Aussagen zusammen, z. B. Betriebseinnahmen, Betriebsausgaben, Gewinn/Verlust, Umsatzsteuer, Vorauszahlungen, Fristen, Auffälligkeiten. Nenne nur Zahlen, die tatsächlich im Dokument stehen.';
-          if(isPdf||isImg){ const b64=await fileToB64(f); const mt=isPdf?'application/pdf':(f.type||'image/jpeg'); content=[isPdf?{type:'document',source:{type:'base64',media_type:mt,data:b64}}:{type:'image',source:{type:'base64',media_type:mt,data:b64}},{type:'text',text:prompt}]; }
-          else { const txt=(await f.text()).slice(0,40000); content=[{type:'text',text:prompt+'\n\nInhalt:\n'+txt}]; }
-          const {data:resp}=await aiInvoke({body:{model:'claude-sonnet-4-6',max_tokens:900,messages:[{role:'user',content}]}});
-          summary=((resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'').trim();
-        }catch(e){ summary=''; }
-      }
-      const id=uid();
-      setData(prev=>({...prev, taxDocs:[{id, account:t.acct||'unter', year, category:cat, title, amount:null, note:'', summary:summary.slice(0,900), filePath:fi.path, fileName:fi.fname, createdAt:new Date().toISOString().slice(0,10)}, ...(prev.taxDocs||[])]}));
-      setTaxDocY(year); setTaxUp(null); setToast('Gespeichert in Steuerunterlagen'+(summary?' – KI hat das Dokument ausgewertet':''));
+      const r=await fileTaxDoc(t.file,t);
+      setTaxDocY(r.year); setTaxUp(null); setToast('Gespeichert in Steuerunterlagen'+(r.summary?' – KI hat das Dokument ausgewertet':''));
     }catch(e){ setTaxUp(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
   };
   // ── Neu anfangen: Buchungen/Rechnungen/To-dos eines Jahres (oder aller Jahre) löschen, damit der sevDesk-Import neu laufen kann ──
@@ -2594,80 +2577,8 @@ function App({session}) {
       setWipe(null); setToast('Zurückgesetzt'+(o.files?' · '+removed+' Dateien gelöscht':'')+'. Die Sicherung wurde heruntergeladen. Jetzt kannst du den Import neu starten.');
     }catch(e){ setWipe(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
   };
-  // DATEV-Datei (Steuerberater) gegen die Buqo-Buchungen prüfen; Abweichungen landen in „Zu prüfen", die KI fasst Fehlermuster zusammen
-  const runDatevCheck = async (file)=>{
-    if(!file||datevCkBusy) return;
-    setDatevCkBusy(true); setDatevCkMsg('Datei wird gelesen …');
-    try{
-      const rows=parseDatev(await file.arrayBuffer());
-      const bookings=existingBookings().map(b=>({id:b.it.id,y:b.y,m:b.m,kind:b.kind,acct:b.acct,name:b.it.name||'',amount:num(b.it.amount),datum:b.it.datum||'',nummer:b.it.belegnr||'',category:b.it.category||'',mwst:b.it.mwst,item:b.it}));
-      const res=compareDatev(rows,bookings);
-      const now2=new Date().toISOString();
-      const mk=(o)=>({id:uid(), inv:false, itemId:null, y:null, m:null, acct:'', kind:'aus', name:'', datum:'', brutto:0, nummer:'', reasons:[], path:null, fileName:'', done:false, createdAt:now2, source:'datev', ...o});
-      const entries=[
-        ...res.diffs.slice(0,300).map(x=>mk({itemId:x.b.id, y:x.b.y, m:x.b.m, acct:x.b.acct, kind:x.b.kind, name:x.b.name, datum:x.b.datum, brutto:Math.abs(x.b.amount), nummer:x.b.nummer, path:x.b.item.filePath||null, fileName:x.b.item.fileName||'', reasons:x.why.map(w=>'DATEV: '+w)})),
-        ...res.missing.slice(0,200).map(d=>mk({key:'dm|'+d.datum+'|'+d.brutto+'|'+d.nummer, kind:d.kind, name:d.name||d.beschreibung||'Posten', datum:d.datum, brutto:d.brutto, nummer:d.nummer||'', reasons:['DATEV: steht in der DATEV-Datei, aber nicht in Buqo gebucht (Buchung fehlt?)']})),
-        ...res.extra.slice(0,200).map(b=>mk({itemId:b.id, y:b.y, m:b.m, acct:b.acct, kind:b.kind, name:b.name, datum:b.datum, brutto:Math.abs(b.amount), nummer:b.nummer, path:b.item.filePath||null, fileName:b.item.fileName||'', reasons:['DATEV: in Buqo gebucht, aber nicht in der DATEV-Datei (falsch gebucht, anderer Zeitraum oder doppelt?)']})),
-      ];
-      setDatevCkMsg('KI wertet die Abweichungen aus …');
-      let summary='';
-      try{
-        const lines=[...res.diffs.slice(0,40).map(x=>'ABWEICHUNG '+x.b.name+' '+fmt(Math.abs(x.b.amount))+' · '+x.why.join('; ')), ...res.missing.slice(0,25).map(d=>'FEHLT IN BUQO '+(d.name||'')+' '+fmt(d.brutto)+' '+d.datum), ...res.extra.slice(0,25).map(b=>'NUR IN BUQO '+b.name+' '+fmt(Math.abs(b.amount))+' '+(b.datum||''))].join('\n');
-        const prompt='Du bist Assistent für die Buchhaltung eines deutschen Unternehmers. Die DATEV-Datei (Zeitraum '+res.range[0]+' bis '+res.range[1]+') wurde mit den Buchungen in Buqo verglichen. Treffer: '+res.matched.length+', Abweichungen: '+res.diffs.length+', fehlen in Buqo: '+res.missing.length+', nur in Buqo: '+res.extra.length+'.\nBeispiele:\n'+lines+'\n\nFasse in höchstens 8 kurzen Stichpunkten (Deutsch) die wahrscheinlichsten Fehlermuster zusammen (z. B. falsche Kategorie bei bestimmten Lieferanten, falscher MwSt-Satz, falscher Monat, Stornobuchungen, doppelte Buchungen) und sage, was zuerst geprüft werden sollte. Erfinde nichts, was nicht in den Beispielen steht.';
-        const {data:resp}=await aiInvoke({body:{model:'claude-sonnet-4-6',max_tokens:900,messages:[{role:'user',content:prompt}]}});
-        summary=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'';
-      }catch(e){ summary=''; }
-      setData(prev=>{ const rv=[...(prev.importReview||[])]; entries.forEach(e=>{ const ex=e.itemId?rv.find(x=>x.itemId===e.itemId):rv.find(x=>x.key&&x.key===e.key); if(ex){ const have=new Set(ex.reasons||[]); const fresh=e.reasons.filter(r=>!have.has(r)); if(fresh.length){ ex.reasons=[...(ex.reasons||[]),...fresh]; ex.done=false; } } else rv.push(e); });
-        return {...prev, importReview:rv, datevChecks:[...(prev.datevChecks||[]), {ts:now2, file:file.name, rows:rows.length, matched:res.matched.length, diffs:res.diffs.length, missing:res.missing.length, extra:res.extra.length, summary}]}; });
-      setDatevCkMsg('Fertig: '+res.matched.length+' passen, '+res.diffs.length+' weichen ab, '+res.missing.length+' fehlen in Buqo, '+res.extra.length+' nur in Buqo – siehe „Zu prüfen".');
-    }catch(e){ setDatevCkMsg('DATEV-Abgleich fehlgeschlagen: '+(e.message||e)); }
-    setDatevCkBusy(false);
-  };
-  // „Zu prüfen": PDF erneut von der KI lesen lassen, mit deinem Hinweis. Betrag/Datum bleiben unverändert.
-  const [revBusy,setRevBusy]=useState({});
-  const reanalyzeReview = async (ids)=>{
-    const list=(dataRef.current.importReview||[]).filter(x=>ids.includes(x.id));
-    if(!list.length) return;
-    setRevBusy(b=>{ const n={...b}; list.forEach(x=>{ n[x.id]=true; }); return n; });
-    let ok=0, fail=0, noPdf=0, idx=0;
-    const worker=async()=>{ while(idx<list.length){ const x=list[idx++];
-      try{
-        if(!x.path){ noPdf++; setData(prev=>({...prev, importReview:(prev.importReview||[]).map(y=>y.id===x.id?{...y, verdict:'Kein PDF zu dieser Buchung gespeichert – KI kann nur mit deinem Hinweis nicht prüfen. Bitte PDF nachladen.', checkedAt:new Date().toISOString()}:y)})); continue; }
-        const {data:blob,error}=await sb.storage.from('belege').download(x.path); if(error||!blob) throw (error||new Error('Download'));
-        const bytes=new Uint8Array(await blob.arrayBuffer());
-        const o=await aiReadDoc(bytes, x.fileName||x.path, {kind:x.kind, name:x.name, brutto:x.brutto, note:x.hint||'', context:(x.reasons||[]).join(' | ').slice(0,400)});
-        applyKiResult({id:x.itemId, kind:x.inv?'r':'b'}, {y:x.y,m:x.m,acct:x.acct,kind:x.kind,name:x.name,brutto:x.brutto,datum:x.datum,nummer:x.nummer,filePath:x.path,fileName:x.fileName}, o);
-        ok++;
-      }catch(e){ fail++; }
-      setRevBusy(b=>{ const n={...b}; delete n[x.id]; return n; });
-    } };
-    await Promise.all([worker(),worker(),worker()]);
-    setRevBusy(b=>{ const n={...b}; list.forEach(x=>{ delete n[x.id]; }); return n; });
-    setToast('KI-Prüfung fertig: '+ok+' geprüft'+(noPdf?', '+noPdf+' ohne PDF':'')+(fail?', '+fail+' Fehler':''));
-  };
-  const startKiJobs = async (jobs)=>{
-    if(kiRunRef.current){ setToast('Die KI liest noch – bitte kurz warten.'); return; }
-    kiRunRef.current=true; kiCancelRef.current=false;
-    let done=0, errs=0, changed=0; const mism=[]; let idx=0;
-    setKiJob({total:jobs.length, done:0, errs:0, changed:0, running:true});
-    const worker=async()=>{
-      while(idx<jobs.length && !kiCancelRef.current){
-        const j=jobs[idx++]; const r=j.r;
-        try{
-          const bytes=await r.file.data(); const o=await aiReadDoc(bytes, r.file.name, {kind:j.kind==='r'?'ein':r.kind, name:r.name, brutto:r.brutto});
-          const diffR=applyKiResult(j,r,o); if(diffR.diff.length) mism.push({name:r.name||'Beleg', nummer:r.nummer||'', diff:diffR.diff}); const ch=diffR.ch;
-          if(ch) changed++;
-        }catch(e){ errs++; }
-        done++; setKiJob({total:jobs.length, done, errs, changed, running:true});
-      }
-    };
-    await Promise.all([worker(),worker(),worker()]);
-    kiRunRef.current=false;
-    if(mism.length){ const key='ki-'+Date.now(); setData(prev=>({...prev, todos:[{id:uid(), done:false, source:'ki', key, createdAt:new Date().toISOString(), ref:null, title:mism.length+' Beleg(e): PDF weicht von der Buchung ab', note:mism.slice(0,15).map(m=>'• '+m.name+(m.nummer?' ('+m.nummer+')':'')+': '+m.diff.join('; ')).join('\n')+(mism.length>15?'\n… und '+(mism.length-15)+' weitere':''), comments:[]}, ...(prev.todos||[])]})); }
-    setKiJob({total:jobs.length, done, errs, changed, running:false, cancelled:kiCancelRef.current, mism:mism.length});
-    setTimeout(()=>setKiJob(j=>j&&!j.running?null:j), 9000);
-  };
-  startKiJobsRef.current=startKiJobs;
+  // Kontoauszug (PDF/Foto) von der KI lesen lassen → Umsätze im Format der Bank-Entwürfe
+  const aiBankRows = async (file)=>{ const r=await aiExtractPosten(file); return (r.list||[]).map(p=>({name:p.name, amount:p.amount, kind:p.kind, datum:toISO(p.datum), belegnr:p.belegnr||'', note:p.note||'', category:p.category||'', netto:'', mwst:'', info:''})); };
   /* ── Umzug aus sevDesk: Buchungen, Rechnungen, Kunden anlegen und PDFs ablegen (Payload aus SevdeskImport) ── */
   const sevdeskExisting = ()=>({
     belege: existingBookings().map(b=>({nummer:b.it.belegnr||'', brutto:num(b.it.amount), name:b.it.name||'', datum:toISO(b.it.datum)||''})),
@@ -2705,23 +2616,21 @@ function App({session}) {
         recs0.push({ id:uid(), domain:acct, account:acct, customerId:c?c.id:'', custName:nm, custAddress:c?(c.address||''):String(g.adresse||'').replace(/,\s*/,'\n'), custEmail:'', firstName:'', lastName:'', company:nm, anrede:'', saveCust:false, fromY, fromM, toY:fromY+1, toM:11, genDay:1, items:[{desc:g.beschreibung||'Leistung laut Rechnung', qty:1, price:g.netto, mwst:g.mwst}], note:'', active:true, imported:'sevdesk' }); });
       nd.recurInvoices=recs0;
       nd.importLog=[...(nd.importLog||[]), {ts:now2, source:'sevdesk', belege:bel.length, rechnungen:rec.length, dateien:files}];
-      // Zu prüfen: Zeilen mit KI-Haken, Notiz „anschauen" oder Doppelungs-Verdacht (Buchung ist bereits drin, nichts geht verloren)
-      const revNew=[...bel.map(r=>({r,kind:r.kind,inv:false})), ...rec.map(r=>({r,kind:'ein',inv:true}))].filter(x=>x.r.review&&x.r.review.length).map(({r,kind,inv})=>({id:uid(), inv, itemId:r._id, y:r.y, m:r.m, acct:r.acct, kind, name:r.name||'', datum:r.datum||'', brutto:r.brutto, nummer:r.nummer||'', reasons:r.review, path:r.filePath||r.pdfPath||null, fileName:r.fileName||'', done:false, createdAt:now2}));
-      if(revNew.length) nd.importReview=[...(nd.importReview||[]), ...revNew];
+      // Für später (aus dem Abgleich): To-dos
+      if(payload.todos&&payload.todos.length) nd.todos=[...payload.todos.map(t=>({id:uid(), done:false, source:'import', createdAt:now2, ref:null, title:String(t.title||'').slice(0,160), note:String(t.note||'').slice(0,600), comments:[]})), ...(nd.todos||[])];
       return nd; });
+    // Weitere Unterlagen (EÜR, BWA …): in die Steuerunterlagen, die KI liest sie aus
+    for(const f of (payload.extraDocs||[])){ prog('Unterlage: '+f.name); try{ await fileTaxDoc(f,{ year:(payload.year&&payload.year!=='alle')?+payload.year:new Date().getFullYear()-1, cat:'Sonstiges', acct:'unter', title:f.name.replace(/\.[a-z0-9]+$/i,''), ki:true }); }catch(e){ fehler++; } }
     // Kontoauszüge: Datei für den Steuerberater ablegen, Umsätze als Bank-Entwürfe (Abgleich mit den frisch importierten Belegen/Rechnungen)
     const stmts=[]; let bankDrafts=[];
     for(const b of (payload.bank||[])){ prog('Kontoauszug: '+b.name);
-      let rows=b.rows; if(!rows){ try{ const r=await aiExtractPosten(b.file); rows=(r.list||[]).map(p=>({name:p.name, amount:p.amount, kind:p.kind, datum:toISO(p.datum), belegnr:p.belegnr||'', note:p.note||'', category:p.category||'', netto:'', mwst:'', info:''})); }catch(e){ rows=[]; } }
+      let rows=b.rows; if(!rows){ try{ rows=await aiBankRows(b.file); }catch(e){ rows=[]; } }
       rows=rows||[]; if(payload.year&&payload.year!=='alle') rows=rows.filter(r=>String(r.datum||'').startsWith(String(payload.year))); const dates=rows.map(r=>r.datum).filter(Boolean).sort(); const y=(dates[0]||new Date().toISOString().slice(0,10)).slice(0,4);
       let path=null; try{ path=['Kontoauszüge',y,safeName(b.name)].join('/'); const {error}=await sb.storage.from('belege').upload(path, b.file, {upsert:true, contentType:b.file.type||'application/octet-stream'}); if(error) throw error; files++; }catch(e){ path=null; fehler++; }
       stmts.push({id:uid(), fileName:b.name, path, year:+y, from:dates[0]||'', to:dates[dates.length-1]||'', count:rows.length, importedAt:new Date().toISOString()});
       bankDrafts=bankDrafts.concat(rows.map(r=>({id:uid(), ...r}))); }
     if(stmts.length) setData(prev=>({...prev, bankStatements:[...(prev.bankStatements||[]), ...stmts]}));
     if(bankDrafts.length) setTimeout(()=>{ try{ addDraftsRef.current&&addDraftsRef.current(bankDrafts); }catch(e){} }, 1200);
-    // KI-Lesung der markierten PDFs: läuft nach dem Import im Hintergrund (Fortschritt unten rechts)
-    const kiJobs=[...bel.filter(r=>r.ki&&r.file).map(r=>({id:r._id,kind:'b',r})), ...rec.filter(r=>r.ki&&r.file).map(r=>({id:r._id,kind:'r',r}))];
-    if(kiJobs.length) setTimeout(()=>{ try{ startKiJobsRef.current&&startKiJobsRef.current(kiJobs); }catch(e){} }, 300);
     setToast('Import abgeschlossen: '+bel.length+' Belege, '+rec.length+' Rechnungen'+(stmts.length?', '+stmts.length+' Kontoauszug/-auszüge':''));
     return { belege:bel.length, rechnungen:rec.length, kunden:newNames.size, dateien:files, fehler, kontoauszuege:stmts.length, bankUmsaetze:bankDrafts.length, wiederkehrend:(payload.belege||[]).filter(r=>r.recur).length, serien:(payload.recurInvoices||[]).length };
   };
@@ -4976,7 +4885,7 @@ function App({session}) {
                   <SevdeskImport ui={{C,SC,SS,NUM,fmt,Ic,P,hexA,AI_GRADIENT,MONTHS}} isMobile={isMobile} defaultYear={now.getFullYear()-1}
                     accounts={[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>({key:pp,label:names[pp]})),{key:'privat',label:names.privatLabel||'Privat'}]}
                     existing={sevdeskExisting()} onImport={runSevdeskImport}
-                    aiReadDoc={aiReadDoc} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
+                    aiReadDoc={aiReadDoc} aiBankRows={aiBankRows} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
                 )}
 
                 {importTab==='sevdesk' && (
@@ -5010,52 +4919,6 @@ function App({session}) {
                         <button onClick={runWipe} disabled={wipe.busy||!ok} style={{flex:1,background:C.exp,color:'#fff',border:'none',borderRadius:11,padding:'12px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',opacity:(wipe.busy||!ok)?0.5:1}}>{wipe.busy?'Läuft …':'Sicherung laden und löschen'}</button>
                         <button onClick={()=>setWipe(null)} disabled={wipe.busy} style={{background:C.surf2,color:C.txt,border:'1px solid '+C.bdr,borderRadius:11,padding:'12px 16px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Abbrechen</button>
                       </div>
-                    </div>
-                  </div>); })()}
-
-                {importTab==='sevdesk' && (()=>{ const dc=(data.datevChecks||[]).slice(-1)[0]; return (
-                  <div style={{background:C.surf2,border:'1px solid '+C.bdr,borderRadius:16,padding:'16px 18px',marginTop:16}}>
-                    <div style={{fontSize:17,fontWeight:800}}>DATEV-Abgleich mit KI</div>
-                    <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>Lade die DATEV-Datei (Buchungsstapel, CSV), die an den Steuerberater ging oder von ihm kommt. Buqo vergleicht sie mit deinen Buchungen und findet falsche Kategorien, MwSt-Sätze, Monate sowie fehlende oder überzählige Buchungen. Die KI fasst die typischen Fehler zusammen; alle Abweichungen stehen danach unten in „Zu prüfen". Es wird nichts verändert.</div>
-                    <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginTop:10}}>
-                      <label style={{display:'inline-flex',alignItems:'center',gap:8,background:AI_GRADIENT,color:'#fff',borderRadius:10,padding:'9px 14px',fontSize:13,fontWeight:700,cursor:datevCkBusy?'default':'pointer',opacity:datevCkBusy?0.6:1}}>
-                        {datevCkBusy?'Läuft …':'DATEV-Datei wählen'}
-                        <input type="file" accept=".csv,.txt,text/csv" disabled={datevCkBusy} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=''; if(f) runDatevCheck(f); }} style={{display:'none'}}/>
-                      </label>
-                      <span style={{fontSize:12.5,color:C.sub}}>{datevCkMsg}</span>
-                    </div>
-                    {dc && dc.summary && <div style={{marginTop:12,fontSize:13,lineHeight:1.55,color:C.txt,whiteSpace:'pre-wrap',background:C.surf3,borderRadius:10,padding:'10px 12px'}}><b>🤖 Auswertung der KI ({dc.file})</b>{'\n'}{dc.summary}</div>}
-                  </div>); })()}
-
-                {importTab==='sevdesk' && (data.importReview||[]).length>0 && (()=>{ const rv=data.importReview||[]; const open=rv.filter(x=>!x.done); const shown=showRevDone?rv:open;
-                  const setRevHint=(id,v)=>setData(prev=>({...prev, importReview:(prev.importReview||[]).map(x=>x.id===id?{...x,hint:v}:x)}));
-                  const setDone=(ids,v)=>setData(prev=>({...prev, importReview:(prev.importReview||[]).map(x=>ids.includes(x.id)?{...x,done:v}:x)}));
-                  return (
-                  <div style={{background:C.surf2,border:'1px solid '+hexA(C.amb,0.5),borderRadius:16,padding:'16px 18px',marginTop:16}}>
-                    <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-                      <div style={{fontSize:17,fontWeight:800,flex:1,minWidth:200}}>Zu prüfen · {open.length} offen</div>
-                      <label style={{fontSize:12.5,color:C.sub,display:'flex',gap:6,alignItems:'center',cursor:'pointer'}}><input type="checkbox" checked={showRevDone} onChange={e=>setShowRevDone(e.target.checked)}/> Erledigte zeigen ({rv.length-open.length})</label>
-                      {open.some(x=>x.hint) && <button onClick={()=>reanalyzeReview(open.filter(x=>x.hint).map(x=>x.id))} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle mit Hinweis neu prüfen ({open.filter(x=>x.hint).length})</button>}
-                      {open.length>0 && <button onClick={()=>reanalyzeReview(open.filter(x=>x.path).map(x=>x.id))} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle offenen mit KI prüfen</button>}
-                      {open.length>0 && <button onClick={()=>setDone(open.map(x=>x.id),true)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'6px 12px',fontSize:12.5,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>Alle erledigt</button>}
-                    </div>
-                    <div style={{fontSize:12.5,color:C.sub,marginTop:4,lineHeight:1.5}}>Diese Buchungen sind bereits verbucht. Hier siehst du, was du oder die KI noch einmal anschauen sollte: Zeilen mit KI-Haken, deine Notizen mit „anschauen", mögliche Doppelungen und alles, was die KI am PDF geändert oder anders gelesen hat.</div>
-                    <div style={{marginTop:10,maxHeight:420,overflowY:'auto'}}>
-                      {shown.length===0 && <div style={{fontSize:13,color:C.mut,padding:'10px 2px'}}>Nichts mehr offen.</div>}
-                      {shown.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'de')).map(x=>(
-                        <div key={x.id} style={{display:'flex',gap:10,alignItems:'flex-start',padding:'9px 2px',borderTop:'1px solid '+C.sep,opacity:x.done?0.5:1}}>
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:14,fontWeight:700,color:C.txt}}>{x.name||'—'} <span style={{fontWeight:600,color:C.sub,fontSize:12.5}}>· {x.datum?x.datum.split('-').reverse().join('.'):''} · {fmt(x.brutto)} · {accLabel(x.acct)}</span></div>
-                            <div style={{fontSize:12,color:C.amb,marginTop:2,lineHeight:1.45}}>{(x.reasons||[]).join(' · ')}</div>
-                            {x.verdict && <div style={{fontSize:12,color:C.txt,marginTop:4,lineHeight:1.45,background:C.surf3,borderRadius:8,padding:'5px 9px'}}>🤖 {x.verdict}{x.storno?' (Storno/Gutschrift)':''}</div>}
-                            <div style={{display:'flex',gap:6,marginTop:6,alignItems:'center'}}>
-                              <input value={x.hint||''} onChange={e=>setRevHint(x.id,e.target.value)} placeholder="Hinweis für die KI, z. B. „Storno – Gegenbuchung zu RE-1269“" style={{...SS,flex:1,minWidth:0,fontSize:12,padding:'5px 8px',textAlign:'left'}} />
-                              <button onClick={()=>reanalyzeReview([x.id])} disabled={!!revBusy[x.id]} style={{background:AI_GRADIENT,color:'#fff',border:'none',borderRadius:8,padding:'5px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap',opacity:revBusy[x.id]?0.6:1}}>{revBusy[x.id]?'KI liest…':'KI prüfen'}</button>
-                            </div>
-                          </div>
-                          {x.path && <button onClick={()=>openFile(x.path,x.fileName||x.name)} style={{background:C.surf3,border:'1px solid '+C.bdr,color:C.txt,borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>PDF ansehen</button>}
-                          <button onClick={()=>setDone([x.id],!x.done)} style={{background:x.done?'none':C.act,color:x.done?C.sub:C.actTxt,border:x.done?'1px solid '+C.bdr:'none',borderRadius:8,padding:'4px 10px',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>{x.done?'Wieder öffnen':'Erledigt'}</button>
-                        </div>))}
                     </div>
                   </div>); })()}
 
@@ -7566,18 +7429,6 @@ function App({session}) {
           </div>
         </div>
       );})()}
-
-      {kiJob && (
-        <div style={{position:'fixed',bottom:toast?84:20,right:20,width:300,zIndex:129,background:C.surf2,border:'1px solid '+C.bdrM,color:C.txt,padding:'12px 14px',borderRadius:12,fontSize:12.5,boxShadow:'0 8px 24px rgba(0,0,0,0.12)'}}>
-          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
-            <span style={{fontWeight:700,flex:1}}>{kiJob.running?'KI liest Belege…':kiJob.cancelled?'KI abgebrochen':'KI fertig'}</span>
-            <span style={{color:C.sub}}>{kiJob.done} / {kiJob.total}</span>
-            {kiJob.running?<button onClick={()=>{kiCancelRef.current=true;}} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>Abbrechen</button>:<button onClick={()=>setKiJob(null)} style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:14,fontFamily:'inherit'}}>×</button>}
-          </div>
-          <div style={{height:6,borderRadius:99,background:C.surf3,overflow:'hidden'}}><div style={{height:'100%',width:(kiJob.total?Math.round(kiJob.done/kiJob.total*100):0)+'%',background:AI_GRADIENT,transition:'width .3s'}}/></div>
-          <div style={{marginTop:7,color:C.sub}}>{kiJob.changed} korrigiert{kiJob.errs?' · '+kiJob.errs+' Fehler':''}{!kiJob.running&&kiJob.mism?' · '+kiJob.mism+' Abweichung(en) als To-do':''}</div>
-        </div>
-      )}
 
       {toast && (
         <div style={{position:'fixed',bottom:20,right:20,maxWidth:340,zIndex:130,
