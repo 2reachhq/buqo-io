@@ -117,3 +117,10 @@ test('DATEV-Abgleich: findet fehlende, überzählige und abweichende Buchungen',
   assert.equal(r.matched.length, 2); assert.equal(r.missing.length, 1); assert.equal(r.extra.length, 1); assert.equal(r.diffs.length, 1);
   assert.match(r.diffs[0].why[0], /Kategorie/);
 });
+
+test('Stornorechnung (negativer Betrag in Rechnungs-CSV) wird als storno markiert, nicht als wiederkehrend', async () => {
+  const sv = await import('./sevdesk.js');
+  const csv = '"Rechnungs-Nr.";"Rechnungs-Datum";"Betreff";"Gesamtbetrag-Netto";"Gesamtbetrag-Brutto";"Empfänger-Adresse"\nRE-1;01.03.2026;Rechnung;100,00;119,00;Muster GmbH Weg 1 12345 Ort\nRE-2;05.03.2026;Stornorechnung Nr. RE-2 zur Rechnung Nr. RE-1;-100,00;-119,00;Muster GmbH Weg 1 12345 Ort\n';
+  const p = sv.parseCSV(csv); const rows = sv.normalizeRows(p, sv.autoMap(p.header), { kind: 'ein' });
+  assert.equal(rows[0].storno, false); assert.equal(rows[1].storno, true); assert.equal(rows[1].brutto, 119);
+});
