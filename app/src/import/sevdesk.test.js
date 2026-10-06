@@ -142,3 +142,11 @@ test('Abgleich: Kontoauszug-Umsätze und DATEV-Zeilen den Import-Zeilen zuordnen
     [{ datum: '2025-01-02', brutto: 71.31, name: 'Adobe', nummer: 'A1', kategorie: 'Marketing', mwst: 19, kind: 'aus', kindOk: false }, { datum: '2025-01-09', brutto: 12, name: 'Sonst', nummer: '', kategorie: 'Material', mwst: 19, kind: 'aus' }]);
   assert.equal(d.byKey.get('b0').state, 'abw'); assert.equal(d.onlyDatev.length, 1);
 });
+
+test('Kontoauszug-Suche: findet Raten zu Name und Gesamtbetrag aus dem Kommentar', async () => {
+  const { searchBank, parseAmounts } = await import('./bankSearch.js');
+  const rows = [1, 2, 3, 4, 5, 6].map(i => ({ d: '2025-0' + i + '-03', n: 'Mustermann Handwerk GmbH', a: 1000, k: 'a', z: 'Rate ' + i })).concat([{ d: '2025-03-04', n: 'Telekom', a: 49.99, k: 'a', z: '' }]);
+  const r = searchBank(rows, 'Das wurde in Raten gezahlt, im Kontoauszug steht Mustermann, insgesamt 6.000 Euro in 2025');
+  assert.equal(r.hits.length, 6); assert.equal(r.total, 6000);
+  assert.deepEqual(parseAmounts('1.130,50 und 350 im Jahr 2025'), [1130.5, 350]);
+});
