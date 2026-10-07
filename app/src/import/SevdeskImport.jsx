@@ -61,6 +61,7 @@ export default function SevdeskImport(props) {
   const [listLimit, setListLimit] = useState(120);
   const [artTab, setArtTab] = useState('alle');    // Reiter: alle | belege (Ausgaben) | rechnungen (Einnahmen)
   const [sortBy, setSortBy] = useState('datum');    // Sortierung innerhalb der Gruppen: datum | name | betrag
+  const [noteOpen, setNoteOpen] = useState({});     // Notizzeile unter der Buchung aufgeklappt
   const [botOpen, setBotOpen] = useState(false);     // KI-Helfer im Vollbild aufgeklappt
   const [groupBy, setGroupBy] = useState('monat');   // Abgleich-Tabelle gruppieren: monat | name | konto
   const [bigList, setBigList] = useState(false);     // Vollbild der Abgleich-Tabelle
@@ -129,6 +130,28 @@ export default function SevdeskImport(props) {
     }
     if (list.length) { setBank(b => [...b, ...list]); setResult(null); }
   };
+  // Rückgängig (Strg/Cmd+Z) und Wiederholen (Strg/Cmd+Shift+Z) für Änderungen in der Abgleich-Tabelle
+  const histRef = React.useRef({ stack: [], redo: [], cur: null, t: 0, skipNext: false });
+  const [undoN, setUndoN] = useState(0);
+  React.useEffect(() => {
+    const snap = { rowAcct, skip, notes, ovr, later }; const h = histRef.current;
+    if (h.skipNext) { h.skipNext = false; h.cur = snap; return; }
+    if (!h.cur) { h.cur = snap; return; }
+    const now = Date.now(); if (now - h.t > 700) { h.stack.push(h.cur); if (h.stack.length > 100) h.stack.shift(); h.redo = []; }
+    h.t = now; h.cur = snap; setUndoN(h.stack.length);
+  }, [rowAcct, skip, notes, ovr, later]);
+  const restoreSnap = (sn) => { const h = histRef.current; h.skipNext = true; h.cur = sn; setRowAcct(sn.rowAcct); setSkip(sn.skip); setNotes(sn.notes); setOvr(sn.ovr); setLater(sn.later); setUndoN(h.stack.length); };
+  const undo = () => { const h = histRef.current; if (!h.stack.length) return; h.redo.push(h.cur); h.t = 0; restoreSnap(h.stack.pop()); };
+  const redo = () => { const h = histRef.current; if (!h.redo.length) return; h.stack.push(h.cur); h.t = 0; restoreSnap(h.redo.pop()); };
+  React.useEffect(() => {
+    const onKey = (ev) => {
+      if (!(ev.metaKey || ev.ctrlKey) || ev.key.toLowerCase() !== 'z' || step !== 2) return;
+      const el = document.activeElement; if (el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text'))) return; // beim Tippen gilt das normale Rückgängig des Feldes
+      ev.preventDefault(); ev.stopImmediatePropagation(); // verhindert das globale Rückgängig der App, solange der Abgleich offen ist
+      if (ev.shiftKey) redo(); else undo();
+    };
+    window.addEventListener('keydown', onKey, true); return () => window.removeEventListener('keydown', onKey, true);
+  });
   // Wirksame Zeile: Original + KI-Korrekturen (Name, Kategorie, Beschreibung, Nummer wenn leer, MwSt nur wenn der Brutto-Betrag im PDF übereinstimmt).
   // Betrag und Datum werden NIE automatisch geändert – Abweichungen erscheinen nur als Hinweis.
   const eff = (k, r) => {
@@ -229,6 +252,7 @@ export default function SevdeskImport(props) {
 
   // ── Abgleich: Hinweise, Kontoauszug, DATEV ──
   const NOTE_RE = /anschau|prüf|pruef|nochmal|nochmals|kontrollier|checken|klären|klaeren|\?/i;
+  const noteFlag = (t) => !/^KI:/.test(String(t || '')) && NOTE_RE.test(String(t || ''));
   // Doppelung = gleicher Name + Betrag innerhalb von 5 Tagen. Raten/Leasing (monatlich gleicher Betrag) zählen nicht.
   const dupFlag = useMemo(() => {
     const flag = {}; const groups = new Map();
@@ -265,6 +289,7 @@ export default function SevdeskImport(props) {
       const rows = allGo.map(({ r, k }) => ({ key: k + r.idx, kind: k === 'r' ? 'ein' : r.kind, datum: r.datum, name: r.name, beschreibung: r.beschreibung, kategorie: r.kategorie, brutto: r.brutto }));
       const { results, missing } = await aiClassify(rows, hint, (d, t) => setAiProg('KI sortiert … ' + d + ' / ' + t));
       setAi(prev => ({ ...prev, ...results }));
+      setNotes(prev => { const n = { ...prev }; Object.entries(results).forEach(([key, v]) => { if (v && v.why) n[key] = 'KI: ' + String(v.why).slice(0, 200); }); return n; });
       setAiProg(Object.keys(results).length + ' Posten sortiert' + (missing.length ? ', ' + missing.length + ' ohne Vorschlag (bitte selbst wählen)' : '') + '.');
     } catch (e) { setErr('KI-Sortierung fehlgeschlagen: ' + (e.message || e)); setAiProg(''); }
     setAiBusy(false);
@@ -281,7 +306,7 @@ export default function SevdeskImport(props) {
     if (dupFlag[key] && !(o && o.storno)) { chips.push({ t: 'Doppelung?', c: 'warn' }); hintF = true; }
     if (o && o.error) chips.push({ t: 'KI: ' + o.error, c: 'miss' });
     if (o && !o.error) { ocrDiff(k, r).forEach(t => { chips.push({ t, c: 'warn' }); hintF = true; }); if (o.storno && !r.storno) chips.push({ t: 'PDF ist Storno/Gutschrift', c: 'warn' }); if (o.urteil) chips.push({ t: '🤖 ' + o.urteil, c: 'ai' }); }
-    if (NOTE_RE.test(String(notes[key] || ''))) { chips.push({ t: 'Notiz: ' + String(notes[key]).slice(0, 50), c: 'warn' }); hintF = true; }
+    if (noteFlag(notes[key])) { chips.push({ t: 'Notiz: ' + String(notes[key]).slice(0, 50), c: 'warn' }); hintF = true; }
     return { cls: miss ? 'fehlt' : hintF ? 'hinweis' : 'passt', chips };
   };
   const stats = useMemo(() => { const c = { passt: 0, hinweis: 0, fehlt: 0, ausg: 0, einn: 0 }; allGo.forEach(({ r, k }) => { c[statusOf(k, r).cls]++; if (r.kind === 'ein') c.einn++; else c.ausg++; }); return c; }, [B, R, skip, year, bankMatch, dMatch, ocr, upPdf, notes]); // eslint-disable-line
@@ -294,7 +319,7 @@ export default function SevdeskImport(props) {
     const worker = async () => {
       while (i < todo.length) {
         const [k, r, z, src0] = todo[i++]; const src = src0 || upPdf[k + r.idx];
-        try { let bytes, fname = r.file; if (src) { bytes = await src.data(); fname = src.name; } else { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); bytes = await e.data(); } const res = await withRetry(() => aiReadDoc(bytes, fname, { kind: r.kind, name: r.name, brutto: r.brutto })); setOcr(p => ({ ...p, [k + r.idx]: res })); }
+        try { let bytes, fname = r.file; if (src) { bytes = await src.data(); fname = src.name; } else { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); bytes = await e.data(); } const res = await withRetry(() => aiReadDoc(bytes, fname, { kind: r.kind, name: r.name, brutto: r.brutto })); setOcr(p => ({ ...p, [k + r.idx]: res })); const kn = res.urteil || res.beschreibung; if (kn) setNotes(n => ({ ...n, [k + r.idx]: 'KI: ' + String(kn).slice(0, 220) })); }
         catch (e) { setOcr(p => ({ ...p, [k + r.idx]: { error: String(e.message || e).slice(0, 80) } })); }
         done++; setAnaDone(d => d + 1); setAnaProg('KI liest PDFs … ' + done + ' / ' + todo.length);
       }
@@ -303,7 +328,7 @@ export default function SevdeskImport(props) {
   };
   // Aufrufe der KI-Funktion bei kurzen Netzwerkfehlern bis zu zweimal wiederholen
   const withRetry = async (fn) => { for (let i = 0; ; i++) { try { return await fn(); } catch (e) { if (i >= 2 || !/Failed to send|fetch|network|timeout|timed out|50[234]/i.test(String((e && e.message) || e))) throw e; await new Promise(r => setTimeout(r, 1500 * (i + 1))); } } };
-  const kiTargets = (only) => [...belegeGo.map(r => ['b', r, zipB]), ...rechGo.map(r => ['r', r, zipR]), ...xGo.filter(r => upPdf['x' + r.idx]).map(r => ['x', r, null])].filter(([k, r]) => only ? (kiAll || kiRows[k + r.idx]) : (kiAll || kiRows[k + r.idx] || dupFlag[k + r.idx] || NOTE_RE.test(String(notes[k + r.idx] || ''))));
+  const kiTargets = (only) => [...belegeGo.map(r => ['b', r, zipB]), ...rechGo.map(r => ['r', r, zipR]), ...xGo.filter(r => upPdf['x' + r.idx]).map(r => ['x', r, null])].filter(([k, r]) => only ? (kiAll || kiRows[k + r.idx]) : (kiAll || kiRows[k + r.idx] || dupFlag[k + r.idx] || noteFlag(notes[k + r.idx])));
   // „Abgleich starten": Kontoauszüge (PDF/Foto) und DATEV-Dateien lesen, markierte/auffällige PDFs von der KI prüfen lassen – gebucht wird noch nichts
   const analyze = async () => {
     if (analysing || (!belegeGo.length && !rechGo.length && !bank.length)) return;
@@ -518,7 +543,8 @@ export default function SevdeskImport(props) {
     const pill = (l, v, col, onClick) => <button key={l} onClick={onClick} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '7px 13px', textAlign: 'left', cursor: onClick ? 'pointer' : 'default', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>{l}</div><div style={{ ...NUM, fontSize: 17, fontWeight: 800, color: col || C.txt }}>{v}</div></button>;
     const body = (<div style={wrap}>
       {bigList && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'stretch', marginBottom: 12 }}>
-        {aiAsk && <button onClick={() => setBotOpen(o => !o)} title="KI-Helfer öffnen/schließen" style={{ order: 99, marginLeft: 'auto', alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, background: botOpen ? C.txt : AI_GRADIENT, color: botOpen ? C.bg : '#fff', border: 'none', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}><Ic p={P.spark} sz={15} col={botOpen ? C.bg : '#fff'} /> KI-Helfer</button>}
+        <button onClick={() => setBigList(false)} style={{ ...sm, order: 98, marginLeft: 'auto', alignSelf: 'center', background: C.txt, color: C.bg }}>✕ Vollbild schließen</button>
+        {aiAsk && <button onClick={() => setBotOpen(o => !o)} title="KI-Helfer öffnen/schließen" style={{ order: 99, alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, background: botOpen ? C.txt : AI_GRADIENT, color: botOpen ? C.bg : '#fff', border: 'none', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}><Ic p={P.spark} sz={15} col={botOpen ? C.bg : '#fff'} /> KI-Helfer</button>}
         {pill('Gesamt', act.length, undefined, () => setFilt('alle'))}{pill('✅ Passt', stats.passt, C.grn, () => setFilt('passt'))}{pill('⚠ Hinweise', stats.hinweis, stats.hinweis ? C.amb : C.sub, () => setFilt('hinweis'))}{pill('❌ Fehlt', stats.fehlt, stats.fehlt ? C.red : C.sub, () => setFilt('fehlt'))}
         {pill('📎 PDF vorhanden', nPdf, C.grn)}{pill('PDF fehlt', act.length - nPdf, act.length - nPdf ? C.red : C.sub)}{pill('Ausgaben', nBel)}{pill('Einnahmen', nRech)}{pill('To-do', act.filter(({ k, r }) => later[k + r.idx]).length)}{pill('🚫 Ignoriert', nIgn, undefined, () => setFilt('ignoriert'))}{bankHidden > 0 && pill('Doppelt / schon da', bankHidden, C.amb)}
       </div>}
@@ -534,7 +560,8 @@ export default function SevdeskImport(props) {
         <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Sortieren</span>
         {[['datum', 'Datum'], ['name', 'Name'], ['betrag', 'Betrag']].map(([g, l]) => <button key={g} onClick={() => setSortBy(g)} style={{ ...sm, background: sortBy === g ? C.txt : C.surf2, color: sortBy === g ? C.bg : C.txt }}>{l}</button>)}
         <button onClick={() => setSel(x => { const n = { ...x }; list.forEach(({ k, r }) => { n[k + r.idx] = !allSel; }); return n; })} style={sm}>{allSel ? 'Auswahl aufheben' : 'Alle ' + list.length + ' auswählen'}</button>
-        <button onClick={() => setBigList(b => !b)} style={{ ...sm, background: bigList ? C.txt : C.surf2, color: bigList ? C.bg : C.txt }}>{bigList ? 'Vollbild schließen' : 'Vollbild'}</button>
+        <button onClick={undo} disabled={!undoN} title="Letzte Änderung rückgängig (Strg/Cmd+Z)" style={{ ...sm, opacity: undoN ? 1 : 0.4 }}>↶ Rückgängig</button>
+        {!bigList && <button onClick={() => setBigList(true)} style={sm}>Vollbild</button>}
       </div>
       {selKeys.length > 0 && (
         <div style={{ position: 'sticky', top: 0, zIndex: 30, background: C.surf, border: '1px solid ' + hexA(C.pri, 0.5), borderRadius: 14, padding: '10px 12px', marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
@@ -552,38 +579,45 @@ export default function SevdeskImport(props) {
       {!gkeys.length && <div style={{ ...card, textAlign: 'center', color: C.mut, fontSize: 14 }}>Keine Buchungen mit diesem Filter.</div>}
       {gkeys.length > 0 && (
         <div style={{ overflow: 'auto', maxHeight: bigList ? 'calc(100vh - 290px)' : '72vh', border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
-          <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1000 }}>
-            <thead><tr><th style={th}></th><th style={th} title="Beleg ansehen">Beleg</th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Kategorie</th><th style={th}>MwSt</th><th style={th}>Konto</th><th style={th}>Notiz (auch für die KI)</th><th style={{ ...th, textAlign: 'right' }}>Betrag</th><th style={th}>Hinweise</th><th style={th}>Aktion</th></tr></thead>
+          <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 880, tableLayout: 'fixed' }}>
+            <colgroup><col style={{ width: 36 }} /><col style={{ width: 46 }} /><col style={{ width: 84 }} /><col /><col style={{ width: 116 }} /><col style={{ width: 80 }} /><col style={{ width: 112 }} /><col style={{ width: 92 }} /><col style={{ width: 118 }} /><col style={{ width: 116 }} /></colgroup>
+            <thead><tr><th style={th}></th><th style={th} title="Beleg ansehen">Beleg</th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Kategorie</th><th style={th}>MwSt</th><th style={th}>Konto</th><th style={{ ...th, textAlign: 'right' }}>Betrag</th><th style={th}>Status</th><th style={{ ...th, textAlign: 'center' }}>Aktion</th></tr></thead>
             <tbody>
               {gkeys.map(gk => { const g = groups.get(gk); const gsel = g.items.every(({ k, r }) => sel[k + r.idx]); return (<React.Fragment key={gk}>
-                <tr><td colSpan={11} style={{ background: C.surf3, padding: '8px 10px', borderBottom: '1px solid ' + C.bdr, position: 'sticky', top: 33, zIndex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <tr><td colSpan={10} style={{ background: C.surf3, padding: '7px 12px', borderBottom: '1px solid ' + C.bdr, position: 'sticky', top: 33, zIndex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <input type="checkbox" checked={gsel} onChange={ev => setSel(x => { const n = { ...x }; g.items.forEach(({ k, r }) => { n[k + r.idx] = ev.target.checked; }); return n; })} title="Alle dieser Gruppe auswählen" />
-                    <span style={{ fontSize: 14, fontWeight: 800 }}>{g.label}</span><span style={{ fontSize: 12.5, color: C.sub }}>{g.items.length} Buchungen</span>
-                    <span style={{ ...NUM, fontSize: 13, fontWeight: 700, color: sumOf(g.items) >= 0 ? C.grn : C.txt }}>{sumOf(g.items) >= 0 ? '+' : '−'}{fmt(Math.abs(sumOf(g.items)))}</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 800 }}>{g.label}</span><span style={{ fontSize: 12, color: C.sub }}>{g.items.length} Buchungen</span>
+                    <span style={{ ...NUM, fontSize: 12.5, fontWeight: 700, color: sumOf(g.items) >= 0 ? C.grn : C.txt }}>{sumOf(g.items) >= 0 ? '+' : '−'}{fmt(Math.abs(sumOf(g.items)))}</span>
                     <span style={{ flex: 1 }} />
-                    <select value="" onChange={e => { if (e.target.value) setKonto(g.items.map(({ k, r }) => k + r.idx), e.target.value); }} style={{ ...sm, width: 'auto', padding: '4px 8px', fontSize: 12 }}><option value="">Ganze Gruppe → Konto …</option>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>
+                    <select value="" onChange={e => { if (e.target.value) setKonto(g.items.map(({ k, r }) => k + r.idx), e.target.value); }} style={{ ...sm, width: 'auto', padding: '3px 8px', fontSize: 12 }}><option value="">Ganze Gruppe → Konto …</option>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>
                   </div></td></tr>
                 {g.items.map(({ k, r }) => { const key = k + r.idx; const e = eff(k, r); const st = statusOf(k, r); const skipped = !!skip[key]; const hasPdf = !!(r.file || upPdf[key]); const aus = (r.kind !== 'ein') !== !!r.storno; const tint = st.cls === 'fehlt' ? C.red : st.cls === 'hinweis' ? C.amb : C.grn;
-                  const setO = (patch) => setOvr(o => ({ ...o, [key]: { ...(o[key] || {}), ...patch } })); return (
-                  <tr key={key} style={{ opacity: skipped ? 0.5 : 1, background: sel[key] ? hexA(C.pri, 0.08) : 'transparent' }}>
-                    <td style={td}><input type="checkbox" checked={!!sel[key]} onChange={ev => setSel(x => ({ ...x, [key]: ev.target.checked }))} /></td>
-                    <td style={td}>{hasPdf
-                      ? <button onClick={() => openPreview(k, r)} title="Beleg ansehen" style={{ width: 34, height: 34, borderRadius: '50%', border: 'none', background: hexA(tint, 0.16), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Ic p={P.clip} sz={16} col={tint} /></button>
-                      : <label title="Beleg hochladen" style={{ width: 34, height: 34, borderRadius: '50%', background: hexA(C.red, 0.12), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Ic p={P.upload} sz={15} col={C.red} /><input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (f) { const src = { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) }; setUpPdf(p => ({ ...p, [key]: src })); if (aiReadDoc) runOcr([[k, r, null, src]]); } }} /></label>}</td>
-                    <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{r.datum.split('-').reverse().join('.')}</td>
-                    <td style={{ ...td, minWidth: 150 }}><input value={e.name} onChange={ev => setO({ name: ev.target.value })} style={{ ...cell, fontWeight: 600, textDecoration: skipped ? 'line-through' : 'none' }} />{r.nummer && <div style={{ fontSize: 11, color: C.mut, padding: '0 6px' }}>{r.nummer}</div>}</td>
-                    <td style={td}><select value={e.kategorie || ''} onChange={ev => setO({ kategorie: ev.target.value })} style={{ ...cell, width: 118 }}>{[...new Set([e.kategorie, ...CATS].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}</select></td>
-                    <td style={td}><select value={String(e.mwst)} onChange={ev => setO({ mwst: +ev.target.value })} style={{ ...cell, width: 74 }}>{[0, 7, 19].map(v => <option key={v} value={v}>{v} %</option>)}{![0, 7, 19].includes(+e.mwst) && <option value={e.mwst}>{e.mwst} %</option>}</select></td>
-                    <td style={td}><select value={acctOf(k, r)} onChange={ev => changeKonto(k, r, ev.target.value)} style={{ ...cell, width: 150, border: '1px solid ' + C.bdr, background: C.surf2 }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></td>
-                    <td style={{ ...td, minWidth: 170 }}><input value={notes[key] || ''} onChange={ev => setNotes(n => ({ ...n, [key]: ev.target.value }))} onBlur={ev => noteBlur(k, r, ev.target.value)} placeholder="Notiz …" style={{ ...cell, border: '1px solid ' + C.bdr }} /></td>
-                    <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: aus ? C.txt : C.grn }}>{aus ? '−' : '+'}{fmt(r.brutto)}</td>
-                    <td style={{ ...td, minWidth: 170, maxWidth: 230 }}>{skipped && <span style={{ fontSize: 11, fontWeight: 700, color: C.mut, background: C.surf3, borderRadius: 6, padding: '2px 7px', marginRight: 4 }}>Ignoriert</span>}{later[key] && <span style={{ fontSize: 11, fontWeight: 700, color: C.pri, background: hexA(C.pri, 0.13), borderRadius: 6, padding: '2px 7px', marginRight: 4 }}>To-do</span>}{st.chips.map((c, i) => { const col = chipCol(c.c); return <span key={i} style={{ display: 'inline-block', margin: '0 4px 3px 0', fontSize: 11, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 7px', lineHeight: 1.35 }}>{c.t}</span>; })}</td>
-                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                      <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} title={later[key] ? 'To-do vorgemerkt – klicken zum Entfernen' : 'Als To-do vormerken'} style={{ width: 34, height: 34, borderRadius: '50%', marginRight: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: '1px solid ' + (later[key] ? C.act : C.bdr), background: later[key] ? C.act : C.surf2 }}><Ic p={P.bell} sz={15} col={later[key] ? C.actTxt : C.sub} /></button>
-                      <button onClick={() => setSkip(x => ({ ...x, [key]: !x[key] }))} title={skipped ? 'Wiederherstellen' : 'Nicht importieren (ignorieren)'} style={{ width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: '1px solid ' + (skipped ? C.red : C.bdr), background: skipped ? hexA(C.red, 0.14) : C.surf2 }}><Ic p={skipped ? P.refresh : P.close} sz={15} col={skipped ? C.red : C.sub} /></button>
+                  const setO = (patch) => setOvr(o => ({ ...o, [key]: { ...(o[key] || {}), ...patch } })); const hasNote = !!String(notes[key] || '').trim(); const showNote = hasNote || noteOpen[key];
+                  const ctl = { ...SS, height: 32, padding: '0 8px', fontSize: 12.5, width: '100%', boxSizing: 'border-box', textAlign: 'left', background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 8 };
+                  const icoBtn = (on, onCol) => ({ width: 32, height: 32, borderRadius: '50%', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid ' + (on ? onCol : C.bdr), background: on ? onCol : C.surf2 });
+                  const tdb = { ...td, borderBottom: showNote ? 'none' : td.borderBottom, height: 48, padding: '0 6px' };
+                  const shown = st.chips.slice(0, 1); const more = st.chips.length - shown.length; return (<React.Fragment key={key}>
+                  <tr style={{ opacity: skipped ? 0.5 : 1, background: sel[key] ? hexA(C.pri, 0.08) : 'transparent' }}>
+                    <td style={{ ...tdb, borderLeft: '3px solid ' + tint, paddingLeft: 10 }}><input type="checkbox" checked={!!sel[key]} onChange={ev => setSel(x => ({ ...x, [key]: ev.target.checked }))} /></td>
+                    <td style={tdb}>{hasPdf
+                      ? <button onClick={() => openPreview(k, r)} title="Beleg ansehen" style={{ ...icoBtn(false), background: hexA(tint, 0.16), border: 'none' }}><Ic p={P.clip} sz={15} col={tint} /></button>
+                      : <label title="Beleg hochladen" style={{ ...icoBtn(false), background: hexA(C.red, 0.12), border: 'none' }}><Ic p={P.upload} sz={14} col={C.red} /><input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (f) { const src = { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) }; setUpPdf(p => ({ ...p, [key]: src })); if (aiReadDoc) runOcr([[k, r, null, src]]); } }} /></label>}</td>
+                    <td style={{ ...tdb, ...NUM, whiteSpace: 'nowrap', fontSize: 12.5 }}>{r.datum.split('-').reverse().join('.')}</td>
+                    <td style={tdb} title={r.nummer ? 'Nr. ' + r.nummer : undefined}><input value={e.name} onChange={ev => setO({ name: ev.target.value })} style={{ ...ctl, fontWeight: 600, background: 'transparent', border: '1px solid transparent', textDecoration: skipped ? 'line-through' : 'none', textOverflow: 'ellipsis' }} /></td>
+                    <td style={tdb}><select value={e.kategorie || ''} onChange={ev => setO({ kategorie: ev.target.value })} style={ctl}>{[...new Set([e.kategorie, ...CATS].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}</select></td>
+                    <td style={tdb}><select value={String(e.mwst)} onChange={ev => setO({ mwst: +ev.target.value })} style={ctl}>{[0, 7, 19].map(v => <option key={v} value={v}>{v} %</option>)}{![0, 7, 19].includes(+e.mwst) && <option value={e.mwst}>{e.mwst} %</option>}</select></td>
+                    <td style={tdb}><select value={acctOf(k, r)} onChange={ev => changeKonto(k, r, ev.target.value)} style={ctl}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></td>
+                    <td style={{ ...tdb, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: aus ? C.txt : C.grn }}>{aus ? '−' : '+'}{fmt(r.brutto)}</td>
+                    <td style={tdb} title={st.chips.map(c => c.t).join(' · ')}><div style={{ display: 'flex', gap: 4, alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap' }}>{later[key] && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.pri, background: hexA(C.pri, 0.13), borderRadius: 6, padding: '2px 6px' }}>To-do</span>}{shown.map((c, i) => { const col = chipCol(c.c); return <span key={i} style={{ fontSize: 10.5, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 6px', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 90, flexShrink: 1 }}>{c.t}</span>; })}{more > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.sub }}>+{more}</span>}{!st.chips.length && !later[key] && <span style={{ fontSize: 11, color: C.grn, fontWeight: 700 }}>✓ passt</span>}</div></td>
+                    <td style={{ ...tdb, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} title={later[key] ? 'To-do vorgemerkt – klicken zum Entfernen' : 'Als To-do vormerken'} style={{ ...icoBtn(!!later[key], C.act), marginRight: 4 }}><Ic p={P.bell} sz={14} col={later[key] ? C.actTxt : C.sub} /></button>
+                      <button onClick={() => setNoteOpen(p => ({ ...p, [key]: !showNote }))} title={hasNote ? 'Notiz bearbeiten' : 'Notiz hinzufügen'} style={{ ...icoBtn(hasNote, C.pri), marginRight: 4 }}><Ic p={P.note} sz={14} col={hasNote ? '#fff' : C.sub} /></button>
+                      <button onClick={() => setSkip(x => ({ ...x, [key]: !x[key] }))} title={skipped ? 'Wiederherstellen' : 'Nicht importieren (ignorieren)'} style={{ ...icoBtn(skipped, C.red), background: skipped ? hexA(C.red, 0.14) : C.surf2 }}><Ic p={skipped ? P.refresh : P.close} sz={14} col={skipped ? C.red : C.sub} /></button>
                     </td>
-                  </tr>); })}
+                  </tr>
+                  {showNote && <tr style={{ opacity: skipped ? 0.5 : 1, background: sel[key] ? hexA(C.pri, 0.08) : 'transparent' }}><td style={{ borderBottom: '1px solid ' + C.sep, borderLeft: '3px solid ' + tint }} /><td colSpan={9} style={{ borderBottom: '1px solid ' + C.sep, padding: '0 10px 8px 6px' }}><input autoFocus={!hasNote} value={notes[key] || ''} onChange={ev => setNotes(n => ({ ...n, [key]: ev.target.value }))} onBlur={ev => { noteBlur(k, r, ev.target.value); if (!String(ev.target.value).trim()) setNoteOpen(p => ({ ...p, [key]: false })); }} placeholder="Notiz – wird auch von der KI gelesen …" style={{ ...ctl, height: 30, background: C.surf }} /></td></tr>}
+                  </React.Fragment>); })}
               </React.Fragment>); })}
             </tbody>
           </table>
@@ -614,7 +648,7 @@ export default function SevdeskImport(props) {
     if (!bigList) return body;
     return (<div style={{ position: 'fixed', inset: 0, zIndex: 140, background: C.bg, display: 'flex' }}>
       {body}
-      {botOpen && aiAsk && <div style={{ width: 340, maxWidth: '34vw', flexShrink: 0, borderLeft: '1px solid ' + C.bdr, padding: 14, boxSizing: 'border-box', background: C.surf }}>{renderBot(true)}</div>}
+      {botOpen && aiAsk && <div style={{ width: 320, maxWidth: '30vw', flexShrink: 0, borderLeft: '1px solid ' + C.bdr, padding: 14, boxSizing: 'border-box', background: C.surf }}>{renderBot(true)}</div>}
     </div>);
   };
 
