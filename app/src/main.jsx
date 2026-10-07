@@ -1612,6 +1612,8 @@ function App({session}) {
   const askChoice = (title, message, choices) => setConfirmState({title, message, choices});
   const savedRef  = useRef(true);
   const lastSigRef = useRef('');
+  const lastSavedJsonRef = useRef(null);   // zuletzt gespeicherter Stand (für die automatische Sicherung)
+  const lastBackupRef = useRef(Date.now()); // Zeitpunkt der letzten Sicherung
 
   /* Laden aus Supabase (einmalig) */
   useEffect(()=>{
@@ -1631,6 +1633,8 @@ function App({session}) {
       setData(d);
       setNames(finalNames);
       lastSigRef.current = JSON.stringify(d)+JSON.stringify(finalNames);
+      lastSavedJsonRef.current = JSON.stringify(d);
+      try{ const {data:lb}=await sb.from('app_state_history').select('saved_at').order('id',{ascending:false}).limit(1); lastBackupRef.current = (lb&&lb[0])?new Date(lb[0].saved_at).getTime():0; }catch(e){ lastBackupRef.current=Date.now(); }
       setReady(true);
     })();
     return ()=>{active=false;};
@@ -1657,10 +1661,12 @@ function App({session}) {
     if(!ready)return;
     setSaved(false);
     const t=setTimeout(async()=>{
-      const sig=JSON.stringify(data)+JSON.stringify(names);
+      const json=JSON.stringify(data); const sig=json+JSON.stringify(names);
+      // Automatische Sicherung: den bisherigen Stand sichern, wenn die letzte Sicherung >30 Min her ist oder der neue Stand deutlich kleiner wird (Verdacht auf verlorene Daten)
+      try{ const prevJ=lastSavedJsonRef.current; if(prevJ && prevJ.length>40){ const shrink=json.length<prevJ.length*0.8; const due=Date.now()-lastBackupRef.current>30*60*1000; if(shrink||due){ lastBackupRef.current=Date.now(); sb.from('app_state_history').insert({reason:shrink?'shrink':'periodic', bytes:prevJ.length, data:JSON.parse(prevJ), names}).then(async()=>{ try{ const {data:old}=await sb.from('app_state_history').select('id').order('id',{ascending:false}).range(100,400); if(old&&old.length) await sb.from('app_state_history').delete().in('id',old.map(x=>x.id)); }catch(e){} }); } } }catch(e){}
       const {error}=await sb.from('app_state').upsert({id:1,data,names,updated_at:new Date().toISOString()},{onConflict:'id'});
       if(error){ setToast('Speichern fehlgeschlagen: '+error.message); }
-      else { lastSigRef.current=sig; }
+      else { lastSigRef.current=sig; lastSavedJsonRef.current=json; }
       setSaved(true);
     },700);
     return()=>clearTimeout(t);
