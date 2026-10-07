@@ -7,13 +7,13 @@ export function groupContext(units, limit = 250) {
   const g = new Map();
   units.forEach(u => {
     const k = norm(u.name) + '|' + u.kind; let x = g.get(k);
-    if (!x) { x = { name: u.name, kind: u.kind, n: 0, sum: 0, first: u.datum, last: u.datum, cats: {}, kontos: {}, miss: 0 }; g.set(k, x); }
+    if (!x) { x = { name: u.name, kind: u.kind, n: 0, sum: 0, first: u.datum, last: u.datum, cats: {}, kontos: {}, miss: 0, notes: new Set() }; g.set(k, x); }
     x.n++; x.sum += u.brutto; if (u.datum < x.first) x.first = u.datum; if (u.datum > x.last) x.last = u.datum;
-    x.cats[u.kategorie || '—'] = (x.cats[u.kategorie || '—'] || 0) + 1; x.kontos[u.konto] = (x.kontos[u.konto] || 0) + 1; if (!u.hasFile) x.miss++;
+    x.cats[u.kategorie || '—'] = (x.cats[u.kategorie || '—'] || 0) + 1; x.kontos[u.konto] = (x.kontos[u.konto] || 0) + 1; if (!u.hasFile) x.miss++; if (u.notiz && x.notes.size < 2) x.notes.add(String(u.notiz).slice(0, 60));
   });
   const top = (o) => Object.entries(o).sort((a, b) => b[1] - a[1])[0][0];
   return [...g.values()].sort((a, b) => (b.n - a.n) || (b.sum - a.sum)).slice(0, limit)
-    .map(x => [x.name, x.kind === 'ein' ? 'Einnahme' : 'Ausgabe', x.n + '×', Math.round(x.sum) + '€', x.first + '..' + x.last, 'Kat:' + top(x.cats), 'Konto:' + top(x.kontos), x.miss ? 'ohneBeleg:' + x.miss : ''].filter(Boolean).join(' | '));
+    .map(x => [x.name, x.kind === 'ein' ? 'Einnahme' : 'Ausgabe', x.n + '×', Math.round(x.sum) + '€', x.first + '..' + x.last, 'Kat:' + top(x.cats), 'Konto:' + top(x.kontos), x.miss ? 'ohneBeleg:' + x.miss : '', x.notes.size ? 'Notiz:' + [...x.notes].join('/') : ''].filter(Boolean).join(' | '));
 }
 
 export function parseBotJson(text) {
@@ -36,7 +36,7 @@ export function matchFilter(u, f) {
   if (f.status && u.cls !== f.status) return false;
   if (f.ohneBeleg === true && u.hasFile) return false;
   if (f.quelle && u.src !== f.quelle) return false;
-  if (f.text && !norm(u.name + ' ' + (u.beschreibung || '')).includes(norm(f.text))) return false;
+  if (f.text && !norm(u.name + ' ' + (u.beschreibung || '') + ' ' + (u.notiz || '')).includes(norm(f.text))) return false;
   return true;
 }
 

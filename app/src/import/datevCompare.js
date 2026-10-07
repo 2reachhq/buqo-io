@@ -38,7 +38,6 @@ export function compareDatev(dRows, bookings) {
     const w = [];
     if (d.kategorie && b.category && d.kategorie !== 'Allgemein' && b.category !== 'Allgemein' && d.kategorie !== b.category) w.push('Kategorie: DATEV „' + d.kategorie + '“, Buqo „' + b.category + '“');
     if (d.mwst != null && b.mwst !== '' && b.mwst != null && !Number.isNaN(+b.mwst) && +b.mwst !== +d.mwst) w.push('MwSt: DATEV ' + d.mwst + ' %, Buqo ' + b.mwst + ' %');
-    if (d.kindOk && d.kind && b.kind && d.kind !== b.kind) w.push('Art: DATEV ' + (d.kind === 'ein' ? 'Einnahme' : 'Ausgabe') + ', Buqo ' + (b.kind === 'ein' ? 'Einnahme' : 'Ausgabe'));
     const dd = dayOf(d.datum), bd = dayOf(bDate(b)); if (dd != null && bd != null && d.datum.slice(0, 7) !== bDate(b).slice(0, 7)) w.push('Monat: DATEV ' + d.datum.slice(0, 7) + ', Buqo ' + bDate(b).slice(0, 7));
     if (w.length) diffs.push({ d, b, why: w });
   });
