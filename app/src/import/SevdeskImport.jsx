@@ -245,12 +245,14 @@ export default function SevdeskImport(props) {
   const xRows = useMemo(() => {
     if (!bankRowsY.length) return [];
     const used = bankMatch ? bankMatch.used : new Set();
-    const recs = bankRowsY.map((b, i) => ({ b, i })).filter(({ b, i }) => !used.has(i) && b.datum && Math.abs(+b.amount) > 0).map(({ b, i }) => {
+    const occ = {}; const sid = (b) => { const k = b.datum + '|' + Math.round(Math.abs(+b.amount) * 100) + '|' + normN(b.name).slice(0, 16); occ[k] = (occ[k] || 0) + 1; return k + '|' + occ[k]; };
+    const recs = bankRowsY.map((b, i) => ({ b, i })).filter(({ b, i }) => !used.has(i) && b.datum && Math.abs(+b.amount) > 0).map(({ b, i }) => { const idx = sid(b);
       const brutto = Math.round(Math.abs(+b.amount) * 100) / 100; const aus = b.kind !== 'ein';
-      return { idx: i, kind: aus ? 'aus' : 'ein', datum: b.datum, y: +b.datum.slice(0, 4), m: +b.datum.slice(5, 7) - 1, nummer: b.belegnr || '', name: String(b.name || 'Umsatz').slice(0, 90), beschreibung: b.note || '', brutto, netto: brutto, mwst: 0, kategorie: aus ? (mapCategory(b.category || '', '') || mapCategory(b.note || '') || mapCategory(b.name || '') || 'Allgemein') : 'Allgemein', status: 'bezahlt', cancelled: false, dup: false, storno: false, file: null, inYear: true, bankOnly: true, warn: [], faellig: '', zahldatum: b.datum };
+      return { idx, kind: aus ? 'aus' : 'ein', datum: b.datum, y: +b.datum.slice(0, 4), m: +b.datum.slice(5, 7) - 1, nummer: b.belegnr || '', name: String(b.name || 'Umsatz').slice(0, 90), beschreibung: b.note || '', brutto, netto: brutto, mwst: 0, kategorie: aus ? (mapCategory(b.category || '', '') || mapCategory(b.note || '') || mapCategory(b.name || '') || 'Allgemein') : 'Allgemein', status: 'bezahlt', cancelled: false, dup: false, storno: false, file: null, inYear: true, bankOnly: true, warn: [], faellig: '', zahldatum: b.datum };
     });
     return markDuplicates(recs, existing && existing.belege).filter(r => !r.dup);
   }, [bankRowsY, bankMatch, existing]); // eslint-disable-line
+  const bankUsable = bankRowsY.filter(b => b.datum && Math.abs(+b.amount) > 0).length; const bankHidden = Math.max(0, bankUsable - (bankMatch ? bankMatch.used.size : 0) - xRows.length); // Umsätze, die als „schon vorhanden/doppelt" nicht erscheinen
   const xGo = xRows.filter(r => !skip['x' + r.idx]);
   const allGo = [...csvGo, ...xGo.map(r => ({ r, k: 'x' }))];
   const aiDone = allGo.filter(x => ai[x.k + x.r.idx]).length;
@@ -516,8 +518,9 @@ export default function SevdeskImport(props) {
     const pill = (l, v, col, onClick) => <button key={l} onClick={onClick} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '7px 13px', textAlign: 'left', cursor: onClick ? 'pointer' : 'default', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>{l}</div><div style={{ ...NUM, fontSize: 17, fontWeight: 800, color: col || C.txt }}>{v}</div></button>;
     const body = (<div style={wrap}>
       {bigList && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'stretch', marginBottom: 12 }}>
+        {aiAsk && <button onClick={() => setBotOpen(o => !o)} title="KI-Helfer öffnen/schließen" style={{ order: 99, marginLeft: 'auto', alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, background: botOpen ? C.txt : AI_GRADIENT, color: botOpen ? C.bg : '#fff', border: 'none', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}><Ic p={P.spark} sz={15} col={botOpen ? C.bg : '#fff'} /> KI-Helfer</button>}
         {pill('Gesamt', act.length, undefined, () => setFilt('alle'))}{pill('✅ Passt', stats.passt, C.grn, () => setFilt('passt'))}{pill('⚠ Hinweise', stats.hinweis, stats.hinweis ? C.amb : C.sub, () => setFilt('hinweis'))}{pill('❌ Fehlt', stats.fehlt, stats.fehlt ? C.red : C.sub, () => setFilt('fehlt'))}
-        {pill('📎 PDF vorhanden', nPdf, C.grn)}{pill('PDF fehlt', act.length - nPdf, act.length - nPdf ? C.red : C.sub)}{pill('Ausgaben', nBel)}{pill('Einnahmen', nRech)}{pill('To-do', act.filter(({ k, r }) => later[k + r.idx]).length)}{pill('🚫 Ignoriert', nIgn, undefined, () => setFilt('ignoriert'))}
+        {pill('📎 PDF vorhanden', nPdf, C.grn)}{pill('PDF fehlt', act.length - nPdf, act.length - nPdf ? C.red : C.sub)}{pill('Ausgaben', nBel)}{pill('Einnahmen', nRech)}{pill('To-do', act.filter(({ k, r }) => later[k + r.idx]).length)}{pill('🚫 Ignoriert', nIgn, undefined, () => setFilt('ignoriert'))}{bankHidden > 0 && pill('Doppelt / schon da', bankHidden, C.amb)}
       </div>}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         {[['alle', 'Alle · ' + (nRech + nBel)], ['belege', 'Belege (Ausgaben) · ' + nBel], ['rechnungen', 'Rechnungen (Einnahmen) · ' + nRech]].map(([g, l]) => <button key={g} onClick={() => { setArtTab(g); if (filt === 'ausgaben' || filt === 'einnahmen') setFilt('alle'); }} style={{ ...btnS, padding: '8px 16px', background: artTab === g ? C.txt : C.surf2, color: artTab === g ? C.bg : C.txt }}>{l}</button>)}
@@ -577,8 +580,8 @@ export default function SevdeskImport(props) {
                     <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: aus ? C.txt : C.grn }}>{aus ? '−' : '+'}{fmt(r.brutto)}</td>
                     <td style={{ ...td, minWidth: 170, maxWidth: 230 }}>{skipped && <span style={{ fontSize: 11, fontWeight: 700, color: C.mut, background: C.surf3, borderRadius: 6, padding: '2px 7px', marginRight: 4 }}>Ignoriert</span>}{later[key] && <span style={{ fontSize: 11, fontWeight: 700, color: C.pri, background: hexA(C.pri, 0.13), borderRadius: 6, padding: '2px 7px', marginRight: 4 }}>To-do</span>}{st.chips.map((c, i) => { const col = chipCol(c.c); return <span key={i} style={{ display: 'inline-block', margin: '0 4px 3px 0', fontSize: 11, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 7px', lineHeight: 1.35 }}>{c.t}</span>; })}</td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                      <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} style={{ ...sm, padding: '4px 9px', fontSize: 12, marginRight: 5, background: later[key] ? hexA(C.pri, 0.16) : C.surf2 }}>{later[key] ? '✓ To-do' : 'To-do'}</button>
-                      <button onClick={() => setSkip(x => ({ ...x, [key]: !x[key] }))} style={{ ...sm, padding: '4px 9px', fontSize: 12, color: skipped ? C.txt : C.red }}>{skipped ? 'Wiederherstellen' : 'Ignorieren'}</button>
+                      <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} title={later[key] ? 'To-do vorgemerkt – klicken zum Entfernen' : 'Als To-do vormerken'} style={{ width: 34, height: 34, borderRadius: '50%', marginRight: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: '1px solid ' + (later[key] ? C.act : C.bdr), background: later[key] ? C.act : C.surf2 }}><Ic p={P.bell} sz={15} col={later[key] ? C.actTxt : C.sub} /></button>
+                      <button onClick={() => setSkip(x => ({ ...x, [key]: !x[key] }))} title={skipped ? 'Wiederherstellen' : 'Nicht importieren (ignorieren)'} style={{ width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: '1px solid ' + (skipped ? C.red : C.bdr), background: skipped ? hexA(C.red, 0.14) : C.surf2 }}><Ic p={skipped ? P.refresh : P.close} sz={15} col={skipped ? C.red : C.sub} /></button>
                     </td>
                   </tr>); })}
               </React.Fragment>); })}
@@ -610,9 +613,8 @@ export default function SevdeskImport(props) {
     </div>);
     if (!bigList) return body;
     return (<div style={{ position: 'fixed', inset: 0, zIndex: 140, background: C.bg, display: 'flex' }}>
-      {botOpen && aiAsk && <div style={{ width: 400, maxWidth: '46vw', flexShrink: 0, borderRight: '1px solid ' + C.bdr, padding: 16, boxSizing: 'border-box', background: C.surf }}>{renderBot(true)}</div>}
       {body}
-      {aiAsk && !botOpen && <button onClick={() => setBotOpen(true)} title="KI-Helfer öffnen" style={{ position: 'fixed', left: 18, bottom: 18, zIndex: 150, display: 'inline-flex', alignItems: 'center', gap: 8, background: AI_GRADIENT, color: '#fff', border: 'none', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }}><Ic p={P.spark} sz={16} col="#fff" /> KI-Helfer</button>}
+      {botOpen && aiAsk && <div style={{ width: 340, maxWidth: '34vw', flexShrink: 0, borderLeft: '1px solid ' + C.bdr, padding: 14, boxSizing: 'border-box', background: C.surf }}>{renderBot(true)}</div>}
     </div>);
   };
 
