@@ -61,6 +61,7 @@ export default function SevdeskImport(props) {
   const [listLimit, setListLimit] = useState(120);
   const [artTab, setArtTab] = useState('alle');    // Reiter: alle | belege (Ausgaben) | rechnungen (Einnahmen)
   const [sortBy, setSortBy] = useState('datum');    // Sortierung innerhalb der Gruppen: datum | name | betrag
+  const [forceDup, setForceDup] = useState({});    // als „doppelt/schon vorhanden" erkannte Zeilen, die der Nutzer trotzdem importieren will
   const [noteOpen, setNoteOpen] = useState({});     // Notizzeile unter der Buchung aufgeklappt
   const [botOpen, setBotOpen] = useState(false);     // KI-Helfer im Vollbild aufgeklappt
   const [groupBy, setGroupBy] = useState('monat');   // Abgleich-Tabelle gruppieren: monat | name | konto
@@ -192,7 +193,7 @@ export default function SevdeskImport(props) {
           if (f.datev && f.datev.length) setDatev(f.datev.map(x => ({ file: x.file, name: x.file.name })));
           if (f.extra && f.extra.length) setExtra(f.extra.map(x => ({ file: x.file, name: x.file.name })));
         }
-        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setOvr(st.ovr || {}); setDraftInfo({ savedAt: s.savedAt }); }
+        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setOvr(st.ovr || {}); setForceDup(st.forceDup || {}); setDraftInfo({ savedAt: s.savedAt }); }
       } catch (e) { /* kein Zwischenspeicher (z. B. privater Modus) */ }
       restored.current = true;
     })();
@@ -212,10 +213,10 @@ export default function SevdeskImport(props) {
     const t = setTimeout(() => {
       if (!anyFile()) return;
       const savedAt = Date.now();
-      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
+      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
     }, 700);
     return () => clearTimeout(t);
-  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, bank, belege && belege.mapping, rech && rech.mapping]);
+  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, bank, belege && belege.mapping, rech && rech.mapping]);
   const discardDraft = () => { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setBelege(null); setRech(null); setZipB(null); setZipR(null); setBank([]); setDatev([]); setDatevRows([]); setExtra([]); setRowAcct({}); setSkip({}); setNotes({}); setAi({}); setOcr({}); setOcrOff({}); setRecurOff({}); setLater({}); setDatevAct({}); setUpPdf({}); setOvr({}); setSel({}); setYearChosen(false); setStep(1); setDraftInfo(null); setResult(null); };
   const build = (src, zip, exist) => {
     if (!src) return null;
@@ -233,7 +234,7 @@ export default function SevdeskImport(props) {
   // Nach dem Laden der ersten CSV wird gefragt, welches Jahr importiert werden soll (nur dieses Jahr wird geladen)
   React.useEffect(() => { if (restored.current && !yearChosen && (belege || rech || bank.length)) setYearAsk(true); }, [belege, rech, bank.length, yearChosen]);
 
-  const willImport = (X, key) => X ? X.rows.filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum && !skip[key + r.idx]) : [];
+  const willImport = (X, key) => X ? X.rows.filter(r => r.inYear && (!r.dup || forceDup[key + r.idx]) && !r.cancelled && r.brutto > 0 && r.datum && !skip[key + r.idx]) : [];
   const belegeGo = willImport(B, 'b'), rechGo = willImport(R, 'r');
   // Wiederkehrendes: über ALLE Jahre erkennen (Lauf reißt nicht an der Jahresgrenze ab), gesetzt wird es nur bei importierten Zeilen
   const recurB = useMemo(() => B ? detectRecurring(B.rows.filter(r => !r.dup).map(r => r)) : [], [B]);
@@ -266,7 +267,7 @@ export default function SevdeskImport(props) {
   const signed = (r) => (r.storno ? -r.brutto : r.brutto);
   const bankMatch = useMemo(() => bankRowsY.length ? matchBank(csvGo.map(({ r, k }) => ({ key: k + r.idx, kind: r.storno ? (r.kind === 'ein' ? 'aus' : 'ein') : r.kind, datum: r.datum, brutto: r.brutto, name: r.name })), bankRowsY) : null, [B, R, skip, year, bankRowsY]); // eslint-disable-line
   // Kontoauszug = Hauptquelle: Umsätze ohne Gegenstück in der CSV werden als eigene Buchung angelegt (CSV und PDFs sind nur Hilfe)
-  const xRows = useMemo(() => {
+  const xAll = useMemo(() => {
     if (!bankRowsY.length) return [];
     const used = bankMatch ? bankMatch.used : new Set();
     const occ = {}; const sid = (b) => { const k = b.datum + '|' + Math.round(Math.abs(+b.amount) * 100) + '|' + normN(b.name).slice(0, 16); occ[k] = (occ[k] || 0) + 1; return k + '|' + occ[k]; };
@@ -274,9 +275,9 @@ export default function SevdeskImport(props) {
       const brutto = Math.round(Math.abs(+b.amount) * 100) / 100; const aus = b.kind !== 'ein';
       return { idx, kind: aus ? 'aus' : 'ein', datum: b.datum, y: +b.datum.slice(0, 4), m: +b.datum.slice(5, 7) - 1, nummer: b.belegnr || '', name: String(b.name || 'Umsatz').slice(0, 90), beschreibung: b.note || '', brutto, netto: brutto, mwst: 0, kategorie: aus ? (mapCategory(b.category || '', '') || mapCategory(b.note || '') || mapCategory(b.name || '') || 'Allgemein') : 'Allgemein', status: 'bezahlt', cancelled: false, dup: false, storno: false, file: null, inYear: true, bankOnly: true, warn: [], faellig: '', zahldatum: b.datum };
     });
-    return markDuplicates(recs, existing && existing.belege).filter(r => !r.dup);
+    return markDuplicates(recs, existing && existing.belege);
   }, [bankRowsY, bankMatch, existing]); // eslint-disable-line
-  const bankUsable = bankRowsY.filter(b => b.datum && Math.abs(+b.amount) > 0).length; const bankHidden = Math.max(0, bankUsable - (bankMatch ? bankMatch.used.size : 0) - xRows.length); // Umsätze, die als „schon vorhanden/doppelt" nicht erscheinen
+  const xRows = xAll.filter(r => !r.dup || forceDup['x' + r.idx]); const xDup = xAll.filter(r => r.dup && !forceDup['x' + r.idx]);
   const xGo = xRows.filter(r => !skip['x' + r.idx]);
   const allGo = [...csvGo, ...xGo.map(r => ({ r, k: 'x' }))];
   const aiDone = allGo.filter(x => ai[x.k + x.r.idx]).length;
@@ -294,7 +295,9 @@ export default function SevdeskImport(props) {
     } catch (e) { setErr('KI-Sortierung fehlgeschlagen: ' + (e.message || e)); setAiProg(''); }
     setAiBusy(false);
   };
-  const dMatch = useMemo(() => datevRowsY.length ? matchDatev(allGo.map(({ r, k }) => ({ key: k + r.idx, y: r.y, m: r.m, kind: r.kind, name: r.name, amount: signed(r), datum: r.datum, nummer: r.nummer, category: r.kategorie, mwst: r.mwst })), datevRowsY) : null, [B, R, skip, year, datevRowsY]); // eslint-disable-line
+  const existU = useMemo(() => [...((existing && existing.belege) || []).map(e => ({ e, kind: 'aus' })), ...((existing && existing.rechnungen) || []).map(e => ({ e, kind: 'ein' }))].filter(({ e }) => e.datum && inY(e)).map(({ e, kind }, i) => ({ key: 'e' + i, y: +String(e.datum).slice(0, 4), m: +String(e.datum).slice(5, 7) - 1, kind, name: e.name, amount: e.brutto, datum: e.datum, nummer: e.nummer, category: e.kategorie || e.category, mwst: e.mwst })), [existing, year]); // eslint-disable-line
+  // Bereits in Buqo gebuchte Belege/Rechnungen zählen beim DATEV-Abgleich mit (nichts wird gelöscht oder überschrieben)
+  const dMatch = useMemo(() => datevRowsY.length ? matchDatev([...allGo.map(({ r, k }) => ({ key: k + r.idx, y: r.y, m: r.m, kind: r.kind, name: r.name, amount: signed(r), datum: r.datum, nummer: r.nummer, category: r.kategorie, mwst: r.mwst })), ...existU], datevRowsY) : null, [B, R, skip, year, datevRowsY]); // eslint-disable-line
   // Status je Zeile: passt / hinweis / fehlt, dazu die Kurz-Hinweise
   const statusOf = (k, r) => {
     const key = k + r.idx; const chips = []; let miss = false, hintF = false; const o = ocr[key];
@@ -374,7 +377,9 @@ export default function SevdeskImport(props) {
   };
 
   // ── Abgleich-Liste (Kontoauszug als Hauptquelle) ──
-  const dispRows = [...(B ? B.rows : []).filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'b', r })), ...(R ? R.rows : []).filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'r', r })), ...xRows.map(r => ({ k: 'x', r }))];
+  const dispRows = [...(B ? B.rows : []).filter(r => r.inYear && (!r.dup || forceDup['b' + r.idx]) && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'b', r })), ...(R ? R.rows : []).filter(r => r.inYear && (!r.dup || forceDup['r' + r.idx]) && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'r', r })), ...xRows.map(r => ({ k: 'x', r }))];
+  // Als doppelt / schon vorhanden erkannt (nicht in der normalen Liste, über den Filter „Doppelt" sichtbar)
+  const dupList = [...(B ? B.rows : []).filter(r => r.inYear && r.dup && !forceDup['b' + r.idx] && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'b', r })), ...(R ? R.rows : []).filter(r => r.inYear && r.dup && !forceDup['r' + r.idx] && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'r', r })), ...xDup.map(r => ({ k: 'x', r }))];
   const unitOf = ({ k, r }) => { const e = eff(k, r); const key = k + r.idx; return { key, k, kind: r.kind, datum: r.datum, name: e.name, brutto: r.brutto, kategorie: e.kategorie, konto: acctOf(k, r), cls: statusOf(k, r).cls, hasFile: !!(r.file || upPdf[key]), src: r.bankOnly ? 'bank' : 'csv', beschreibung: r.beschreibung, notiz: notes[key] || '', mwst: e.mwst, todo: !!later[key], skip: !!skip[key] }; };
   const selKeys = Object.keys(sel).filter(x => sel[x]);
   // Sammelaktion auf alle ausgewählten Zeilen
@@ -513,12 +518,14 @@ export default function SevdeskImport(props) {
 
   const renderList = () => {
     const q = normN(listQ);
-    const list = dispRows.filter(({ k, r }) => {
-      if (filt === 'ignoriert') return !!skip[k + r.idx];
-      if (skip[k + r.idx]) return false;
-      if ((filt === 'ausgaben' || artTab === 'belege') && r.kind === 'ein') return false; if ((filt === 'einnahmen' || artTab === 'rechnungen') && r.kind !== 'ein') return false;
+    const list = (filt === 'doppelt' ? dupList : dispRows).filter(({ k, r }) => {
+      const key = k + r.idx; const hasP = !!(r.file || upPdf[key]);
+      if (filt === 'ignoriert') return !!skip[key];
+      if (filt !== 'doppelt' && skip[key]) return false;
+      if (artTab === 'belege' && r.kind === 'ein') return false; if (artTab === 'rechnungen' && r.kind !== 'ein') return false;
+      if (filt === 'pdf' && !hasP) return false; if (filt === 'nopdf' && hasP) return false; if (filt === 'todo' && !later[key]) return false;
       if (['passt', 'hinweis', 'fehlt'].includes(filt) && statusOf(k, r).cls !== filt) return false;
-      if (q && !normN(eff(k, r).name + ' ' + (r.nummer || '') + ' ' + r.brutto + ' ' + (notes[k + r.idx] || '')).includes(q)) return false; return true;
+      if (q && !normN(eff(k, r).name + ' ' + (r.nummer || '') + ' ' + r.brutto + ' ' + (notes[key] || '')).includes(q)) return false; return true;
     }).sort(sortBy === 'name' ? (a, b) => String(eff(a.k, a.r).name).localeCompare(String(eff(b.k, b.r).name), 'de', { sensitivity: 'base' }) || String(b.r.datum).localeCompare(String(a.r.datum)) : sortBy === 'betrag' ? (a, b) => b.r.brutto - a.r.brutto : (a, b) => String(b.r.datum).localeCompare(String(a.r.datum)));
     const groups = new Map();
     list.forEach(x => {
@@ -536,35 +543,35 @@ export default function SevdeskImport(props) {
     const td = { fontSize: 13, padding: '6px 8px', borderBottom: '1px solid ' + C.sep, verticalAlign: 'middle' };
     const sumOf = (items) => items.reduce((a, { r }) => a + (r.kind === 'ein' ? 1 : -1) * (r.storno ? -1 : 1) * r.brutto, 0);
     const allSel = list.length > 0 && list.every(({ k, r }) => sel[k + r.idx]);
-    const wrap = bigList ? { flex: 1, minWidth: 0, overflow: 'auto', padding: 16 } : undefined;
+    const wrap = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%', padding: '10px 14px 12px', boxSizing: 'border-box' };
     const nRech = dispRows.filter(({ k, r }) => r.kind === 'ein' && !skip[k + r.idx]).length, nBel = dispRows.filter(({ k, r }) => r.kind !== 'ein' && !skip[k + r.idx]).length, nIgn = dispRows.filter(({ k, r }) => skip[k + r.idx]).length;
     const act = dispRows.filter(({ k, r }) => !skip[k + r.idx]);
-    const nPdf = act.filter(({ k, r }) => r.file || upPdf[k + r.idx]).length;
-    const pill = (l, v, col, onClick) => <button key={l} onClick={onClick} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '7px 13px', textAlign: 'left', cursor: onClick ? 'pointer' : 'default', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>{l}</div><div style={{ ...NUM, fontSize: 17, fontWeight: 800, color: col || C.txt }}>{v}</div></button>;
+    const nPdf = act.filter(({ k, r }) => r.file || upPdf[k + r.idx]).length; const nTodo = act.filter(({ k, r }) => later[k + r.idx]).length;
+    const pill = (l, v, col, on, onClick) => <button key={l} onClick={onClick} title={'Nur „' + l + '“ zeigen'} style={{ background: on ? C.txt : C.surf, border: '1px solid ' + (on ? C.txt : C.bdr), borderRadius: 9, padding: '3px 9px', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: on ? C.bg : C.txt, display: 'inline-flex', alignItems: 'baseline', gap: 6, whiteSpace: 'nowrap' }}><span style={{ fontSize: 11, fontWeight: 600, opacity: 0.8 }}>{l}</span><span style={{ ...NUM, fontSize: 13.5, fontWeight: 800, color: on ? C.bg : (col || C.txt) }}>{v}</span></button>;
+    const ctlS = { ...SS, height: 30, padding: '0 8px', fontSize: 12.5, width: 'auto', borderRadius: 8, background: C.surf2, border: '1px solid ' + C.bdr, textAlign: 'left' };
+    const drop = (label, val, set, opts) => <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.sub, fontWeight: 600 }}>{label}<select value={val} onChange={e => set(e.target.value)} style={ctlS}>{opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>;
+    const setF = (f) => { setFilt(f); if (f === 'alle') setArtTab('alle'); };
     const body = (<div style={wrap}>
-      {bigList && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'stretch', marginBottom: 12 }}>
-        <button onClick={() => setBigList(false)} style={{ ...sm, order: 98, marginLeft: 'auto', alignSelf: 'center', background: C.txt, color: C.bg }}>✕ Vollbild schließen</button>
-        {aiAsk && <button onClick={() => setBotOpen(o => !o)} title="KI-Helfer öffnen/schließen" style={{ order: 99, alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, background: botOpen ? C.txt : AI_GRADIENT, color: botOpen ? C.bg : '#fff', border: 'none', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}><Ic p={P.spark} sz={15} col={botOpen ? C.bg : '#fff'} /> KI-Helfer</button>}
-        {pill('Gesamt', act.length, undefined, () => setFilt('alle'))}{pill('✅ Passt', stats.passt, C.grn, () => setFilt('passt'))}{pill('⚠ Hinweise', stats.hinweis, stats.hinweis ? C.amb : C.sub, () => setFilt('hinweis'))}{pill('❌ Fehlt', stats.fehlt, stats.fehlt ? C.red : C.sub, () => setFilt('fehlt'))}
-        {pill('📎 PDF vorhanden', nPdf, C.grn)}{pill('PDF fehlt', act.length - nPdf, act.length - nPdf ? C.red : C.sub)}{pill('Ausgaben', nBel)}{pill('Einnahmen', nRech)}{pill('To-do', act.filter(({ k, r }) => later[k + r.idx]).length)}{pill('🚫 Ignoriert', nIgn, undefined, () => setFilt('ignoriert'))}{bankHidden > 0 && pill('Doppelt / schon da', bankHidden, C.amb)}
-      </div>}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
-        {[['alle', 'Alle · ' + (nRech + nBel)], ['belege', 'Belege (Ausgaben) · ' + nBel], ['rechnungen', 'Rechnungen (Einnahmen) · ' + nRech]].map(([g, l]) => <button key={g} onClick={() => { setArtTab(g); if (filt === 'ausgaben' || filt === 'einnahmen') setFilt('alle'); }} style={{ ...btnS, padding: '8px 16px', background: artTab === g ? C.txt : C.surf2, color: artTab === g ? C.bg : C.txt }}>{l}</button>)}
-        {filt !== 'alle' && <button onClick={() => setFilt('alle')} style={{ ...sm, background: hexA(C.pri, 0.14), border: '1px solid ' + hexA(C.pri, 0.4) }}>Filter: {filt} ✕</button>}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexShrink: 0 }}>
+        <span style={{ fontSize: 15, fontWeight: 800, whiteSpace: 'nowrap' }}>Abgleich · {year === 'alle' ? 'Alle Jahre' : year}</span>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', flex: 1, alignItems: 'center' }}>
+          {pill('Gesamt', act.length, undefined, filt === 'alle' && artTab === 'alle', () => setF('alle'))}{pill('✅ Passt', stats.passt, C.grn, filt === 'passt', () => setF('passt'))}{pill('⚠ Hinweise', stats.hinweis, stats.hinweis ? C.amb : C.sub, filt === 'hinweis', () => setF('hinweis'))}{pill('❌ Fehlt', stats.fehlt, stats.fehlt ? C.red : C.sub, filt === 'fehlt', () => setF('fehlt'))}
+          {pill('📎 PDF da', nPdf, C.grn, filt === 'pdf', () => setF('pdf'))}{pill('PDF fehlt', act.length - nPdf, act.length - nPdf ? C.red : C.sub, filt === 'nopdf', () => setF('nopdf'))}{pill('Ausgaben', nBel, undefined, artTab === 'belege' && filt === 'alle', () => { setFilt('alle'); setArtTab('belege'); })}{pill('Einnahmen', nRech, undefined, artTab === 'rechnungen' && filt === 'alle', () => { setFilt('alle'); setArtTab('rechnungen'); })}
+          {pill('To-do', nTodo, undefined, filt === 'todo', () => setF('todo'))}{pill('🚫 Ignoriert', nIgn, undefined, filt === 'ignoriert', () => setF('ignoriert'))}{pill('Doppelt / schon da', dupList.length, dupList.length ? C.amb : C.sub, filt === 'doppelt', () => setF('doppelt'))}
+        </div>
+        {aiAsk && <button onClick={() => setBotOpen(o => !o)} title="KI-Helfer öffnen/schließen" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: botOpen ? C.txt : AI_GRADIENT, color: botOpen ? C.bg : '#fff', border: 'none', borderRadius: 999, padding: '7px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}><Ic p={P.spark} sz={14} col={botOpen ? C.bg : '#fff'} /> KI-Helfer</button>}
+        <button onClick={() => { setBigList(false); setBotOpen(false); }} title="Schließen" style={{ width: 32, height: 32, borderRadius: '50%', border: '1px solid ' + C.bdr, background: C.surf2, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.close} sz={15} col={C.txt} /></button>
       </div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        {bigList && <span style={{ fontSize: 17, fontWeight: 800, marginRight: 6 }}>Abgleich</span>}
-        <input value={listQ} onChange={e => setListQ(e.target.value)} placeholder="Name, Nummer, Betrag, Notiz suchen …" style={{ ...SS, flex: 1, minWidth: 180, textAlign: 'left', padding: '10px 13px' }} />
-        <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Gruppieren nach</span>
-        {[['monat', 'Monat'], ['name', 'Name'], ['konto', 'Konto'], ['keine', 'Keine']].map(([g, l]) => <button key={g} onClick={() => setGroupBy(g)} style={{ ...sm, background: groupBy === g ? C.txt : C.surf2, color: groupBy === g ? C.bg : C.txt }}>{l}</button>)}
-        <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Sortieren</span>
-        {[['datum', 'Datum'], ['name', 'Name'], ['betrag', 'Betrag']].map(([g, l]) => <button key={g} onClick={() => setSortBy(g)} style={{ ...sm, background: sortBy === g ? C.txt : C.surf2, color: sortBy === g ? C.bg : C.txt }}>{l}</button>)}
-        <button onClick={() => setSel(x => { const n = { ...x }; list.forEach(({ k, r }) => { n[k + r.idx] = !allSel; }); return n; })} style={sm}>{allSel ? 'Auswahl aufheben' : 'Alle ' + list.length + ' auswählen'}</button>
-        <button onClick={undo} disabled={!undoN} title="Letzte Änderung rückgängig (Strg/Cmd+Z)" style={{ ...sm, opacity: undoN ? 1 : 0.4 }}>↶ Rückgängig</button>
-        {!bigList && <button onClick={() => setBigList(true)} style={sm}>Vollbild</button>}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8, flexShrink: 0 }}>
+        <input value={listQ} onChange={e => setListQ(e.target.value)} placeholder="Name, Nummer, Betrag, Notiz suchen …" style={{ ...ctlS, flex: 1, minWidth: 200, maxWidth: 420, width: 'auto' }} />
+        {drop('Ansicht', artTab, setArtTab, [['alle', 'Alle · ' + (nRech + nBel)], ['belege', 'Belege · ' + nBel], ['rechnungen', 'Rechnungen · ' + nRech]])}
+        {drop('Gruppieren', groupBy, setGroupBy, [['monat', 'Monat'], ['name', 'Name'], ['konto', 'Konto'], ['keine', 'Keine']])}
+        {drop('Sortieren', sortBy, setSortBy, [['datum', 'Datum'], ['name', 'Name'], ['betrag', 'Betrag']])}
+        <button onClick={() => setSel(x => { const n = { ...x }; list.forEach(({ k, r }) => { n[k + r.idx] = !allSel; }); return n; })} style={{ ...sm, height: 30, padding: '0 11px' }}>{allSel ? 'Auswahl aufheben' : 'Alle ' + list.length + ' auswählen'}</button>
+        <span style={{ fontSize: 12, color: C.mut }}>{list.length} Zeilen</span>
       </div>
       {selKeys.length > 0 && (
-        <div style={{ position: 'sticky', top: 0, zIndex: 30, background: C.surf, border: '1px solid ' + hexA(C.pri, 0.5), borderRadius: 14, padding: '10px 12px', marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
+        <div style={{ flexShrink: 0, background: C.surf, border: '1px solid ' + hexA(C.pri, 0.5), borderRadius: 12, padding: '7px 10px', marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
           <b style={{ fontSize: 13.5 }}>{selKeys.length} ausgewählt</b>
           <select value="" onChange={e => { if (e.target.value) bulk({ kategorie: e.target.value }); }} style={{ ...sm, width: 'auto' }}><option value="">Kategorie …</option>{CATS.map(c => <option key={c} value={c}>{c}</option>)}</select>
           <select value="" onChange={e => { if (e.target.value) bulk({ konto: e.target.value }); }} style={{ ...sm, width: 'auto' }}><option value="">Konto …</option>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>
@@ -578,9 +585,9 @@ export default function SevdeskImport(props) {
         </div>)}
       {!gkeys.length && <div style={{ ...card, textAlign: 'center', color: C.mut, fontSize: 14 }}>Keine Buchungen mit diesem Filter.</div>}
       {gkeys.length > 0 && (
-        <div style={{ overflow: 'auto', maxHeight: bigList ? 'calc(100vh - 290px)' : '72vh', border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
+        <div style={{ overflow: 'auto', flex: 1, minHeight: 0, border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
           <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 880, tableLayout: 'fixed' }}>
-            <colgroup><col style={{ width: 36 }} /><col style={{ width: 46 }} /><col style={{ width: 84 }} /><col /><col style={{ width: 116 }} /><col style={{ width: 80 }} /><col style={{ width: 112 }} /><col style={{ width: 92 }} /><col style={{ width: 118 }} /><col style={{ width: 116 }} /></colgroup>
+            <colgroup><col style={{ width: 36 }} /><col style={{ width: 54 }} /><col style={{ width: 84 }} /><col /><col style={{ width: 116 }} /><col style={{ width: 80 }} /><col style={{ width: 112 }} /><col style={{ width: 92 }} /><col style={{ width: 118 }} /><col style={{ width: 116 }} /></colgroup>
             <thead><tr><th style={th}></th><th style={th} title="Beleg ansehen">Beleg</th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Kategorie</th><th style={th}>MwSt</th><th style={th}>Konto</th><th style={{ ...th, textAlign: 'right' }}>Betrag</th><th style={th}>Status</th><th style={{ ...th, textAlign: 'center' }}>Aktion</th></tr></thead>
             <tbody>
               {gkeys.map(gk => { const g = groups.get(gk); const gsel = g.items.every(({ k, r }) => sel[k + r.idx]); return (<React.Fragment key={gk}>
@@ -611,6 +618,7 @@ export default function SevdeskImport(props) {
                     <td style={{ ...tdb, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: aus ? C.txt : C.grn }}>{aus ? '−' : '+'}{fmt(r.brutto)}</td>
                     <td style={tdb} title={st.chips.map(c => c.t).join(' · ')}><div style={{ display: 'flex', gap: 4, alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap' }}>{later[key] && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.pri, background: hexA(C.pri, 0.13), borderRadius: 6, padding: '2px 6px' }}>To-do</span>}{shown.map((c, i) => { const col = chipCol(c.c); return <span key={i} style={{ fontSize: 10.5, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 6px', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 90, flexShrink: 1 }}>{c.t}</span>; })}{more > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.sub }}>+{more}</span>}{!st.chips.length && !later[key] && <span style={{ fontSize: 11, color: C.grn, fontWeight: 700 }}>✓ passt</span>}</div></td>
                     <td style={{ ...tdb, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      {filt === 'doppelt' && <button onClick={() => setForceDup(p => ({ ...p, [key]: true }))} title="Trotzdem importieren" style={{ ...icoBtn(true, C.grn), marginRight: 4 }}><Ic p={P.plus} sz={14} col="#fff" /></button>}
                       <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} title={later[key] ? 'To-do vorgemerkt – klicken zum Entfernen' : 'Als To-do vormerken'} style={{ ...icoBtn(!!later[key], C.act), marginRight: 4 }}><Ic p={P.bell} sz={14} col={later[key] ? C.actTxt : C.sub} /></button>
                       <button onClick={() => setNoteOpen(p => ({ ...p, [key]: !showNote }))} title={hasNote ? 'Notiz bearbeiten' : 'Notiz hinzufügen'} style={{ ...icoBtn(hasNote, C.pri), marginRight: 4 }}><Ic p={P.note} sz={14} col={hasNote ? '#fff' : C.sub} /></button>
                       <button onClick={() => setSkip(x => ({ ...x, [key]: !x[key] }))} title={skipped ? 'Wiederherstellen' : 'Nicht importieren (ignorieren)'} style={{ ...icoBtn(skipped, C.red), background: skipped ? hexA(C.red, 0.14) : C.surf2 }}><Ic p={skipped ? P.refresh : P.close} sz={14} col={skipped ? C.red : C.sub} /></button>
@@ -645,7 +653,6 @@ export default function SevdeskImport(props) {
           </div>
         </div>)}
     </div>);
-    if (!bigList) return body;
     return (<div style={{ position: 'fixed', inset: 0, zIndex: 140, background: C.bg, display: 'flex' }}>
       {body}
       {botOpen && aiAsk && <div style={{ width: 320, maxWidth: '30vw', flexShrink: 0, borderLeft: '1px solid ' + C.bdr, padding: 14, boxSizing: 'border-box', background: C.surf }}>{renderBot(true)}</div>}
@@ -724,17 +731,16 @@ export default function SevdeskImport(props) {
         </div>
         <div style={{ fontSize: 12.5, color: C.sub, marginTop: 10, lineHeight: 1.5 }}>{bankMatch ? 'Kontoauszug geladen (' + bankRowsY.length + ' Umsätze). ' : 'Kein Kontoauszug geladen. '}{dMatch ? 'DATEV geladen (' + datevRowsY.length + ' Zeilen). ' : 'Keine DATEV-Datei geladen. '}Bei jeder Zeile kannst du ein fehlendes PDF direkt hochladen, sie als <b>To-do</b> vormerken oder <b>ignorieren</b>. Gebucht wird erst in Schritt 3.</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-          {[['alle', 'Alle'], ['ausgaben', 'Ausgaben'], ['einnahmen', 'Einnahmen'], ['passt', '✅ Passt'], ['hinweis', '⚠ Hinweise'], ['fehlt', '❌ Fehlt'], ['ignoriert', '🚫 Ignoriert']].map(([k, t]) => (
-            <button key={k} onClick={() => setFilt(k)} style={{ background: filt === k ? C.txt : C.surf2, color: filt === k ? C.bg : C.txt, border: '1px solid ' + (filt === k ? C.txt : C.bdr), borderRadius: 999, padding: '6px 13px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{t}</button>))}
           {aiReadDoc && kiOpen > 0 && <button onClick={readMarked} disabled={analysing} style={{ ...btnS, background: AI_GRADIENT, color: '#fff', border: 'none', padding: '6px 13px', fontSize: 12.5 }}>{analysing ? (anaProg || 'KI liest …') : 'KI liest ' + kiOpen + ' markierte PDFs'}</button>}
         </div>
         {analysing && <Bar done={anaDone} total={anaTotal} label={anaProg || 'KI liest …'} />}
       </div>
-      {aiAsk && renderBot(false)}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        {[['liste', 'Liste'], ['tabelle', 'Tabelle (CSV-Zeilen)']].map(([k2, l]) => <button key={k2} onClick={() => setView(k2)} style={{ ...btnS, padding: '7px 14px', fontSize: 12.5, background: view === k2 ? C.txt : C.surf2, color: view === k2 ? C.bg : C.txt }}>{l}</button>)}
+      <div style={{ ...card, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 220 }}><div style={{ fontSize: 15, fontWeight: 800 }}>{dispRows.length} Buchungen im Abgleich</div><div style={{ fontSize: 12.5, color: C.sub, marginTop: 3 }}>Die Liste öffnet sich im Vollbild – dort sortierst du, ordnest Konten zu, schreibst Notizen und fragst den KI-Helfer.</div></div>
+        <button onClick={() => setBigList(true)} style={{ ...btnP, padding: '13px 24px', fontSize: 15 }}><Ic p={P.maximize} sz={16} col={C.actTxt} /> Abgleich öffnen</button>
       </div>
-      {view === 'liste' && renderList()}
+      {bigList && renderList()}
+      <details style={{ marginBottom: 14 }} onToggle={e => setView(e.target.open ? 'tabelle' : 'liste')}><summary style={{ cursor: 'pointer', fontSize: 13, color: C.sub, fontWeight: 600, padding: '6px 2px' }}>Erweitert: CSV-Zeilen und Spalten-Zuordnung</summary></details>
       {view === 'tabelle' && (<>
       {B && filt !== 'einnahmen' && (
         <div style={{ ...card, marginBottom: 14 }}>
@@ -768,41 +774,6 @@ export default function SevdeskImport(props) {
         <div style={{ fontSize: 12, color: C.mut, marginTop: 10, lineHeight: 1.5 }}>Jede Rechnung und jeder Beleg landet auf dem Konto, das in der Tabelle steht. Einmalige Gäste werden nicht als Kunde angelegt (ihre Rechnung bleibt mit Namen erhalten) – nur wer mindestens so viele Rechnungen hat, wie oben gewählt. Lass die KI unten alles vorsortieren und korrigiere nur, was gelb markiert ist.</div>
       </div>
 
-      {aiClassify && allGo.length > 0 && (
-        <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.35) }}>
-          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <span style={{ width: 44, height: 44, borderRadius: 13, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.spark} sz={20} col="#fff" /></span>
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <div style={{ fontSize: 15, fontWeight: 700 }}>Mit KI sortieren: Immobilien oder Firma?</div>
-              <div style={{ fontSize: 13, color: C.sub, marginTop: 3, lineHeight: 1.55 }}>Die KI geht alle {allGo.length} Rechnungen und Belege durch und legt jede auf das passende Konto – Miete und Ferienwohnung zur Immobilie, Dienstleistungen zur Firma. Unsichere Fälle werden gelb markiert.</div>
-              <textarea value={hint} onChange={e => setHint(e.target.value)} rows={2} placeholder={'Optional: Hinweise, z. B. „Mieter Müller und alles mit Sylt gehört zu ' + ((accounts.find(a => /^p\d$/.test(a.key)) || {}).label || 'Immobilie 1') + '"'} style={{ ...SS, marginTop: 10, width: '100%', resize: 'vertical', fontSize: 13, lineHeight: 1.45, boxSizing: 'border-box' }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
-                <button onClick={runAi} disabled={aiBusy} style={{ ...btnP, background: AI_GRADIENT, color: '#fff', opacity: aiBusy ? 0.6 : 1 }}><Ic p={P.spark} sz={15} col="#fff" /> {aiBusy ? 'Sortiert…' : aiDone ? 'Nochmal sortieren' : 'Jetzt mit KI sortieren'}</button>
-                {aiProg && <span style={{ fontSize: 12.5, color: C.sub }}>{aiProg}</span>}
-                {aiUnsure > 0 && <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: C.amb, fontWeight: 700, cursor: 'pointer' }}><input type="checkbox" checked={onlyUnsure} onChange={e => setOnlyUnsure(e.target.checked)} /> nur {aiUnsure} unsichere zeigen</label>}
-              </div>
-              {aiBusy && <div className="prog" style={{ marginTop: 10 }} />}
-              {aiDone > 0 && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>{perAcct.map(a => <span key={a.key} style={{ fontSize: 12.5, fontWeight: 600, color: C.txt, background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 99, padding: '5px 11px' }}>{a.label}: {a.n}{a.sum ? ' · ' + fmt(a.sum) + ' Einnahmen' : ''}</span>)}</div>}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {dMatch && dMatch.onlyDatev.length > 0 && (
-        <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.amb, 0.5) }}>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>In DATEV, aber nicht im Import · {dMatch.onlyDatev.length}</div>
-          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>Diese Buchungen des Steuerberaters finden sich nicht in deinen sevDesk-Dateien. Fehlt etwas, lade die Datei oben nach; sonst „To-do" oder „Ignorieren".</div>
-          <div style={{ maxHeight: 280, overflowY: 'auto', marginTop: 8 }}>
-            {dMatch.onlyDatev.map((d, i) => { const a = datevAct['d' + i]; return (
-              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 2px', borderTop: '1px solid ' + C.sep, fontSize: 12.5, opacity: a === 'ignore' ? 0.45 : 1 }}>
-                <span style={{ ...NUM, color: C.sub, whiteSpace: 'nowrap' }}>{d.datum ? d.datum.split('-').reverse().join('.') : '—'}</span>
-                <span style={{ flex: 1, minWidth: 0, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name || d.beschreibung || '—'}{d.nummer ? ' · ' + d.nummer : ''}</span>
-                <span style={{ ...NUM, whiteSpace: 'nowrap' }}>{fmt(d.brutto)}</span>
-                <button onClick={() => setDatevAct(x => ({ ...x, ['d' + i]: a === 'later' ? null : 'later' }))} style={{ ...btnS, padding: '4px 10px', fontSize: 12, background: a === 'later' ? hexA(C.pri, 0.16) : C.surf2 }}>{a === 'later' ? '✓ To-do' : 'To-do'}</button>
-                <button onClick={() => setDatevAct(x => ({ ...x, ['d' + i]: a === 'ignore' ? null : 'ignore' }))} style={{ ...btnS, padding: '4px 10px', fontSize: 12 }}>{a === 'ignore' ? '✓ Ignoriert' : 'Ignorieren'}</button>
-              </div>); })}
-          </div>
-        </div>)}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         <button onClick={() => setStep(1)} style={btnS}>‹ Zurück</button>
         <button onClick={() => setStep(3)} style={btnP}>Weiter: Wiederkehrendes prüfen ›</button>
