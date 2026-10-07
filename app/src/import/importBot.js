@@ -7,13 +7,13 @@ export function groupContext(units, limit = 250) {
   const g = new Map();
   units.forEach(u => {
     const k = norm(u.name) + '|' + u.kind; let x = g.get(k);
-    if (!x) { x = { name: u.name, kind: u.kind, n: 0, sum: 0, first: u.datum, last: u.datum, cats: {}, kontos: {}, miss: 0, notes: new Set() }; g.set(k, x); }
+    if (!x) { x = { name: u.name, kind: u.kind, n: 0, sum: 0, first: u.datum, last: u.datum, cats: {}, kontos: {}, miss: 0, notes: new Set(), mw: {} }; g.set(k, x); }
     x.n++; x.sum += u.brutto; if (u.datum < x.first) x.first = u.datum; if (u.datum > x.last) x.last = u.datum;
-    x.cats[u.kategorie || '—'] = (x.cats[u.kategorie || '—'] || 0) + 1; x.kontos[u.konto] = (x.kontos[u.konto] || 0) + 1; if (!u.hasFile) x.miss++; if (u.notiz && x.notes.size < 2) x.notes.add(String(u.notiz).slice(0, 60));
+    x.cats[u.kategorie || '—'] = (x.cats[u.kategorie || '—'] || 0) + 1; x.kontos[u.konto] = (x.kontos[u.konto] || 0) + 1; if (u.mwst != null) x.mw[u.mwst] = (x.mw[u.mwst] || 0) + 1; if (!u.hasFile) x.miss++; if (u.notiz && x.notes.size < 2) x.notes.add(String(u.notiz).slice(0, 60));
   });
   const top = (o) => Object.entries(o).sort((a, b) => b[1] - a[1])[0][0];
   return [...g.values()].sort((a, b) => (b.n - a.n) || (b.sum - a.sum)).slice(0, limit)
-    .map(x => [x.name, x.kind === 'ein' ? 'Einnahme' : 'Ausgabe', x.n + '×', Math.round(x.sum) + '€', x.first + '..' + x.last, 'Kat:' + top(x.cats), 'Konto:' + top(x.kontos), x.miss ? 'ohneBeleg:' + x.miss : '', x.notes.size ? 'Notiz:' + [...x.notes].join('/') : ''].filter(Boolean).join(' | '));
+    .map(x => [x.name, x.kind === 'ein' ? 'Einnahme' : 'Ausgabe', x.n + '×', Math.round(x.sum) + '€', x.first + '..' + x.last, 'Kat:' + top(x.cats), 'Konto:' + top(x.kontos), x.miss ? 'ohneBeleg:' + x.miss : '', Object.keys(x.mw).length ? 'MwSt:' + top(x.mw) + '%' : '', x.notes.size ? 'Notiz:' + [...x.notes].join('/') : ''].filter(Boolean).join(' | '));
 }
 
 export function parseBotJson(text) {
@@ -44,7 +44,7 @@ export function matchFilter(u, f) {
 export function normalizeActions(actions, { cats, accounts }) {
   const kontoKey = (v) => { if (!v) return null; const n = norm(v); const a = accounts.find(x => norm(x.key) === n || norm(x.label) === n || norm(x.label).includes(n) || n.includes(norm(x.label))); return a ? a.key : null; };
   const catOf = (v) => { if (!v) return null; const c = cats.find(x => norm(x) === norm(v)); return c || null; };
-  const ok = ['auswaehlen', 'setzen', 'ignorieren', 'wiederherstellen', 'notiz', 'merken'];
+  const ok = ['auswaehlen', 'setzen', 'ignorieren', 'wiederherstellen', 'notiz', 'merken', 'todo'];
   return (actions || []).filter(a => a && ok.includes(a.typ)).map(a => {
     const s = a.setzen || {}; const set = {};
     const kat = catOf(s.kategorie); if (kat) set.kategorie = kat;
@@ -55,3 +55,27 @@ export function normalizeActions(actions, { cats, accounts }) {
     return { typ: a.typ, filter, set, text: String(a.text || '').trim().slice(0, 400) };
   });
 }
+
+// Gesamtüberblick über das Jahr für den KI-Helfer (Zahlen kommen aus der App, nicht aus dem Modell)
+export function yearOverview(units) {
+  const n = units.length; const act = units.filter(u => !u.skip); const sum = (a) => Math.round(a.reduce((s, u) => s + u.brutto, 0));
+  const byKonto = {}; act.forEach(u => { const k = byKonto[u.konto] || (byKonto[u.konto] = { n: 0, ein: 0, aus: 0 }); k.n++; if (u.kind === 'ein') k.ein += u.brutto; else k.aus += u.brutto; });
+  const byMonat = {}; act.forEach(u => { const m = String(u.datum).slice(0, 7); const x = byMonat[m] || (byMonat[m] = { n: 0, ein: 0, aus: 0 }); x.n++; if (u.kind === 'ein') x.ein += u.brutto; else x.aus += u.brutto; });
+  const lines = ['Gesamt: ' + n + ' Buchungen (' + (n - act.length) + ' ignoriert, nicht importiert)',
+    'Ausgaben ' + sum(act.filter(u => u.kind !== 'ein')) + '€, Einnahmen ' + sum(act.filter(u => u.kind === 'ein')) + '€',
+    'Status: passt ' + act.filter(u => u.cls === 'passt').length + ', Hinweis ' + act.filter(u => u.cls === 'hinweis').length + ', fehlt ' + act.filter(u => u.cls === 'fehlt').length,
+    'Beleg/PDF vorhanden ' + act.filter(u => u.hasFile).length + ', fehlt ' + act.filter(u => !u.hasFile).length,
+    'Mit Notiz ' + act.filter(u => u.notiz).length + ', als To-do vorgemerkt ' + act.filter(u => u.todo).length];
+  Object.entries(byKonto).forEach(([k, v]) => lines.push('Konto ' + k + ': ' + v.n + ' Buchungen, Einnahmen ' + Math.round(v.ein) + '€, Ausgaben ' + Math.round(v.aus) + '€'));
+  Object.keys(byMonat).sort().forEach(m => lines.push('Monat ' + m + ': ' + byMonat[m].n + ' Buchungen, Einnahmen ' + Math.round(byMonat[m].ein) + '€, Ausgaben ' + Math.round(byMonat[m].aus) + '€'));
+  return lines;
+}
+
+// Einzelbuchungen, die zu Wörtern der Nutzerfrage passen (Name, Beschreibung, Notiz, Betrag), damit der Helfer konkrete Zeilen kennt
+export function relevantRows(units, text, limit = 40) {
+  const words = String(text || '').toLowerCase().split(/[^a-zäöüß0-9]+/).filter(w => w.length >= 4 && !STOP.has(w)).map(norm).filter(Boolean);
+  if (!words.length) return [];
+  return units.filter(u => { const hay = norm(u.name + ' ' + (u.beschreibung || '') + ' ' + (u.notiz || '') + ' ' + (u.kategorie || '') + ' ' + String(u.brutto)); return words.some(w => hay.includes(w)); })
+    .slice(0, limit).map(u => [u.datum, u.name, (u.kind === 'ein' ? '+' : '-') + u.brutto + '€', 'Kat:' + u.kategorie, 'Konto:' + u.konto, u.mwst != null ? 'MwSt:' + u.mwst + '%' : '', u.hasFile ? 'Beleg' : 'ohneBeleg', u.skip ? 'ignoriert' : '', u.notiz ? 'Notiz:' + String(u.notiz).slice(0, 80) : ''].filter(Boolean).join(' | '));
+}
+const STOP = new Set(['alle', 'alles', 'dass', 'diese', 'dieser', 'sowie', 'wurde', 'waren', 'sollen', 'bitte', 'einmal', 'machen', 'kannst', 'meine', 'meinen', 'oder', 'nicht', 'dann', 'habe', 'haben', 'wieder', 'immer', 'gedacht', 'verbuche', 'verbuchen', 'zeige', 'zeig']);

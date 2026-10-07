@@ -2630,7 +2630,11 @@ function App({session}) {
     }catch(e){ setWipe(x=>({...x,busy:false,msg:'Fehlgeschlagen: '+(e.message||e)})); }
   };
   // Allgemeine KI-Anfrage (Text rein, Text raus) – z. B. für den KI-Helfer der Import-Liste
-  const aiAsk = async (system, user, opts)=>{ const {data:resp,error}=await aiInvoke({body:{model:(opts&&opts.model)||'claude-sonnet-4-6', max_tokens:(opts&&opts.max)||1200, system, messages:[{role:'user',content:[{type:'text',text:user}]}]}}); if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler'); return (resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; };
+  const aiAsk = async (system, user, opts)=>{
+    const call = async (web)=>{ const body={model:(opts&&opts.model)||'claude-sonnet-4-6', max_tokens:(opts&&opts.max)||1200, system, messages:[{role:'user',content:[{type:'text',text:user}]}]}; if(web) body.tools=[{type:'web_search_20250305',name:'web_search',max_uses:3}]; const {data:resp,error}=await aiInvoke({body}); if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||'KI-Fehler'); return ((resp&&resp.content)||[]).filter(c=>c&&c.type==='text'&&c.text).map(c=>c.text).join('\n'); };
+    if(opts&&opts.web){ try{ const t=await call(true); if(t) return t; }catch(e){ /* Internetsuche nicht verfügbar → ohne Suche weiter */ } }
+    return call(false);
+  };
   // Was der Nutzer der KI erklärt hat (z. B. im Import) – der Assistent nutzt es später für Steuer-Hinweise
   const rememberFacts = (lines)=>{ const add=(lines||[]).map(x=>String(x).trim().slice(0,300)).filter(Boolean); if(!add.length) return; setData(prev=>{ const cur=prev.taxContext||[]; const seen=new Set(cur.map(x=>x.text)); const fresh=add.filter(t=>!seen.has(t)).map(t=>({id:uid(), text:t, createdAt:new Date().toISOString(), source:'import'})); return fresh.length?{...prev, taxContext:[...cur,...fresh].slice(-80)}:prev; }); };
   // Gespeicherte Umsätze eines Kontoauszugs im Format der Bank-Entwürfe (Zwischenspeicher: PDF muss nicht erneut gelesen werden)
@@ -5071,7 +5075,7 @@ function App({session}) {
                   <SevdeskImport ui={{C,SC,SS,NUM,fmt,Ic,P,hexA,AI_GRADIENT,MONTHS}} isMobile={isMobile} defaultYear={now.getFullYear()-1}
                     accounts={[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>({key:pp,label:names[pp]})),{key:'privat',label:names.privatLabel||'Privat'}]}
                     existing={sevdeskExisting()} onImport={runSevdeskImport}
-                    aiReadDoc={aiReadDoc} aiBankRows={aiBankRows} aiAsk={aiAsk} onRemember={rememberFacts} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
+                    aiReadDoc={aiReadDoc} aiBankRows={aiBankRows} aiAsk={aiAsk} onRemember={rememberFacts} taxFacts={(Array.isArray(data.taxContext)?data.taxContext:[]).map(x=>x&&x.text).filter(Boolean)} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
                 )}
 
                 {importTab==='sevdesk' && (
