@@ -59,13 +59,17 @@ export default function SevdeskImport(props) {
   const [view, setView] = useState('liste');       // Abgleich: liste | tabelle
   const [openRow, setOpenRow] = useState(null);     // aufgeklappte Zeile (Felder ändern)
   const [listLimit, setListLimit] = useState(120);
+  const [groupBy, setGroupBy] = useState('monat');   // Abgleich-Tabelle gruppieren: monat | name | konto
+  const [bigList, setBigList] = useState(false);     // Vollbild der Abgleich-Tabelle
+  const [askA, setAskA] = useState(null);             // Rückfrage „nur diese oder alle gleichen Namen?"
+  const [pvL, setPvL] = useState(null);               // Beleg-Pop-up
   const [listQ, setListQ] = useState('');
   const [bulkNote, setBulkNote] = useState('');
   const [botMsgs, setBotMsgs] = useState([]);       // KI-Helfer für die Liste: [{role:'user'|'ai', text}]
   const [botInput, setBotInput] = useState('');
   const [botBusy, setBotBusy] = useState(false);
   const [botPending, setBotPending] = useState(null);   // vorgeschlagene Aktionen, werden erst nach „Anwenden" ausgeführt
-  const [later, setLater] = useState({});           // „Für später": wird gebucht, dazu entsteht ein To-do (k+idx)
+  const [later, setLater] = useState({});           // „To-do": wird gebucht, dazu entsteht ein To-do (k+idx)
   const [datevAct, setDatevAct] = useState({});     // DATEV-Zeilen ohne Gegenstück: 'later' | 'ignore'
   const [upPdf, setUpPdf] = useState({});           // im Abgleich nachgeladene PDFs: {k+idx: {name, data}}
   const [filt, setFilt] = useState('alle');         // Abgleich-Filter: alle | ausgaben | einnahmen | passt | hinweis | fehlt
@@ -341,7 +345,7 @@ export default function SevdeskImport(props) {
 
   // ── Abgleich-Liste (Kontoauszug als Hauptquelle) ──
   const dispRows = [...(B ? B.rows : []).filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'b', r })), ...(R ? R.rows : []).filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'r', r })), ...xRows.map(r => ({ k: 'x', r }))];
-  const unitOf = ({ k, r }) => { const e = eff(k, r); const key = k + r.idx; return { key, k, kind: r.kind, datum: r.datum, name: e.name, brutto: r.brutto, kategorie: e.kategorie, konto: acctOf(k, r), cls: statusOf(k, r).cls, hasFile: !!(r.file || upPdf[key]), src: r.bankOnly ? 'bank' : 'csv', beschreibung: r.beschreibung, skip: !!skip[key] }; };
+  const unitOf = ({ k, r }) => { const e = eff(k, r); const key = k + r.idx; return { key, k, kind: r.kind, datum: r.datum, name: e.name, brutto: r.brutto, kategorie: e.kategorie, konto: acctOf(k, r), cls: statusOf(k, r).cls, hasFile: !!(r.file || upPdf[key]), src: r.bankOnly ? 'bank' : 'csv', beschreibung: r.beschreibung, notiz: notes[key] || '', skip: !!skip[key] }; };
   const selKeys = Object.keys(sel).filter(x => sel[x]);
   // Sammelaktion auf alle ausgewählten Zeilen
   const bulk = (patch, keys) => {
@@ -435,25 +439,60 @@ export default function SevdeskImport(props) {
   const progPct = (t) => { const m = String(t || '').match(/(\d+)\s*\/\s*(\d+)/); return m ? [+m[1], +m[2]] : [0, 0]; };
   const chipCol = (c) => c === 'ok' ? C.grn : c === 'miss' ? C.red : c === 'ai' ? C.pri : C.amb;
 
+  // Beleg im Pop-up ansehen (PDF oder Bild) – ohne die Liste zu verlassen
+  const closePv = () => { if (pvL && pvL.url) { try { URL.revokeObjectURL(pvL.url); } catch (e) { /* egal */ } } setPvL(null); };
+  const openPreview = async (k, r) => {
+    const key = k + r.idx; closePv(); setPvL({ loading: true, title: eff(k, r).name });
+    try {
+      let bytes, name = r.file || 'beleg.pdf';
+      if (upPdf[key]) { bytes = await upPdf[key].data(); name = upPdf[key].name; } else { const z = k === 'r' ? zipR : zipB; const e = z && z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei nicht gefunden'); bytes = await e.data(); }
+      const isPdf = /\.pdf$/i.test(name); const ext = (name.split('.').pop() || '').toLowerCase();
+      setPvL({ title: eff(k, r).name, name, isPdf, url: URL.createObjectURL(new Blob([bytes], { type: isPdf ? 'application/pdf' : (ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg') })) });
+    } catch (e) { setPvL({ title: eff(k, r).name, error: String(e.message || e) }); }
+  };
+  // Konto / Notiz ändern: kommt der Name öfter vor, fragt ein Pop-up, ob nur diese Zeile oder alle gleichen geändert werden
+  const sameName = (k, r) => { const n = normN(eff(k, r).name); return dispRows.filter(x => normN(eff(x.k, x.r).name) === n).map(x => x.k + x.r.idx); };
+  const setKonto = (keys, val) => setRowAcct(a => { const n = { ...a }; keys.forEach(x => { n[x] = val; }); return n; });
+  const setNotizKeys = (keys, val) => setNotes(a => { const n = { ...a }; keys.forEach(x => { n[x] = val; }); return n; });
+  const changeKonto = (k, r, val) => { const keys = sameName(k, r); if (keys.length > 1) setAskA({ typ: 'konto', key: k + r.idx, val, keys, name: eff(k, r).name }); else setKonto([k + r.idx], val); };
+  const noteBlur = (k, r, val) => { val = String(val || '').trim(); if (!val) return; const keys = sameName(k, r).filter(x => x !== k + r.idx && String(notes[x] || '').trim() !== val); if (keys.length) setAskA({ typ: 'notiz', key: k + r.idx, val, keys: [k + r.idx, ...keys], name: eff(k, r).name }); };
+  const applyAskA = (all) => { const a = askA; if (all) { if (a.typ === 'konto') setKonto(a.keys, a.val); else setNotizKeys(a.keys, a.val); } else if (a.typ === 'konto') setKonto([a.key], a.val); setAskA(null); };
+
   const renderList = () => {
     const q = normN(listQ);
     const list = dispRows.filter(({ k, r }) => {
       if (filt === 'ausgaben' && r.kind === 'ein') return false; if (filt === 'einnahmen' && r.kind !== 'ein') return false;
+      if (filt === 'ignoriert') return !!skip[k + r.idx];
       if (['passt', 'hinweis', 'fehlt'].includes(filt) && statusOf(k, r).cls !== filt) return false;
-      if (q && !normN(eff(k, r).name + ' ' + (r.nummer || '') + ' ' + r.brutto).includes(q)) return false; return true;
+      if (q && !normN(eff(k, r).name + ' ' + (r.nummer || '') + ' ' + r.brutto + ' ' + (notes[k + r.idx] || '')).includes(q)) return false; return true;
     }).sort((a, b) => String(b.r.datum).localeCompare(String(a.r.datum)));
-    const shownL = list.slice(0, listLimit); const groups = new Map();
-    shownL.forEach(x => { const mk = String(x.r.datum).slice(0, 7); if (!groups.has(mk)) groups.set(mk, []); groups.get(mk).push(x); });
-    const mkeys = [...groups.keys()].sort().reverse();
-    const fieldSel = { ...SS, textAlign: 'left', padding: '8px 10px', fontSize: 13, width: '100%' };
+    const groups = new Map();
+    list.forEach(x => {
+      const e = eff(x.k, x.r); let gk, gl;
+      if (groupBy === 'monat') { gk = String(x.r.datum).slice(0, 7); gl = MONTHS[+gk.slice(5) - 1] + ' ' + gk.slice(0, 4); }
+      else if (groupBy === 'name') { gk = normN(e.name) || '—'; gl = e.name || '—'; }
+      else { gk = acctOf(x.k, x.r); gl = (accounts.find(a => a.key === gk) || {}).label || gk; }
+      if (!groups.has(gk)) groups.set(gk, { label: gl, items: [] }); groups.get(gk).items.push(x);
+    });
+    const gkeys = [...groups.keys()].sort(groupBy === 'monat' ? (a, b) => b.localeCompare(a) : groupBy === 'name' ? (a, b) => groups.get(a).label.localeCompare(groups.get(b).label, 'de', { sensitivity: 'base' }) : (a, b) => accounts.findIndex(x => x.key === a) - accounts.findIndex(x => x.key === b));
     const sm = { background: C.surf2, border: '1px solid ' + C.bdr, color: C.txt, borderRadius: 8, padding: '6px 11px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' };
-    return (<>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        <input value={listQ} onChange={e => { setListQ(e.target.value); setListLimit(120); }} placeholder="Name, Nummer, Betrag suchen …" style={{ ...SS, flex: 1, minWidth: 180, textAlign: 'left', padding: '11px 13px' }} />
-        <button onClick={() => setSel(x => { const n = { ...x }; const all = list.every(({ k, r }) => x[k + r.idx]); list.forEach(({ k, r }) => { n[k + r.idx] = !all; }); return n; })} style={sm}>{list.length && list.every(({ k, r }) => sel[k + r.idx]) ? 'Auswahl aufheben' : 'Alle ' + list.length + ' auswählen'}</button>
+    const cell = { ...SS, textAlign: 'left', padding: '5px 6px', fontSize: 12.5, width: '100%', boxSizing: 'border-box', background: 'transparent', border: '1px solid transparent' };
+    const th = { textAlign: 'left', fontSize: 11, fontWeight: 700, color: C.mut, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '8px 8px', borderBottom: '1px solid ' + C.bdr, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: C.surf, zIndex: 2 };
+    const td = { fontSize: 13, padding: '6px 8px', borderBottom: '1px solid ' + C.sep, verticalAlign: 'middle' };
+    const sumOf = (items) => items.reduce((a, { r }) => a + (r.kind === 'ein' ? 1 : -1) * (r.storno ? -1 : 1) * r.brutto, 0);
+    const allSel = list.length > 0 && list.every(({ k, r }) => sel[k + r.idx]);
+    const wrap = bigList ? { position: 'fixed', inset: 0, zIndex: 140, background: C.bg, padding: 16, overflow: 'auto' } : undefined;
+    return (<div style={wrap}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        {bigList && <span style={{ fontSize: 17, fontWeight: 800, marginRight: 6 }}>Abgleich</span>}
+        <input value={listQ} onChange={e => setListQ(e.target.value)} placeholder="Name, Nummer, Betrag, Notiz suchen …" style={{ ...SS, flex: 1, minWidth: 180, textAlign: 'left', padding: '10px 13px' }} />
+        <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Gruppieren nach</span>
+        {[['monat', 'Monat'], ['name', 'Name'], ['konto', 'Konto']].map(([g, l]) => <button key={g} onClick={() => setGroupBy(g)} style={{ ...sm, background: groupBy === g ? C.txt : C.surf2, color: groupBy === g ? C.bg : C.txt }}>{l}</button>)}
+        <button onClick={() => setSel(x => { const n = { ...x }; list.forEach(({ k, r }) => { n[k + r.idx] = !allSel; }); return n; })} style={sm}>{allSel ? 'Auswahl aufheben' : 'Alle ' + list.length + ' auswählen'}</button>
+        <button onClick={() => setBigList(b => !b)} style={{ ...sm, background: bigList ? C.txt : C.surf2, color: bigList ? C.bg : C.txt }}>{bigList ? 'Vollbild schließen' : 'Vollbild'}</button>
       </div>
       {selKeys.length > 0 && (
-        <div style={{ position: 'sticky', top: 8, zIndex: 30, background: C.surf, border: '1px solid ' + hexA(C.pri, 0.5), borderRadius: 14, padding: '10px 12px', marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 30, background: C.surf, border: '1px solid ' + hexA(C.pri, 0.5), borderRadius: 14, padding: '10px 12px', marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }}>
           <b style={{ fontSize: 13.5 }}>{selKeys.length} ausgewählt</b>
           <select value="" onChange={e => { if (e.target.value) bulk({ kategorie: e.target.value }); }} style={{ ...sm, width: 'auto' }}><option value="">Kategorie …</option>{CATS.map(c => <option key={c} value={c}>{c}</option>)}</select>
           <select value="" onChange={e => { if (e.target.value) bulk({ konto: e.target.value }); }} style={{ ...sm, width: 'auto' }}><option value="">Konto …</option>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>
@@ -465,46 +504,68 @@ export default function SevdeskImport(props) {
           <button onClick={() => bulk({ skip: false })} style={sm}>Wiederherstellen</button>
           <button onClick={() => setSel({})} style={{ ...sm, background: 'none', border: 'none', color: C.mut }}>Auswahl aufheben</button>
         </div>)}
-      {!mkeys.length && <div style={{ ...card, textAlign: 'center', color: C.mut, fontSize: 14 }}>Keine Buchungen mit diesem Filter.</div>}
-      {mkeys.map(mk => { const items = groups.get(mk); const sum = items.reduce((a, { r }) => a + (r.kind === 'ein' ? 1 : -1) * (r.storno ? -1 : 1) * r.brutto, 0); return (
-        <div key={mk} style={{ marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 9 }}><span style={{ fontSize: 14, fontWeight: 800 }}>{MONTHS[+mk.slice(5) - 1]} {mk.slice(0, 4)}</span><span style={{ fontSize: 12.5, color: C.sub }}>{items.length} Buchungen</span><span style={{ flex: 1 }} /><span style={{ ...NUM, fontSize: 13, fontWeight: 700, color: sum >= 0 ? C.grn : C.txt }}>{sum >= 0 ? '+' : '−'}{fmt(Math.abs(sum))}</span></div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {items.map(({ k, r }) => { const key = k + r.idx; const e = eff(k, r); const st = statusOf(k, r); const open = openRow === key; const skipped = !!skip[key]; const hasPdf = !!(r.file || upPdf[key]); const aus = (r.kind !== 'ein') !== !!r.storno; const acc = accounts.find(a => a.key === acctOf(k, r)); const tint = st.cls === 'fehlt' ? C.red : st.cls === 'hinweis' ? C.amb : C.grn; return (
-              <div key={key} style={{ background: C.surf2, border: '1px solid ' + (sel[key] ? C.pri : C.bdr), borderRadius: 14, opacity: skipped ? 0.5 : 1 }}>
-                <div onClick={() => setOpenRow(open ? null : key)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={!!sel[key]} onClick={ev => ev.stopPropagation()} onChange={ev => setSel(x => ({ ...x, [key]: ev.target.checked }))} />
-                  <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 11, background: hexA(tint, 0.16), display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic p={hasPdf ? P.clip : P.doc} sz={18} col={tint} /></div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14.5, fontWeight: 700, color: C.txt, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: skipped ? 'line-through' : 'none' }}>{e.name || '—'}</div>
-                    <div style={{ fontSize: 12, color: C.sub, marginTop: 2, display: 'flex', gap: 10, flexWrap: 'wrap' }}><span>{r.datum.split('-').reverse().join('.')}</span><span>{acc ? acc.label : ''}</span><span>{e.kategorie}</span>{r.nummer && <span>{r.nummer}</span>}{e.mwst !== '' && e.mwst != null && <span>MwSt {e.mwst} %</span>}</div>
-                    <div style={{ marginTop: 6, display: 'flex', gap: 5, flexWrap: 'wrap' }}>{skipped && <span style={{ fontSize: 11, fontWeight: 700, color: C.mut, background: C.surf3, borderRadius: 6, padding: '2px 7px' }}>Wird nicht importiert</span>}{later[key] && <span style={{ fontSize: 11, fontWeight: 700, color: C.pri, background: hexA(C.pri, 0.13), borderRadius: 6, padding: '2px 7px' }}>To-do</span>}{st.chips.map((c, i) => { const col = chipCol(c.c); return <span key={i} style={{ fontSize: 11, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 7px', lineHeight: 1.35 }}>{c.t}</span>; })}</div>
-                  </div>
-                  <div style={{ ...NUM, fontSize: 16, fontWeight: 800, color: aus ? C.txt : C.grn, whiteSpace: 'nowrap' }}>{aus ? '−' : '+'}{fmt(r.brutto)}</div>
-                  <span style={{ color: C.mut, fontSize: 14 }}>{open ? '▾' : '▸'}</span>
-                </div>
-                {open && (
-                  <div style={{ padding: '4px 14px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid ' + C.sep }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, minmax(0,1fr))', gap: 10, marginTop: 10 }}>
-                      <div style={{ gridColumn: isMobile ? '1 / -1' : 'span 2' }}><div style={lbl}>Name</div><input value={e.name} onChange={ev => setOvr(o => ({ ...o, [key]: { ...(o[key] || {}), name: ev.target.value } }))} style={fieldSel} /></div>
-                      <div><div style={lbl}>Kategorie</div><select value={e.kategorie || ''} onChange={ev => setOvr(o => ({ ...o, [key]: { ...(o[key] || {}), kategorie: ev.target.value } }))} style={fieldSel}>{[...new Set([e.kategorie, ...CATS].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                      <div><div style={lbl}>MwSt</div><select value={String(e.mwst)} onChange={ev => setOvr(o => ({ ...o, [key]: { ...(o[key] || {}), mwst: +ev.target.value } }))} style={fieldSel}>{[0, 7, 19].map(v => <option key={v} value={v}>{v} %</option>)}{![0, 7, 19].includes(+e.mwst) && <option value={e.mwst}>{e.mwst} %</option>}</select></div>
-                      <div><div style={lbl}>Konto</div><select value={acctOf(k, r)} onChange={ev => setRowAcct(a => ({ ...a, [key]: ev.target.value }))} style={fieldSel}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></div>
-                      <div style={{ gridColumn: isMobile ? '1 / -1' : 'span 3' }}><div style={lbl}>Notiz (intern, für den KI-Steuerassistenten)</div><input value={notes[key] || ''} onChange={ev => setNotes(n => ({ ...n, [key]: ev.target.value }))} placeholder="z. B. Material Renovierung Wohnung 2" style={fieldSel} /></div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                      {hasPdf ? <button onClick={() => openPdf(k, r)} style={{ ...sm, background: C.act, color: C.actTxt, border: 'none' }}>📎 Beleg ansehen</button> : <label style={{ ...sm, color: C.red, display: 'inline-block' }}>Beleg hochladen<input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (f) setUpPdf(p => ({ ...p, [key]: { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) } })); }} /></label>}
-                      {hasPdf && aiReadDoc && <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5, cursor: 'pointer' }}><input type="checkbox" checked={kiAll || !!kiRows[key]} disabled={kiAll} onChange={ev => setKiRows(p => ({ ...p, [key]: ev.target.checked }))} /> KI liest das PDF</label>}
-                      <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} style={{ ...sm, background: later[key] ? hexA(C.pri, 0.16) : C.surf2 }}>{later[key] ? '✓ Für später' : 'Für später'}</button>
-                      <button onClick={() => setSkip(x => ({ ...x, [key]: !x[key] }))} style={{ ...sm, color: skipped ? C.txt : C.red }}>{skipped ? 'Wiederherstellen' : 'Nicht importieren'}</button>
-                      {ocr[key] && !ocr[key].error && <span style={{ fontSize: 12, color: C.sub }}>KI-Lesung vorhanden{ocrOff[key] ? ' (Korrekturen aus)' : ''}</span>}
-                    </div>
-                  </div>)}
-              </div>); })}
+      {!gkeys.length && <div style={{ ...card, textAlign: 'center', color: C.mut, fontSize: 14 }}>Keine Buchungen mit diesem Filter.</div>}
+      {gkeys.length > 0 && (
+        <div style={{ overflow: 'auto', maxHeight: bigList ? 'calc(100vh - 130px)' : '72vh', border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
+          <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1000 }}>
+            <thead><tr><th style={th}></th><th style={th} title="Beleg ansehen">Beleg</th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Kategorie</th><th style={th}>MwSt</th><th style={th}>Konto</th><th style={th}>Notiz (auch für die KI)</th><th style={{ ...th, textAlign: 'right' }}>Betrag</th><th style={th}>Hinweise</th><th style={th}>Aktion</th></tr></thead>
+            <tbody>
+              {gkeys.map(gk => { const g = groups.get(gk); const gsel = g.items.every(({ k, r }) => sel[k + r.idx]); return (<React.Fragment key={gk}>
+                <tr><td colSpan={11} style={{ background: C.surf3, padding: '8px 10px', borderBottom: '1px solid ' + C.bdr, position: 'sticky', top: 33, zIndex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <input type="checkbox" checked={gsel} onChange={ev => setSel(x => { const n = { ...x }; g.items.forEach(({ k, r }) => { n[k + r.idx] = ev.target.checked; }); return n; })} title="Alle dieser Gruppe auswählen" />
+                    <span style={{ fontSize: 14, fontWeight: 800 }}>{g.label}</span><span style={{ fontSize: 12.5, color: C.sub }}>{g.items.length} Buchungen</span>
+                    <span style={{ ...NUM, fontSize: 13, fontWeight: 700, color: sumOf(g.items) >= 0 ? C.grn : C.txt }}>{sumOf(g.items) >= 0 ? '+' : '−'}{fmt(Math.abs(sumOf(g.items)))}</span>
+                    <span style={{ flex: 1 }} />
+                    <select value="" onChange={e => { if (e.target.value) setKonto(g.items.map(({ k, r }) => k + r.idx), e.target.value); }} style={{ ...sm, width: 'auto', padding: '4px 8px', fontSize: 12 }}><option value="">Ganze Gruppe → Konto …</option>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>
+                  </div></td></tr>
+                {g.items.map(({ k, r }) => { const key = k + r.idx; const e = eff(k, r); const st = statusOf(k, r); const skipped = !!skip[key]; const hasPdf = !!(r.file || upPdf[key]); const aus = (r.kind !== 'ein') !== !!r.storno; const tint = st.cls === 'fehlt' ? C.red : st.cls === 'hinweis' ? C.amb : C.grn;
+                  const setO = (patch) => setOvr(o => ({ ...o, [key]: { ...(o[key] || {}), ...patch } })); return (
+                  <tr key={key} style={{ opacity: skipped ? 0.5 : 1, background: sel[key] ? hexA(C.pri, 0.08) : 'transparent' }}>
+                    <td style={td}><input type="checkbox" checked={!!sel[key]} onChange={ev => setSel(x => ({ ...x, [key]: ev.target.checked }))} /></td>
+                    <td style={td}>{hasPdf
+                      ? <button onClick={() => openPreview(k, r)} title="Beleg ansehen" style={{ width: 34, height: 34, borderRadius: '50%', border: 'none', background: hexA(tint, 0.16), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Ic p={P.clip} sz={16} col={tint} /></button>
+                      : <label title="Beleg hochladen" style={{ width: 34, height: 34, borderRadius: '50%', background: hexA(C.red, 0.12), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Ic p={P.upload} sz={15} col={C.red} /><input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (f) setUpPdf(p => ({ ...p, [key]: { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) } })); }} /></label>}</td>
+                    <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{r.datum.split('-').reverse().join('.')}</td>
+                    <td style={{ ...td, minWidth: 150 }}><input value={e.name} onChange={ev => setO({ name: ev.target.value })} style={{ ...cell, fontWeight: 600, textDecoration: skipped ? 'line-through' : 'none' }} />{r.nummer && <div style={{ fontSize: 11, color: C.mut, padding: '0 6px' }}>{r.nummer}</div>}</td>
+                    <td style={td}><select value={e.kategorie || ''} onChange={ev => setO({ kategorie: ev.target.value })} style={{ ...cell, width: 118 }}>{[...new Set([e.kategorie, ...CATS].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}</select></td>
+                    <td style={td}><select value={String(e.mwst)} onChange={ev => setO({ mwst: +ev.target.value })} style={{ ...cell, width: 74 }}>{[0, 7, 19].map(v => <option key={v} value={v}>{v} %</option>)}{![0, 7, 19].includes(+e.mwst) && <option value={e.mwst}>{e.mwst} %</option>}</select></td>
+                    <td style={td}><select value={acctOf(k, r)} onChange={ev => changeKonto(k, r, ev.target.value)} style={{ ...cell, width: 150, border: '1px solid ' + C.bdr, background: C.surf2 }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></td>
+                    <td style={{ ...td, minWidth: 170 }}><input value={notes[key] || ''} onChange={ev => setNotes(n => ({ ...n, [key]: ev.target.value }))} onBlur={ev => noteBlur(k, r, ev.target.value)} placeholder="Notiz …" style={{ ...cell, border: '1px solid ' + C.bdr }} /></td>
+                    <td style={{ ...td, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: aus ? C.txt : C.grn }}>{aus ? '−' : '+'}{fmt(r.brutto)}</td>
+                    <td style={{ ...td, minWidth: 170, maxWidth: 230 }}>{skipped && <span style={{ fontSize: 11, fontWeight: 700, color: C.mut, background: C.surf3, borderRadius: 6, padding: '2px 7px', marginRight: 4 }}>Ignoriert</span>}{later[key] && <span style={{ fontSize: 11, fontWeight: 700, color: C.pri, background: hexA(C.pri, 0.13), borderRadius: 6, padding: '2px 7px', marginRight: 4 }}>To-do</span>}{st.chips.map((c, i) => { const col = chipCol(c.c); return <span key={i} style={{ display: 'inline-block', margin: '0 4px 3px 0', fontSize: 11, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 7px', lineHeight: 1.35 }}>{c.t}</span>; })}</td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                      <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} style={{ ...sm, padding: '4px 9px', fontSize: 12, marginRight: 5, background: later[key] ? hexA(C.pri, 0.16) : C.surf2 }}>{later[key] ? '✓ To-do' : 'To-do'}</button>
+                      <button onClick={() => setSkip(x => ({ ...x, [key]: !x[key] }))} style={{ ...sm, padding: '4px 9px', fontSize: 12, color: skipped ? C.txt : C.red }}>{skipped ? 'Wiederherstellen' : 'Ignorieren'}</button>
+                    </td>
+                  </tr>); })}
+              </React.Fragment>); })}
+            </tbody>
+          </table>
+        </div>)}
+      {askA && (
+        <div onClick={() => setAskA(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 175, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 18, padding: '20px 22px', maxWidth: 440, width: '100%', boxShadow: '0 24px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>{askA.typ === 'konto' ? 'Konto für alle gleichen Namen ändern?' : 'Notiz für alle gleichen Namen?'}</div>
+            <div style={{ fontSize: 13.5, color: C.sub, lineHeight: 1.55, marginBottom: 16 }}>„{String(askA.name || '').slice(0, 50)}" kommt {askA.keys.length}× vor. Soll {askA.typ === 'konto' ? <>das Konto <b style={{ color: C.txt }}>{(accounts.find(a => a.key === askA.val) || {}).label || askA.val}</b></> : <>die Notiz <b style={{ color: C.txt }}>„{askA.val.slice(0, 80)}"</b></>} für alle {askA.keys.length} Zeilen gelten oder nur für diese eine?</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button onClick={() => applyAskA(true)} style={{ ...btnP, justifyContent: 'center', borderRadius: 11 }}>Alle {askA.keys.length} Zeilen</button>
+              <button onClick={() => applyAskA(false)} style={{ ...btnS, justifyContent: 'center', borderRadius: 11 }}>Nur diese Zeile</button>
+            </div>
           </div>
-        </div>); })}
-      {list.length > shownL.length && <button onClick={() => setListLimit(l => l + 120)} style={{ ...btnS, width: '100%', justifyContent: 'center', borderRadius: 12 }}>Mehr anzeigen ({shownL.length} von {list.length})</button>}
-    </>);
+        </div>)}
+      {pvL && (
+        <div onClick={closePv} style={{ position: 'fixed', inset: 0, background: 'rgba(8,8,10,0.85)', zIndex: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 16, width: 'min(960px, 100%)', height: 'min(90vh, 1100px)', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid ' + C.bdr }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid ' + C.bdr }}><b style={{ flex: 1, fontSize: 15, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pvL.title || 'Beleg'}</b>{pvL.url && <a href={pvL.url} target="_blank" rel="noreferrer" style={{ ...sm, textDecoration: 'none' }}>In neuem Tab</a>}<button onClick={closePv} style={{ ...sm, background: C.txt, color: C.bg, border: 'none' }}>Schließen</button></div>
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.surf2 }}>
+              {pvL.loading && <span style={{ color: C.sub }}>Beleg wird geladen …</span>}
+              {pvL.error && <span style={{ color: C.red }}>Beleg konnte nicht geöffnet werden: {pvL.error}</span>}
+              {pvL.url && (pvL.isPdf ? <iframe title="Beleg" src={pvL.url} style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }} /> : <img alt="Beleg" src={pvL.url} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />)}
+            </div>
+          </div>
+        </div>)}
+    </div>);
   };
 
   return (<>
@@ -577,9 +638,9 @@ export default function SevdeskImport(props) {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 12 }}>
           <Stat l="Ausgaben" v={stats.ausg} /><Stat l="Einnahmen" v={stats.einn} /><Stat l="✅ Passt" v={stats.passt} c={C.grn} /><Stat l="⚠ Hinweise" v={stats.hinweis} c={stats.hinweis ? C.amb : C.sub} /><Stat l="❌ Fehlt" v={stats.fehlt} c={stats.fehlt ? C.red : C.sub} />{dMatch && <Stat l="Nur in DATEV" v={dMatch.onlyDatev.length} c={dMatch.onlyDatev.length ? C.amb : C.sub} />}
         </div>
-        <div style={{ fontSize: 12.5, color: C.sub, marginTop: 10, lineHeight: 1.5 }}>{bankMatch ? 'Kontoauszug geladen (' + bankRowsY.length + ' Umsätze). ' : 'Kein Kontoauszug geladen. '}{dMatch ? 'DATEV geladen (' + datevRowsY.length + ' Zeilen). ' : 'Keine DATEV-Datei geladen. '}Bei jeder Zeile kannst du ein fehlendes PDF direkt hochladen, sie <b>für später</b> als To-do vormerken oder <b>ignorieren</b>. Gebucht wird erst in Schritt 3.</div>
+        <div style={{ fontSize: 12.5, color: C.sub, marginTop: 10, lineHeight: 1.5 }}>{bankMatch ? 'Kontoauszug geladen (' + bankRowsY.length + ' Umsätze). ' : 'Kein Kontoauszug geladen. '}{dMatch ? 'DATEV geladen (' + datevRowsY.length + ' Zeilen). ' : 'Keine DATEV-Datei geladen. '}Bei jeder Zeile kannst du ein fehlendes PDF direkt hochladen, sie als <b>To-do</b> vormerken oder <b>ignorieren</b>. Gebucht wird erst in Schritt 3.</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-          {[['alle', 'Alle'], ['ausgaben', 'Ausgaben'], ['einnahmen', 'Einnahmen'], ['passt', '✅ Passt'], ['hinweis', '⚠ Hinweise'], ['fehlt', '❌ Fehlt']].map(([k, t]) => (
+          {[['alle', 'Alle'], ['ausgaben', 'Ausgaben'], ['einnahmen', 'Einnahmen'], ['passt', '✅ Passt'], ['hinweis', '⚠ Hinweise'], ['fehlt', '❌ Fehlt'], ['ignoriert', '🚫 Ignoriert']].map(([k, t]) => (
             <button key={k} onClick={() => setFilt(k)} style={{ background: filt === k ? C.txt : C.surf2, color: filt === k ? C.bg : C.txt, border: '1px solid ' + (filt === k ? C.txt : C.bdr), borderRadius: 999, padding: '6px 13px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{t}</button>))}
           {aiReadDoc && kiOpen > 0 && <button onClick={readMarked} disabled={analysing} style={{ ...btnS, background: AI_GRADIENT, color: '#fff', border: 'none', padding: '6px 13px', fontSize: 12.5 }}>{analysing ? (anaProg || 'KI liest …') : 'KI liest ' + kiOpen + ' markierte PDFs'}</button>}
         </div>
@@ -663,14 +724,14 @@ export default function SevdeskImport(props) {
       {dMatch && dMatch.onlyDatev.length > 0 && (
         <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.amb, 0.5) }}>
           <div style={{ fontSize: 15, fontWeight: 700 }}>In DATEV, aber nicht im Import · {dMatch.onlyDatev.length}</div>
-          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>Diese Buchungen des Steuerberaters finden sich nicht in deinen sevDesk-Dateien. Fehlt etwas, lade die Datei oben nach; sonst „Für später" (To-do) oder „Ignorieren".</div>
+          <div style={{ fontSize: 12.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>Diese Buchungen des Steuerberaters finden sich nicht in deinen sevDesk-Dateien. Fehlt etwas, lade die Datei oben nach; sonst „To-do" oder „Ignorieren".</div>
           <div style={{ maxHeight: 280, overflowY: 'auto', marginTop: 8 }}>
             {dMatch.onlyDatev.map((d, i) => { const a = datevAct['d' + i]; return (
               <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 2px', borderTop: '1px solid ' + C.sep, fontSize: 12.5, opacity: a === 'ignore' ? 0.45 : 1 }}>
                 <span style={{ ...NUM, color: C.sub, whiteSpace: 'nowrap' }}>{d.datum ? d.datum.split('-').reverse().join('.') : '—'}</span>
                 <span style={{ flex: 1, minWidth: 0, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name || d.beschreibung || '—'}{d.nummer ? ' · ' + d.nummer : ''}</span>
                 <span style={{ ...NUM, whiteSpace: 'nowrap' }}>{fmt(d.brutto)}</span>
-                <button onClick={() => setDatevAct(x => ({ ...x, ['d' + i]: a === 'later' ? null : 'later' }))} style={{ ...btnS, padding: '4px 10px', fontSize: 12, background: a === 'later' ? hexA(C.pri, 0.16) : C.surf2 }}>{a === 'later' ? '✓ Für später' : 'Für später'}</button>
+                <button onClick={() => setDatevAct(x => ({ ...x, ['d' + i]: a === 'later' ? null : 'later' }))} style={{ ...btnS, padding: '4px 10px', fontSize: 12, background: a === 'later' ? hexA(C.pri, 0.16) : C.surf2 }}>{a === 'later' ? '✓ To-do' : 'To-do'}</button>
                 <button onClick={() => setDatevAct(x => ({ ...x, ['d' + i]: a === 'ignore' ? null : 'ignore' }))} style={{ ...btnS, padding: '4px 10px', fontSize: 12 }}>{a === 'ignore' ? '✓ Ignoriert' : 'Ignorieren'}</button>
               </div>); })}
           </div>
@@ -707,7 +768,7 @@ export default function SevdeskImport(props) {
         <div style={{ fontSize: 11.5, fontWeight: 800, color: C.pri, letterSpacing: '0.05em', marginBottom: 2 }}>SCHRITT 3 VON 3</div>
         <div style={{ fontSize: 15, fontWeight: 700 }}>{belegeGo.length} Belege, {rechGo.length} Rechnungen{xGo.length ? ' und ' + xGo.length + ' Buchungen aus dem Kontoauszug' : ''}{year !== 'alle' ? ' aus ' + year : ''} verbuchen</div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', margin: '10px 0' }}>
-          <Stat l="✅ Passt" v={stats.passt} c={C.grn} /><Stat l="⚠ Hinweise" v={stats.hinweis} c={stats.hinweis ? C.amb : C.sub} /><Stat l="❌ Fehlt" v={stats.fehlt} c={stats.fehlt ? C.red : C.sub} /><Stat l="Für später (To-do)" v={Object.keys(later).filter(k => later[k]).length + Object.values(datevAct).filter(v => v === 'later').length} />
+          <Stat l="✅ Passt" v={stats.passt} c={C.grn} /><Stat l="⚠ Hinweise" v={stats.hinweis} c={stats.hinweis ? C.amb : C.sub} /><Stat l="❌ Fehlt" v={stats.fehlt} c={stats.fehlt ? C.red : C.sub} /><Stat l="To-do" v={Object.keys(later).filter(k => later[k]).length + Object.values(datevAct).filter(v => v === 'later').length} />
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.txt, cursor: 'pointer', marginBottom: 6 }}><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> Alles sofort als bezahlt buchen (sonst bleiben Posten offen, die nicht im Kontoauszug gefunden wurden)</label>
         <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>{progress || 'Beim Verbuchen landen Buchungen in den Konten, PDFs im Beleg-Speicher, Kunden und Rechnungen im Rechnungsbereich, Kontoauszüge und weitere Unterlagen bei den Steuerunterlagen.'}</div>
@@ -749,7 +810,7 @@ export default function SevdeskImport(props) {
             <div style={{ fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
               Es werden <b>{belegeGo.length} Belege</b>, <b>{rechGo.length} Rechnungen</b>{xGo.length ? <> und <b>{xGo.length} Buchungen aus dem Kontoauszug</b></> : null} {allYears ? 'aus allen Jahren' : 'aus ' + year} gebucht{bankMatch ? ' – im Kontoauszug gefundene als bezahlt, die übrigen als offen' : ' – als offen'}{confirmed ? ' (du hast „sofort als bezahlt" gewählt)' : ''}. Andere Jahre und bereits vorhandene Buchungen bleiben unberührt.
               {stornos > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Davon {stornos} Storno/Gutschriften – negativ gebucht.</div>}
-              {laterN > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Für {laterN} Zeilen entsteht ein To-do („Für später").</div>}
+              {laterN > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>Für {laterN} Zeilen entsteht ein To-do.</div>}
               {bank.length > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>{bank.length} Kontoauszug-Datei(en) werden für den Steuerberater abgelegt.</div>}
               {extra.length > 0 && <div style={{ color: C.sub, fontSize: 12.5 }}>{extra.length} weitere Unterlage(n) kommen in die Steuerunterlagen (KI liest sie aus).</div>}
               <div style={{ color: C.sub, fontSize: 12.5 }}>Bis jetzt wurde nichts gespeichert – alles liegt nur in diesem Browser.</div>
@@ -885,7 +946,7 @@ function Table({ ui, statusOf, filt, later, setLater, upPdf, setUpPdf, eff, ocr,
                   <td style={{ ...td, minWidth: 190, maxWidth: 320 }}>{st.chips.map((c, i) => { const col = c.c === 'ok' ? C.grn : c.c === 'miss' ? C.red : c.c === 'ai' ? C.pri : C.amb; return <span key={i} style={{ display: 'inline-block', margin: '0 4px 4px 0', fontSize: 11, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 7px', lineHeight: 1.35 }}>{c.t}</span>; })}{!st.chips.length && <span style={{ color: C.mut }}>—</span>}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
                     {!hasPdf && <label style={{ ...small, display: 'inline-block', marginRight: 5 }}>PDF hochladen<input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) setUpPdf(p => ({ ...p, [key]: { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) } })); }} /></label>}
-                    <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} style={{ ...small, marginRight: 5, background: later[key] ? hexA(C.pri, 0.16) : C.surf2 }}>{later[key] ? '✓ Für später' : 'Für später'}</button>
+                    <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} style={{ ...small, marginRight: 5, background: later[key] ? hexA(C.pri, 0.16) : C.surf2 }}>{later[key] ? '✓ To-do' : 'To-do'}</button>
                     <button onClick={() => setSkip(sk => ({ ...sk, [key]: !sk[key] }))} style={small}>{skip[key] ? '✓ Ignoriert' : 'Ignorieren'}</button>
                   </td></>); })()}
               </tr>
