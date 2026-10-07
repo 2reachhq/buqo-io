@@ -211,7 +211,6 @@ const DEF_INV_BODY = 'vielen Dank für Ihr Vertrauen. Für die erbrachten Leistu
 const DEF_INV_HEADER = 'Sehr geehrte Damen und Herren,\n\n'+DEF_INV_BODY;
 const greetingFor = (cust)=>{ let last=(cust&&cust.lastName)?String(cust.lastName).trim():''; if(!last){ const nm=String((cust&&cust.name)||'').trim(); const isCompany=/\b(gmbh|ag|ug|kg|ohg|gbr|mbh|e\.?k\.?|e\.?v\.?|co\.?|ltd|inc|se)\b/i.test(nm); last=(nm&&!isCompany)?nm.split(/\s+/).pop():''; } if(cust&&cust.anrede==='herr'&&last) return 'Sehr geehrter Herr '+last+','; if(cust&&cust.anrede==='frau'&&last) return 'Sehr geehrte Frau '+last+','; return 'Sehr geehrte Damen und Herren,'; };
 const DEF_INV_FOOTER = 'Bitte überweisen Sie den Rechnungsbetrag innerhalb von 14 Tagen ohne Abzug auf das unten genannte Konto.\n\nMit freundlichen Grüßen';
-const mkItems  = names => names.map(n=>newItem(n));
 const safeName = s => {
   const map = {'ä':'ae','ö':'oe','ü':'ue','Ä':'Ae','Ö':'Oe','Ü':'Ue','ß':'ss'};
   let t = (s||'').toString().trim().replace(/[äöüÄÖÜß]/g, m=>map[m]);
@@ -255,7 +254,7 @@ const emptyProp    = () => ({income:emptyPropInc(), expenses:[]});
 const emptyMonth   = () => ({
   props: Object.fromEntries(PROPS.map(k=>[k,emptyProp()])),
   unternehmen: {clients:[], items:[]},
-  privat: {items:mkItems(PRIV_DEF)},
+  privat: {items:[]},
 });
 
 /* ══ Calculations ══ */
@@ -1759,6 +1758,29 @@ function App({session}) {
       return nd;
     });
     setNames(n=>({...n, cleanedUnterDefaults:true}));
+  },[ready]);
+
+  /* Einmalig: leere Standard-Vorlagenzeilen (Privat: Lebensmittel, Hobbys & Freizeit …) aus allen Monaten entfernen */
+  useEffect(()=>{
+    if(!ready || names.cleanedPrivDefaults) return;
+    const DEF = new Set(PRIV_DEF);
+    setData(prev=>{
+      const nd = JSON.parse(JSON.stringify(prev));
+      Object.keys(nd).forEach(y=>{
+        if(!/^\d+$/.test(y)) return;
+        Object.keys(nd[y]||{}).forEach(m=>{
+          const md = nd[y][m];
+          if(md && md.privat && Array.isArray(md.privat.items)){
+            md.privat.items = md.privat.items.filter(it=>
+              !( DEF.has(it.name) && !num(it.amount) && !it.recurring
+                 && !(it.note && it.note.trim()) && !it.filePath && !it.fileData )
+            );
+          }
+        });
+      });
+      return nd;
+    });
+    setNames(n=>({...n, cleanedPrivDefaults:true}));
   },[ready]);
 
   const getMD = (y,m) => data[y]?.[m] || emptyMonth();
