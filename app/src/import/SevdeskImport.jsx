@@ -61,6 +61,7 @@ export default function SevdeskImport(props) {
   const [listLimit, setListLimit] = useState(120);
   const [artTab, setArtTab] = useState('alle');    // Reiter: alle | belege (Ausgaben) | rechnungen (Einnahmen)
   const [sortBy, setSortBy] = useState('datum');    // Sortierung innerhalb der Gruppen: datum | name | betrag
+  const [kiApplied, setKiApplied] = useState({});   // Zeilen, bei denen der KI-Text schon in die Notiz geschrieben wurde
   const [forceDup, setForceDup] = useState({});    // als „doppelt/schon vorhanden" erkannte Zeilen, die der Nutzer trotzdem importieren will
   const [noteOpen, setNoteOpen] = useState({});     // Notizzeile unter der Buchung aufgeklappt
   const [botOpen, setBotOpen] = useState(false);     // KI-Helfer im Vollbild aufgeklappt
@@ -131,6 +132,17 @@ export default function SevdeskImport(props) {
     }
     if (list.length) { setBank(b => [...b, ...list]); setResult(null); }
   };
+  // KI-Texte → Notiz: PDF-Lesung (Urteil/Beschreibung) bzw. Begründung der Sortierung ersetzen die Notiz, einmal je Zeile (auch für schon vorhandene Ergebnisse)
+  React.useEffect(() => {
+    const add = {}; const keys = new Set([...Object.keys(ocr), ...Object.keys(ai)]);
+    keys.forEach(key => {
+      if (kiApplied[key]) return; const o = ocr[key]; const a = ai[key];
+      const txt = (o && !o.error && (o.urteil || o.beschreibung)) || (a && a.why) || ''; if (!txt) return;
+      add[key] = 'KI: ' + String(txt).slice(0, 220);
+    });
+    const ks = Object.keys(add); if (!ks.length) return;
+    setNotes(n => ({ ...n, ...add })); setKiApplied(p => { const x = { ...p }; ks.forEach(k => { x[k] = true; }); return x; });
+  }, [ocr, ai]); // eslint-disable-line
   // Rückgängig (Strg/Cmd+Z) und Wiederholen (Strg/Cmd+Shift+Z) für Änderungen in der Abgleich-Tabelle
   const histRef = React.useRef({ stack: [], redo: [], cur: null, t: 0, skipNext: false });
   const [undoN, setUndoN] = useState(0);
@@ -193,7 +205,7 @@ export default function SevdeskImport(props) {
           if (f.datev && f.datev.length) setDatev(f.datev.map(x => ({ file: x.file, name: x.file.name })));
           if (f.extra && f.extra.length) setExtra(f.extra.map(x => ({ file: x.file, name: x.file.name })));
         }
-        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setOvr(st.ovr || {}); setForceDup(st.forceDup || {}); setDraftInfo({ savedAt: s.savedAt }); }
+        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setOvr(st.ovr || {}); setForceDup(st.forceDup || {}); setKiApplied(st.kiApplied || {}); setDraftInfo({ savedAt: s.savedAt }); }
       } catch (e) { /* kein Zwischenspeicher (z. B. privater Modus) */ }
       restored.current = true;
     })();
@@ -213,10 +225,10 @@ export default function SevdeskImport(props) {
     const t = setTimeout(() => {
       if (!anyFile()) return;
       const savedAt = Date.now();
-      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
+      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
     }, 700);
     return () => clearTimeout(t);
-  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, bank, belege && belege.mapping, rech && rech.mapping]);
+  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, bank, belege && belege.mapping, rech && rech.mapping]);
   const discardDraft = () => { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setBelege(null); setRech(null); setZipB(null); setZipR(null); setBank([]); setDatev([]); setDatevRows([]); setExtra([]); setRowAcct({}); setSkip({}); setNotes({}); setAi({}); setOcr({}); setOcrOff({}); setRecurOff({}); setLater({}); setDatevAct({}); setUpPdf({}); setOvr({}); setSel({}); setYearChosen(false); setStep(1); setDraftInfo(null); setResult(null); };
   const build = (src, zip, exist) => {
     if (!src) return null;
@@ -290,7 +302,6 @@ export default function SevdeskImport(props) {
       const rows = allGo.map(({ r, k }) => ({ key: k + r.idx, kind: k === 'r' ? 'ein' : r.kind, datum: r.datum, name: r.name, beschreibung: r.beschreibung, kategorie: r.kategorie, brutto: r.brutto }));
       const { results, missing } = await aiClassify(rows, hint, (d, t) => setAiProg('KI sortiert … ' + d + ' / ' + t));
       setAi(prev => ({ ...prev, ...results }));
-      setNotes(prev => { const n = { ...prev }; Object.entries(results).forEach(([key, v]) => { if (v && v.why) n[key] = 'KI: ' + String(v.why).slice(0, 200); }); return n; });
       setAiProg(Object.keys(results).length + ' Posten sortiert' + (missing.length ? ', ' + missing.length + ' ohne Vorschlag (bitte selbst wählen)' : '') + '.');
     } catch (e) { setErr('KI-Sortierung fehlgeschlagen: ' + (e.message || e)); setAiProg(''); }
     setAiBusy(false);
@@ -322,7 +333,7 @@ export default function SevdeskImport(props) {
     const worker = async () => {
       while (i < todo.length) {
         const [k, r, z, src0] = todo[i++]; const src = src0 || upPdf[k + r.idx];
-        try { let bytes, fname = r.file; if (src) { bytes = await src.data(); fname = src.name; } else { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); bytes = await e.data(); } const res = await withRetry(() => aiReadDoc(bytes, fname, { kind: r.kind, name: r.name, brutto: r.brutto })); setOcr(p => ({ ...p, [k + r.idx]: res })); const kn = res.urteil || res.beschreibung; if (kn) setNotes(n => ({ ...n, [k + r.idx]: 'KI: ' + String(kn).slice(0, 220) })); }
+        try { let bytes, fname = r.file; if (src) { bytes = await src.data(); fname = src.name; } else { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); bytes = await e.data(); } const res = await withRetry(() => aiReadDoc(bytes, fname, { kind: r.kind, name: r.name, brutto: r.brutto })); setOcr(p => ({ ...p, [k + r.idx]: res })); }
         catch (e) { setOcr(p => ({ ...p, [k + r.idx]: { error: String(e.message || e).slice(0, 80) } })); }
         done++; setAnaDone(d => d + 1); setAnaProg('KI liest PDFs … ' + done + ' / ' + todo.length);
       }
@@ -616,7 +627,7 @@ export default function SevdeskImport(props) {
                     <td style={tdb}><select value={String(e.mwst)} onChange={ev => setO({ mwst: +ev.target.value })} style={ctl}>{[0, 7, 19].map(v => <option key={v} value={v}>{v} %</option>)}{![0, 7, 19].includes(+e.mwst) && <option value={e.mwst}>{e.mwst} %</option>}</select></td>
                     <td style={tdb}><select value={acctOf(k, r)} onChange={ev => changeKonto(k, r, ev.target.value)} style={ctl}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></td>
                     <td style={{ ...tdb, ...NUM, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: aus ? C.txt : C.grn }}>{aus ? '−' : '+'}{fmt(r.brutto)}</td>
-                    <td style={tdb} title={st.chips.map(c => c.t).join(' · ')}><div style={{ display: 'flex', gap: 4, alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap' }}>{later[key] && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.pri, background: hexA(C.pri, 0.13), borderRadius: 6, padding: '2px 6px' }}>To-do</span>}{shown.map((c, i) => { const col = chipCol(c.c); return <span key={i} style={{ fontSize: 10.5, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 6px', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 90, flexShrink: 1 }}>{c.t}</span>; })}{more > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.sub }}>+{more}</span>}{!st.chips.length && !later[key] && <span style={{ fontSize: 11, color: C.grn, fontWeight: 700 }}>✓ passt</span>}</div></td>
+                    <td style={tdb} title={st.chips.map(c => c.t).join(' · ')}><div style={{ display: 'flex', gap: 4, alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap' }}>{shown.map((c, i) => { const col = chipCol(c.c); return <span key={i} style={{ fontSize: 10.5, fontWeight: 700, color: col, background: hexA(col, 0.12), border: '1px solid ' + hexA(col, 0.35), borderRadius: 6, padding: '2px 6px', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 90, flexShrink: 1 }}>{c.t}</span>; })}{more > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.sub }}>+{more}</span>}{!st.chips.length && <span style={{ fontSize: 11, color: C.grn, fontWeight: 700 }}>✓ passt</span>}</div></td>
                     <td style={{ ...tdb, textAlign: 'center', whiteSpace: 'nowrap' }}>
                       {filt === 'doppelt' && <button onClick={() => setForceDup(p => ({ ...p, [key]: true }))} title="Trotzdem importieren" style={{ ...icoBtn(true, C.grn), marginRight: 4 }}><Ic p={P.plus} sz={14} col="#fff" /></button>}
                       <button onClick={() => setLater(p => ({ ...p, [key]: !p[key] }))} title={later[key] ? 'To-do vorgemerkt – klicken zum Entfernen' : 'Als To-do vormerken'} style={{ ...icoBtn(!!later[key], C.act), marginRight: 4 }}><Ic p={P.bell} sz={14} col={later[key] ? C.actTxt : C.sub} /></button>
