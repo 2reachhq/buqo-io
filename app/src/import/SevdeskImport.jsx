@@ -6,7 +6,7 @@ import { decodeText, parseCSV, autoMap, detectFormat, FORMAT_LABEL, normalizeRow
 import { readZipEntries, baseName } from './zip.js';
 import { parseDatev } from './datevCompare.js';
 import { matchBank, matchDatev } from './reconcile.js';
-import { groupContext, parseBotJson, matchFilter, normalizeActions } from './importBot.js';
+import { yearOverview, relevantRows, groupContext, parseBotJson, matchFilter, normalizeActions } from './importBot.js';
 
 const { useState, useMemo } = React;
 const MAP_FIELDS = [['datum','Datum'],['nummer','Nummer'],['name','Name / Kontakt'],['beschreibung','Beschreibung'],['brutto','Brutto'],['netto','Netto'],['mwst','MwSt-Satz'],['kategorie','Kategorie'],['status','Status'],['zahldatum','Zahldatum'],['faellig','Fällig']];
@@ -21,7 +21,7 @@ const idbDel = async (k) => { const d = await idbOpen(); return new Promise((res
 const normN = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
 
 export default function SevdeskImport(props) {
-  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows, aiAsk, onRemember } = props;
+  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows, aiAsk, onRemember, taxFacts } = props;
   const { C, SC, SS, NUM, fmt, Ic, P, hexA, AI_GRADIENT, MONTHS } = ui;
   const [step, setStep] = useState(1);              // 1 Hochladen · 2 Abgleich · 3 Wiederkehrendes + Verbuchen
   const [belege, setBelege] = useState(null);      // {fileName, parsed, format, mapping, kind}
@@ -59,6 +59,9 @@ export default function SevdeskImport(props) {
   const [view, setView] = useState('liste');       // Abgleich: liste | tabelle
   const [openRow, setOpenRow] = useState(null);     // aufgeklappte Zeile (Felder ändern)
   const [listLimit, setListLimit] = useState(120);
+  const [artTab, setArtTab] = useState('alle');    // Reiter: alle | belege (Ausgaben) | rechnungen (Einnahmen)
+  const [sortBy, setSortBy] = useState('datum');    // Sortierung innerhalb der Gruppen: datum | name | betrag
+  const [botOpen, setBotOpen] = useState(false);     // KI-Helfer im Vollbild aufgeklappt
   const [groupBy, setGroupBy] = useState('monat');   // Abgleich-Tabelle gruppieren: monat | name | konto
   const [bigList, setBigList] = useState(false);     // Vollbild der Abgleich-Tabelle
   const [askA, setAskA] = useState(null);             // Rückfrage „nur diese oder alle gleichen Namen?"
@@ -136,7 +139,7 @@ export default function SevdeskImport(props) {
       if (o.kategorie && CATS.includes(o.kategorie) && r.kind === 'aus') out.kategorie = o.kategorie;
       if (o.beschreibung) out.beschreibung = String(o.beschreibung).slice(0, 120);
       if (o.nummer && !r.nummer) out.nummer = String(o.nummer).slice(0, 40);
-      if ([0, 7, 19].includes(o.mwst) && o.brutto != null && Math.abs(o.brutto - r.brutto) < 0.02 && o.mwst !== r.mwst) { out.mwst = o.mwst; out.netto = Math.round(r.brutto / (1 + o.mwst / 100) * 100) / 100; }
+      if ([0, 7, 19].includes(o.mwst) && (o.brutto == null || Math.abs(o.brutto - r.brutto) < Math.max(0.5, r.brutto * 0.01)) && o.mwst !== r.mwst) { out.mwst = o.mwst; out.netto = Math.round(r.brutto / (1 + o.mwst / 100) * 100) / 100; }
     }
     const v = ovr[key]; // Eingaben des Nutzers (Liste, Sammelaktionen, KI-Helfer) haben Vorrang vor der PDF-Lesung
     if (v) {
@@ -284,12 +287,12 @@ export default function SevdeskImport(props) {
   // KI liest PDFs (zugeordnete PDFs der gewählten Zeilen), 3 gleichzeitig
   const runOcr = async (targets) => {
     if (!aiReadDoc) return;
-    const todo = targets.filter(([k, r, z]) => r.file && z && !ocr[k + r.idx]); if (!todo.length) return;
+    const todo = targets.filter(([k, r, z, src]) => ((r.file && z) || src || upPdf[k + r.idx]) && !ocr[k + r.idx]); if (!todo.length) return;
     let done = 0, i = 0;
     const worker = async () => {
       while (i < todo.length) {
-        const [k, r, z] = todo[i++];
-        try { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); const bytes = await e.data(); const res = await withRetry(() => aiReadDoc(bytes, r.file, { kind: r.kind, name: r.name, brutto: r.brutto })); setOcr(p => ({ ...p, [k + r.idx]: res })); }
+        const [k, r, z, src0] = todo[i++]; const src = src0 || upPdf[k + r.idx];
+        try { let bytes, fname = r.file; if (src) { bytes = await src.data(); fname = src.name; } else { const e = z.entries.find(x => x.name === r.file); if (!e) throw new Error('Datei fehlt'); bytes = await e.data(); } const res = await withRetry(() => aiReadDoc(bytes, fname, { kind: r.kind, name: r.name, brutto: r.brutto })); setOcr(p => ({ ...p, [k + r.idx]: res })); }
         catch (e) { setOcr(p => ({ ...p, [k + r.idx]: { error: String(e.message || e).slice(0, 80) } })); }
         done++; setAnaDone(d => d + 1); setAnaProg('KI liest PDFs … ' + done + ' / ' + todo.length);
       }
@@ -298,13 +301,13 @@ export default function SevdeskImport(props) {
   };
   // Aufrufe der KI-Funktion bei kurzen Netzwerkfehlern bis zu zweimal wiederholen
   const withRetry = async (fn) => { for (let i = 0; ; i++) { try { return await fn(); } catch (e) { if (i >= 2 || !/Failed to send|fetch|network|timeout|timed out|50[234]/i.test(String((e && e.message) || e))) throw e; await new Promise(r => setTimeout(r, 1500 * (i + 1))); } } };
-  const kiTargets = (only) => [...belegeGo.map(r => ['b', r, zipB]), ...rechGo.map(r => ['r', r, zipR])].filter(([k, r]) => only ? (kiAll || kiRows[k + r.idx]) : (kiAll || kiRows[k + r.idx] || dupFlag[k + r.idx] || NOTE_RE.test(String(notes[k + r.idx] || ''))));
+  const kiTargets = (only) => [...belegeGo.map(r => ['b', r, zipB]), ...rechGo.map(r => ['r', r, zipR]), ...xGo.filter(r => upPdf['x' + r.idx]).map(r => ['x', r, null])].filter(([k, r]) => only ? (kiAll || kiRows[k + r.idx]) : (kiAll || kiRows[k + r.idx] || dupFlag[k + r.idx] || NOTE_RE.test(String(notes[k + r.idx] || ''))));
   // „Abgleich starten": Kontoauszüge (PDF/Foto) und DATEV-Dateien lesen, markierte/auffällige PDFs von der KI prüfen lassen – gebucht wird noch nichts
   const analyze = async () => {
     if (analysing || (!belegeGo.length && !rechGo.length && !bank.length)) return;
     setAnalysing(true); setErr('');
     try {
-      const kiTodo = kiTargets(false).filter(([k, r]) => r.file && !ocr[k + r.idx]).length; const toRead = bank.filter(b => !b.rows).length;
+      const kiTodo = kiTargets(false).filter(([k, r]) => (r.file || upPdf[k + r.idx]) && !ocr[k + r.idx]).length; const toRead = bank.filter(b => !b.rows).length;
       setAnaTotal((aiBankRows ? toRead : 0) + datev.length + (aiReadDoc ? kiTodo : 0)); setAnaDone(0);
       // Kontoauszüge (PDF/Foto): 3 gleichzeitig, mit Wiederholung bei Netzwerkfehlern
       const nb = [...bank]; const idxs = nb.map((b, i) => i).filter(i => !nb[i].rows && aiBankRows); let n = 0, q = 0;
@@ -319,7 +322,7 @@ export default function SevdeskImport(props) {
     } catch (e) { setErr('Abgleich fehlgeschlagen: ' + (e.message || e)); }
     setAnalysing(false); setAnaProg(''); setAnaTotal(0); setAnaDone(0);
   };
-  const kiOpen = kiTargets(true).filter(([k, r]) => r.file && !ocr[k + r.idx]).length;
+  const kiOpen = kiTargets(true).filter(([k, r]) => (r.file || upPdf[k + r.idx]) && !ocr[k + r.idx]).length;
   const readMarked = async () => { if (analysing) return; setAnalysing(true); setAnaTotal(kiOpen); setAnaDone(0); try { await runOcr(kiTargets(true)); } catch (e) { setErr(String(e.message || e)); } setAnalysing(false); setAnaProg(''); setAnaTotal(0); setAnaDone(0); };
   const run = async () => {
     if (busy || (!belegeGo.length && !rechGo.length && !xGo.length)) return;
@@ -345,7 +348,7 @@ export default function SevdeskImport(props) {
 
   // ── Abgleich-Liste (Kontoauszug als Hauptquelle) ──
   const dispRows = [...(B ? B.rows : []).filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'b', r })), ...(R ? R.rows : []).filter(r => r.inYear && !r.dup && !r.cancelled && r.brutto > 0 && r.datum).map(r => ({ k: 'r', r })), ...xRows.map(r => ({ k: 'x', r }))];
-  const unitOf = ({ k, r }) => { const e = eff(k, r); const key = k + r.idx; return { key, k, kind: r.kind, datum: r.datum, name: e.name, brutto: r.brutto, kategorie: e.kategorie, konto: acctOf(k, r), cls: statusOf(k, r).cls, hasFile: !!(r.file || upPdf[key]), src: r.bankOnly ? 'bank' : 'csv', beschreibung: r.beschreibung, notiz: notes[key] || '', skip: !!skip[key] }; };
+  const unitOf = ({ k, r }) => { const e = eff(k, r); const key = k + r.idx; return { key, k, kind: r.kind, datum: r.datum, name: e.name, brutto: r.brutto, kategorie: e.kategorie, konto: acctOf(k, r), cls: statusOf(k, r).cls, hasFile: !!(r.file || upPdf[key]), src: r.bankOnly ? 'bank' : 'csv', beschreibung: r.beschreibung, notiz: notes[key] || '', mwst: e.mwst, todo: !!later[key], skip: !!skip[key] }; };
   const selKeys = Object.keys(sel).filter(x => sel[x]);
   // Sammelaktion auf alle ausgewählten Zeilen
   const bulk = (patch, keys) => {
@@ -366,16 +369,16 @@ export default function SevdeskImport(props) {
   };
   const describeAction = (a) => { const f = a.filter || {}; const fp = [f.name && 'Name „' + [].concat(f.name).join('/') + '"', f.von && 'ab ' + f.von.split('-').reverse().join('.'), f.bis && 'bis ' + f.bis.split('-').reverse().join('.'), f.art && (f.art === 'ein' ? 'Einnahmen' : 'Ausgaben'), f.kategorie && 'Kategorie ' + f.kategorie, f.ohneBeleg && 'ohne Beleg', f.status && 'Status ' + f.status].filter(Boolean).join(', ');
     const sp = [a.set.kategorie && 'Kategorie → ' + a.set.kategorie, a.set.konto && 'Konto → ' + ((accounts.find(x => x.key === a.set.konto) || {}).label || a.set.konto), a.set.mwst != null && 'MwSt → ' + a.set.mwst + ' %', a.set.notiz && 'Notiz „' + a.set.notiz + '"'].filter(Boolean).join(', ');
-    const t = { auswaehlen: 'Auswählen', setzen: 'Ändern: ' + sp, ignorieren: 'Ignorieren (nicht importieren)', wiederherstellen: 'Wiederherstellen', notiz: 'Notiz setzen: ' + sp, merken: 'Merken: ' + a.text }[a.typ];
+    const t = { auswaehlen: 'Auswählen', setzen: 'Ändern: ' + sp, ignorieren: 'Ignorieren (nicht importieren)', todo: 'Als To-do vormerken', wiederherstellen: 'Wiederherstellen', notiz: 'Notiz setzen: ' + sp, merken: 'Merken: ' + a.text }[a.typ];
     return t + (a.typ !== 'merken' && fp ? ' · ' + fp : ''); };
   const sendBot = async () => {
     const text = botInput.trim(); if (!text || botBusy || !aiAsk) return;
     setBotInput(''); setBotMsgs(m => [...m, { role: 'user', text }]); setBotBusy(true); setBotPending(null);
     try {
-      const units = dispRows.map(unitOf); const ctx = groupContext(units);
-      const system = 'Du bist der Import-Helfer von Buqo (deutsche Buchhaltung). Der Nutzer gibt Anweisungen zu seiner Buchungsliste (Kontoauszug-Umsätze, Belege, Rechnungen). Antworte NUR mit minifiziertem JSON ohne Markdown: {"antwort":"…","aktionen":[…]}. "antwort": 1 bis 3 kurze, klare Sätze mit Zeilenumbrüchen (\\n), ohne Floskeln. Aktionen: {"typ":"auswaehlen|setzen|ignorieren|wiederherstellen|notiz|merken","filter":{"name":"Teil des Namens oder Liste","von":"YYYY-MM-DD","bis":"YYYY-MM-DD","art":"ein|aus","konto":"Schlüssel","kategorie":"…","min":0,"max":0,"status":"passt|hinweis|fehlt","ohneBeleg":true,"quelle":"bank|csv","text":"…"},"setzen":{"kategorie":"aus der Liste","konto":"Schlüssel","privat":true,"mwst":0|7|19,"notiz":"…"},"text":"…"}. "merken": text = kurzer Fakt über den Nutzer oder das Konto für die spätere Steuerberatung (max. 200 Zeichen). Notizen sind intern für den Steuer-Assistenten: sachlich festhalten, was gekauft/gebucht wurde und was steuerlich relevant sein kann. Nutze nur vorhandene Kategorien und Konten, erfinde nichts. Ist der Auftrag unklar, gib keine Aktion zurück und stelle in "antwort" eine kurze Rückfrage.';
-      const user = 'Konten (Schlüssel=Name): ' + accounts.map(a => a.key + '=' + a.label).join(', ') + '\nKategorien: ' + CATS.join(', ') + '\nListe: ' + units.length + ' Buchungen, zusammengefasst nach Name:\n' + ctx.join('\n') + '\n\nBisheriges Gespräch:\n' + botMsgs.slice(-6).map(m => (m.role === 'user' ? 'Nutzer: ' : 'Helfer: ') + m.text).join('\n') + '\n\nAuftrag: ' + text;
-      const out = parseBotJson(await aiAsk(system, user, { max: 1500 }));
+      const units = dispRows.map(unitOf); const ctx = groupContext(units); const ov = yearOverview(units); const rel = relevantRows(units, text + ' ' + botMsgs.slice(-2).map(m => m.text).join(' '));
+      const system = 'Du bist der Import-Helfer von Buqo (deutsche Buchhaltung/Steuer) für den sevDesk-Import. Du kennst die gesamte Liste des Jahres (Kontoauszug-Umsätze, Belege, Rechnungen, Konten, Beleg-Status, Notizen, MwSt) und kannst sie ändern. Du darfst im Internet recherchieren (web_search), wenn steuerliche oder buchhalterische Fragen es erfordern (z. B. Notar-, Gerichts-, Finanzamtskosten, Grunderwerbsteuer, Abschreibung, Vorsteuer bei Airbnb/Booking/Auslandsrechnungen). Wenn der Nutzer erklärt, wofür eine Buchung war, setze die Notiz (sachlich: was, wofür, steuerliche Einordnung, Quelle/Begründung) und passe Kategorie, MwSt und Konto an. Frage ihn bei Beleg-Wissen nicht doppelt, wenn du es sicher weißt. Hinweis: Umsätze nur aus dem Kontoauszug haben keine MwSt-Angabe (Standard 0 %, „MwSt prüfen"). Schlage die richtige MwSt vor (0, 7 oder 19) und setze sie, wenn der Nutzer es möchte oder es eindeutig ist (z. B. Airbnb/Booking-Vermittlungsgebühren = Reverse Charge/0 %, Bank-/Versicherungsgebühren = 0 %, Gehälter/Steuern = 0 %, Software/Material/Bewirtung nach Beleg). Antworte NUR mit minifiziertem JSON ohne Markdown: {"antwort":"…","aktionen":[…]}. "antwort": kurz, klar, mit Zeilenumbrüchen (\\n), ohne Floskeln; bei Steuerfragen mit knapper Begründung und Hinweis, dass der Steuerberater das bestätigen soll. Aktionen: {"typ":"auswaehlen|setzen|ignorieren|wiederherstellen|notiz|todo|merken","filter":{"name":"Teil des Namens oder Liste","von":"YYYY-MM-DD","bis":"YYYY-MM-DD","art":"ein|aus","konto":"Schlüssel","kategorie":"…","min":0,"max":0,"status":"passt|hinweis|fehlt","ohneBeleg":true,"quelle":"bank|csv","text":"Suchwort in Name/Beschreibung/Notiz"},"setzen":{"kategorie":"aus der Liste","konto":"Schlüssel","privat":true,"mwst":0|7|19,"notiz":"…"},"text":"…"}. "todo" = Zeilen als To-do vormerken. "merken": text = kurzer Fakt über den Nutzer oder das Konto für die spätere Steuerberatung (max. 200 Zeichen), z. B. „Airbnb-Gebühren: 0 % MwSt, Vermittlung für Ferienwohnung". Nutze nur vorhandene Kategorien und Konten, erfinde keine Zahlen. Ist der Auftrag unklar, gib keine Aktion zurück und stelle in "antwort" eine kurze Rückfrage. Alle Änderungen werden dem Nutzer zur Bestätigung gezeigt.';
+      const user = 'Konten (Schlüssel=Name): ' + accounts.map(a => a.key + '=' + a.label).join(', ') + '\nKategorien: ' + CATS.join(', ') + '\n\nÜBERBLICK:\n' + ov.join('\n') + (taxFacts && taxFacts.length ? '\n\nBekannte Fakten über den Nutzer:\n' + taxFacts.slice(-25).join('\n') : '') + '\n\nListe nach Name zusammengefasst:\n' + ctx.join('\n') + (rel.length ? '\n\nEinzelbuchungen zur Frage:\n' + rel.join('\n') : '') + '\n\nBisheriges Gespräch:\n' + botMsgs.slice(-8).map(m => (m.role === 'user' ? 'Nutzer: ' : 'Helfer: ') + m.text).join('\n') + '\n\nAuftrag: ' + text;
+      const out = parseBotJson(await aiAsk(system, user, { max: 3000, web: true }));
       const acts = normalizeActions(out.aktionen, { cats: CATS, accounts }).map(a => ({ ...a, keys: a.typ === 'merken' ? [] : units.filter(u => matchFilter(u, a.filter)).map(u => u.key), sample: units.filter(u => matchFilter(u, a.filter)).slice(0, 3).map(u => u.name) }));
       setBotMsgs(m => [...m, { role: 'ai', text: out.antwort || (acts.length ? 'Das würde ich tun:' : 'Das habe ich nicht verstanden – kannst du es anders formulieren?') }]);
       if (acts.length) setBotPending(acts);
@@ -389,6 +392,7 @@ export default function SevdeskImport(props) {
       else if (a.typ === 'ignorieren') { bulk({ skip: true }, a.keys); n += a.keys.length; }
       else if (a.typ === 'wiederherstellen') { bulk({ skip: false }, a.keys); n += a.keys.length; }
       else if (a.typ === 'setzen' || a.typ === 'notiz') { bulk(a.set, a.keys); n += a.keys.length; if (a.set.notiz || a.set.kategorie) { const f = a.filter || {}; const who = f.name ? [].concat(f.name).join('/') : 'Auswahl'; const per = [f.von && 'ab ' + f.von.split('-').reverse().join('.'), f.bis && 'bis ' + f.bis.split('-').reverse().join('.')].filter(Boolean).join(' '); facts.push(who + (per ? ' (' + per + ')' : '') + ': ' + [a.set.kategorie && 'Kategorie ' + a.set.kategorie, a.set.konto && 'Konto ' + ((accounts.find(x => x.key === a.set.konto) || {}).label || a.set.konto), a.set.notiz && a.set.notiz].filter(Boolean).join(', ')); } }
+      else if (a.typ === 'todo') { setLater(p => { const x = { ...p }; a.keys.forEach(k => { x[k] = true; }); return x; }); n += a.keys.length; }
       else if (a.typ === 'merken' && a.text) facts.push(a.text);
     });
     if (facts.length && onRemember) onRemember(facts);
@@ -458,18 +462,42 @@ export default function SevdeskImport(props) {
   const noteBlur = (k, r, val) => { val = String(val || '').trim(); if (!val) return; const keys = sameName(k, r).filter(x => x !== k + r.idx && String(notes[x] || '').trim() !== val); if (keys.length) setAskA({ typ: 'notiz', key: k + r.idx, val, keys: [k + r.idx, ...keys], name: eff(k, r).name }); };
   const applyAskA = (all) => { const a = askA; if (all) { if (a.typ === 'konto') setKonto(a.keys, a.val); else setNotizKeys(a.keys, a.val); } else if (a.typ === 'konto') setKonto([a.key], a.val); setAskA(null); };
 
+  // KI-Helfer: als Karte über der Liste oder als Seitenleiste im Vollbild
+  const renderBot = (panel) => (
+    <div style={panel ? { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 } : { ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.35) }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}><span style={{ width: 34, height: 34, borderRadius: 10, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic p={P.spark} sz={16} col="#fff" /></span><div style={{ flex: 1 }}><div style={{ fontSize: 15, fontWeight: 800 }}>KI-Helfer für diese Liste</div><div style={{ fontSize: 12.5, color: C.sub }}>Er kennt das ganze Jahr, kann recherchieren, Notizen, Kategorien und MwSt setzen – vor jeder Änderung frage ich nach.</div></div>{panel && <button onClick={() => setBotOpen(false)} style={{ background: 'none', border: 'none', color: C.mut, fontSize: 20, cursor: 'pointer' }} title="Zuklappen">×</button>}</div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '10px 0', flexShrink: 0 }}>
+        {['Wähle alle Buchungen ohne Beleg aus', 'Airbnb war immer Vermittlung für die Ferienwohnung – Notiz und MwSt setzen', 'Notarkosten: wie verbuche ich das?', 'Wo stimmt die MwSt wahrscheinlich nicht?'].map(t => <button key={t} onClick={() => setBotInput(t)} style={{ background: C.surf2, border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>{t}</button>)}
+      </div>
+      <div style={panel ? { flex: 1, minHeight: 0, overflowY: 'auto' } : undefined}>
+        {botMsgs.slice(panel ? -40 : -6).map((m, i) => <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', margin: '6px 0' }}><div style={{ maxWidth: '90%', background: m.role === 'user' ? C.act : C.surf2, color: m.role === 'user' ? C.actTxt : C.txt, borderRadius: 14, padding: '9px 13px', fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{m.text}</div></div>)}
+        {botBusy && <div style={{ fontSize: 12.5, color: C.sub, margin: '6px 0' }}>Ich überlege und recherchiere …</div>}
+        {botPending && (
+          <div style={{ background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '10px 12px', margin: '8px 0' }}>
+            {botPending.map((a, i) => <div key={i} style={{ fontSize: 13, lineHeight: 1.5, padding: '3px 0' }}>• {describeAction(a)}{a.typ !== 'merken' && <span style={{ color: C.sub }}> – <b>{a.keys.length} Zeilen</b>{a.sample.length ? ' (z. B. ' + a.sample.join(', ') + ')' : ''}</span>}</div>)}
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}><button onClick={applyBot} style={{ ...btnP, padding: '8px 16px', fontSize: 13 }}>Anwenden</button><button onClick={() => setBotPending(null)} style={{ ...btnS, padding: '8px 14px', fontSize: 13 }}>Verwerfen</button></div>
+          </div>)}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexShrink: 0 }}>
+        <input value={botInput} onChange={e => setBotInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendBot(); }} placeholder="z. B. Bauhaus war für die Renovierung von Wohnung 2 …" style={{ ...SS, flex: 1, textAlign: 'left', padding: '11px 13px', minWidth: 0 }} />
+        <button onClick={sendBot} disabled={botBusy || !botInput.trim()} style={{ ...btnP, padding: '10px 18px', opacity: (botBusy || !botInput.trim()) ? 0.55 : 1 }}>Senden</button>
+      </div>
+    </div>);
+
   const renderList = () => {
     const q = normN(listQ);
     const list = dispRows.filter(({ k, r }) => {
-      if (filt === 'ausgaben' && r.kind === 'ein') return false; if (filt === 'einnahmen' && r.kind !== 'ein') return false;
       if (filt === 'ignoriert') return !!skip[k + r.idx];
+      if (skip[k + r.idx]) return false;
+      if ((filt === 'ausgaben' || artTab === 'belege') && r.kind === 'ein') return false; if ((filt === 'einnahmen' || artTab === 'rechnungen') && r.kind !== 'ein') return false;
       if (['passt', 'hinweis', 'fehlt'].includes(filt) && statusOf(k, r).cls !== filt) return false;
       if (q && !normN(eff(k, r).name + ' ' + (r.nummer || '') + ' ' + r.brutto + ' ' + (notes[k + r.idx] || '')).includes(q)) return false; return true;
-    }).sort((a, b) => String(b.r.datum).localeCompare(String(a.r.datum)));
+    }).sort(sortBy === 'name' ? (a, b) => String(eff(a.k, a.r).name).localeCompare(String(eff(b.k, b.r).name), 'de', { sensitivity: 'base' }) || String(b.r.datum).localeCompare(String(a.r.datum)) : sortBy === 'betrag' ? (a, b) => b.r.brutto - a.r.brutto : (a, b) => String(b.r.datum).localeCompare(String(a.r.datum)));
     const groups = new Map();
     list.forEach(x => {
       const e = eff(x.k, x.r); let gk, gl;
-      if (groupBy === 'monat') { gk = String(x.r.datum).slice(0, 7); gl = MONTHS[+gk.slice(5) - 1] + ' ' + gk.slice(0, 4); }
+      if (groupBy === 'keine') { gk = 'alle'; gl = 'Alle Buchungen'; }
+      else if (groupBy === 'monat') { gk = String(x.r.datum).slice(0, 7); gl = MONTHS[+gk.slice(5) - 1] + ' ' + gk.slice(0, 4); }
       else if (groupBy === 'name') { gk = normN(e.name) || '—'; gl = e.name || '—'; }
       else { gk = acctOf(x.k, x.r); gl = (accounts.find(a => a.key === gk) || {}).label || gk; }
       if (!groups.has(gk)) groups.set(gk, { label: gl, items: [] }); groups.get(gk).items.push(x);
@@ -481,13 +509,27 @@ export default function SevdeskImport(props) {
     const td = { fontSize: 13, padding: '6px 8px', borderBottom: '1px solid ' + C.sep, verticalAlign: 'middle' };
     const sumOf = (items) => items.reduce((a, { r }) => a + (r.kind === 'ein' ? 1 : -1) * (r.storno ? -1 : 1) * r.brutto, 0);
     const allSel = list.length > 0 && list.every(({ k, r }) => sel[k + r.idx]);
-    const wrap = bigList ? { position: 'fixed', inset: 0, zIndex: 140, background: C.bg, padding: 16, overflow: 'auto' } : undefined;
-    return (<div style={wrap}>
+    const wrap = bigList ? { flex: 1, minWidth: 0, overflow: 'auto', padding: 16 } : undefined;
+    const nRech = dispRows.filter(({ k, r }) => r.kind === 'ein' && !skip[k + r.idx]).length, nBel = dispRows.filter(({ k, r }) => r.kind !== 'ein' && !skip[k + r.idx]).length, nIgn = dispRows.filter(({ k, r }) => skip[k + r.idx]).length;
+    const act = dispRows.filter(({ k, r }) => !skip[k + r.idx]);
+    const nPdf = act.filter(({ k, r }) => r.file || upPdf[k + r.idx]).length;
+    const pill = (l, v, col, onClick) => <button key={l} onClick={onClick} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '7px 13px', textAlign: 'left', cursor: onClick ? 'pointer' : 'default', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>{l}</div><div style={{ ...NUM, fontSize: 17, fontWeight: 800, color: col || C.txt }}>{v}</div></button>;
+    const body = (<div style={wrap}>
+      {bigList && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'stretch', marginBottom: 12 }}>
+        {pill('Gesamt', act.length, undefined, () => setFilt('alle'))}{pill('✅ Passt', stats.passt, C.grn, () => setFilt('passt'))}{pill('⚠ Hinweise', stats.hinweis, stats.hinweis ? C.amb : C.sub, () => setFilt('hinweis'))}{pill('❌ Fehlt', stats.fehlt, stats.fehlt ? C.red : C.sub, () => setFilt('fehlt'))}
+        {pill('📎 PDF vorhanden', nPdf, C.grn)}{pill('PDF fehlt', act.length - nPdf, act.length - nPdf ? C.red : C.sub)}{pill('Ausgaben', nBel)}{pill('Einnahmen', nRech)}{pill('To-do', act.filter(({ k, r }) => later[k + r.idx]).length)}{pill('🚫 Ignoriert', nIgn, undefined, () => setFilt('ignoriert'))}
+      </div>}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+        {[['alle', 'Alle · ' + (nRech + nBel)], ['belege', 'Belege (Ausgaben) · ' + nBel], ['rechnungen', 'Rechnungen (Einnahmen) · ' + nRech]].map(([g, l]) => <button key={g} onClick={() => { setArtTab(g); if (filt === 'ausgaben' || filt === 'einnahmen') setFilt('alle'); }} style={{ ...btnS, padding: '8px 16px', background: artTab === g ? C.txt : C.surf2, color: artTab === g ? C.bg : C.txt }}>{l}</button>)}
+        {filt !== 'alle' && <button onClick={() => setFilt('alle')} style={{ ...sm, background: hexA(C.pri, 0.14), border: '1px solid ' + hexA(C.pri, 0.4) }}>Filter: {filt} ✕</button>}
+      </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
         {bigList && <span style={{ fontSize: 17, fontWeight: 800, marginRight: 6 }}>Abgleich</span>}
         <input value={listQ} onChange={e => setListQ(e.target.value)} placeholder="Name, Nummer, Betrag, Notiz suchen …" style={{ ...SS, flex: 1, minWidth: 180, textAlign: 'left', padding: '10px 13px' }} />
         <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Gruppieren nach</span>
-        {[['monat', 'Monat'], ['name', 'Name'], ['konto', 'Konto']].map(([g, l]) => <button key={g} onClick={() => setGroupBy(g)} style={{ ...sm, background: groupBy === g ? C.txt : C.surf2, color: groupBy === g ? C.bg : C.txt }}>{l}</button>)}
+        {[['monat', 'Monat'], ['name', 'Name'], ['konto', 'Konto'], ['keine', 'Keine']].map(([g, l]) => <button key={g} onClick={() => setGroupBy(g)} style={{ ...sm, background: groupBy === g ? C.txt : C.surf2, color: groupBy === g ? C.bg : C.txt }}>{l}</button>)}
+        <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>Sortieren</span>
+        {[['datum', 'Datum'], ['name', 'Name'], ['betrag', 'Betrag']].map(([g, l]) => <button key={g} onClick={() => setSortBy(g)} style={{ ...sm, background: sortBy === g ? C.txt : C.surf2, color: sortBy === g ? C.bg : C.txt }}>{l}</button>)}
         <button onClick={() => setSel(x => { const n = { ...x }; list.forEach(({ k, r }) => { n[k + r.idx] = !allSel; }); return n; })} style={sm}>{allSel ? 'Auswahl aufheben' : 'Alle ' + list.length + ' auswählen'}</button>
         <button onClick={() => setBigList(b => !b)} style={{ ...sm, background: bigList ? C.txt : C.surf2, color: bigList ? C.bg : C.txt }}>{bigList ? 'Vollbild schließen' : 'Vollbild'}</button>
       </div>
@@ -506,7 +548,7 @@ export default function SevdeskImport(props) {
         </div>)}
       {!gkeys.length && <div style={{ ...card, textAlign: 'center', color: C.mut, fontSize: 14 }}>Keine Buchungen mit diesem Filter.</div>}
       {gkeys.length > 0 && (
-        <div style={{ overflow: 'auto', maxHeight: bigList ? 'calc(100vh - 130px)' : '72vh', border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
+        <div style={{ overflow: 'auto', maxHeight: bigList ? 'calc(100vh - 290px)' : '72vh', border: '1px solid ' + C.bdr, borderRadius: 12, background: C.surf }}>
           <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1000 }}>
             <thead><tr><th style={th}></th><th style={th} title="Beleg ansehen">Beleg</th><th style={th}>Datum</th><th style={th}>Name</th><th style={th}>Kategorie</th><th style={th}>MwSt</th><th style={th}>Konto</th><th style={th}>Notiz (auch für die KI)</th><th style={{ ...th, textAlign: 'right' }}>Betrag</th><th style={th}>Hinweise</th><th style={th}>Aktion</th></tr></thead>
             <tbody>
@@ -525,7 +567,7 @@ export default function SevdeskImport(props) {
                     <td style={td}><input type="checkbox" checked={!!sel[key]} onChange={ev => setSel(x => ({ ...x, [key]: ev.target.checked }))} /></td>
                     <td style={td}>{hasPdf
                       ? <button onClick={() => openPreview(k, r)} title="Beleg ansehen" style={{ width: 34, height: 34, borderRadius: '50%', border: 'none', background: hexA(tint, 0.16), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Ic p={P.clip} sz={16} col={tint} /></button>
-                      : <label title="Beleg hochladen" style={{ width: 34, height: 34, borderRadius: '50%', background: hexA(C.red, 0.12), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Ic p={P.upload} sz={15} col={C.red} /><input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (f) setUpPdf(p => ({ ...p, [key]: { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) } })); }} /></label>}</td>
+                      : <label title="Beleg hochladen" style={{ width: 34, height: 34, borderRadius: '50%', background: hexA(C.red, 0.12), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Ic p={P.upload} sz={15} col={C.red} /><input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (f) { const src = { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) }; setUpPdf(p => ({ ...p, [key]: src })); if (aiReadDoc) runOcr([[k, r, null, src]]); } }} /></label>}</td>
                     <td style={{ ...td, ...NUM, whiteSpace: 'nowrap' }}>{r.datum.split('-').reverse().join('.')}</td>
                     <td style={{ ...td, minWidth: 150 }}><input value={e.name} onChange={ev => setO({ name: ev.target.value })} style={{ ...cell, fontWeight: 600, textDecoration: skipped ? 'line-through' : 'none' }} />{r.nummer && <div style={{ fontSize: 11, color: C.mut, padding: '0 6px' }}>{r.nummer}</div>}</td>
                     <td style={td}><select value={e.kategorie || ''} onChange={ev => setO({ kategorie: ev.target.value })} style={{ ...cell, width: 118 }}>{[...new Set([e.kategorie, ...CATS].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}</select></td>
@@ -565,6 +607,12 @@ export default function SevdeskImport(props) {
             </div>
           </div>
         </div>)}
+    </div>);
+    if (!bigList) return body;
+    return (<div style={{ position: 'fixed', inset: 0, zIndex: 140, background: C.bg, display: 'flex' }}>
+      {botOpen && aiAsk && <div style={{ width: 400, maxWidth: '46vw', flexShrink: 0, borderRight: '1px solid ' + C.bdr, padding: 16, boxSizing: 'border-box', background: C.surf }}>{renderBot(true)}</div>}
+      {body}
+      {aiAsk && !botOpen && <button onClick={() => setBotOpen(true)} title="KI-Helfer öffnen" style={{ position: 'fixed', left: 18, bottom: 18, zIndex: 150, display: 'inline-flex', alignItems: 'center', gap: 8, background: AI_GRADIENT, color: '#fff', border: 'none', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }}><Ic p={P.spark} sz={16} col="#fff" /> KI-Helfer</button>}
     </div>);
   };
 
@@ -646,24 +694,7 @@ export default function SevdeskImport(props) {
         </div>
         {analysing && <Bar done={anaDone} total={anaTotal} label={anaProg || 'KI liest …'} />}
       </div>
-      {aiAsk && (
-        <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.35) }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 34, height: 34, borderRadius: 10, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic p={P.spark} sz={16} col="#fff" /></span><div><div style={{ fontSize: 15, fontWeight: 800 }}>KI-Helfer für diese Liste</div><div style={{ fontSize: 12.5, color: C.sub }}>Sag in eigenen Worten, was geändert oder ausgewählt werden soll – vor jeder Änderung frage ich nach.</div></div></div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '10px 0' }}>
-            {['Wähle alle Buchungen ohne Beleg aus', 'Alle Bauhaus-Käufe → Kategorie Material, Notiz „Renovierung"', 'Markiere alle Zahlungen an Amazon als privat'].map(t => <button key={t} onClick={() => setBotInput(t)} style={{ background: C.surf2, border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>{t}</button>)}
-          </div>
-          {botMsgs.slice(-6).map((m, i) => <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', margin: '6px 0' }}><div style={{ maxWidth: '88%', background: m.role === 'user' ? C.act : C.surf2, color: m.role === 'user' ? C.actTxt : C.txt, borderRadius: 14, padding: '9px 13px', fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{m.text}</div></div>)}
-          {botBusy && <div style={{ fontSize: 12.5, color: C.sub, margin: '6px 0' }}>Ich überlege …</div>}
-          {botPending && (
-            <div style={{ background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '10px 12px', margin: '8px 0' }}>
-              {botPending.map((a, i) => <div key={i} style={{ fontSize: 13, lineHeight: 1.5, padding: '3px 0' }}>• {describeAction(a)}{a.typ !== 'merken' && <span style={{ color: C.sub }}> – <b>{a.keys.length} Zeilen</b>{a.sample.length ? ' (z. B. ' + a.sample.join(', ') + ')' : ''}</span>}</div>)}
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}><button onClick={applyBot} style={{ ...btnP, padding: '8px 16px', fontSize: 13 }}>Anwenden</button><button onClick={() => setBotPending(null)} style={{ ...btnS, padding: '8px 14px', fontSize: 13 }}>Verwerfen</button></div>
-            </div>)}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <input value={botInput} onChange={e => setBotInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendBot(); }} placeholder='z. B. Bauhaus ab dem 15.03. war für die Renovierung von Wohnung 2 …' style={{ ...SS, flex: 1, textAlign: 'left', padding: '11px 13px' }} />
-            <button onClick={sendBot} disabled={botBusy || !botInput.trim()} style={{ ...btnP, padding: '10px 18px', opacity: (botBusy || !botInput.trim()) ? 0.55 : 1 }}>Senden</button>
-          </div>
-        </div>)}
+      {aiAsk && renderBot(false)}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         {[['liste', 'Liste'], ['tabelle', 'Tabelle (CSV-Zeilen)']].map(([k2, l]) => <button key={k2} onClick={() => setView(k2)} style={{ ...btnS, padding: '7px 14px', fontSize: 12.5, background: view === k2 ? C.txt : C.surf2, color: view === k2 ? C.bg : C.txt }}>{l}</button>)}
       </div>
