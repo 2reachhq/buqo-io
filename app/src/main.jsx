@@ -1432,6 +1432,7 @@ function App({session}) {
   const [steuernTab,setSteuernTab]= useState('ustva');    // Steuern-Bereich: ustva|euer|guv|bwa|susa|datev
   const [steuernOpen,setSteuernOpen]= useState(false);    // Steuern-Dropdown im Header offen
   const [stY,setStY]= useState(now.getFullYear());        // Steuern: gewähltes Jahr
+  const [ustvaPer,setUstvaPer]= useState('monat');        // Umsatzsteuer-Ansicht: monat | quartal | jahr
   const [stM,setStM]= useState(now.getMonth());           // Steuern: gewählter Monat (UStVA/BWA)
   const [txY,setTxY]= useState(now.getFullYear());        // Steuerprognose: gewähltes Steuerjahr
   const [bwaBusy,setBwaBusy]= useState(false);            // BWA: KI-Bericht wird gerade erstellt
@@ -2604,8 +2605,15 @@ function App({session}) {
         summary=((resp&&resp.content&&resp.content[0]&&resp.content[0].text)||'').trim();
       }catch(e){ summary=''; }
     }
-    const id=uid();
-    setData(prev=>({...prev, taxDocs:[{id, account:t.acct||'unter', year, category:cat, title, amount:null, note:'', summary:summary.slice(0,900), filePath:fi.path, fileName:fi.fname, createdAt:new Date().toISOString().slice(0,10)}, ...(prev.taxDocs||[])]}));
+    const id=uid(); const isLohn=cat==='Lohn & Personal';
+    const lohn=isLohn?{ month:Number.isInteger(t.month)?t.month:null, employee:String(t.emp||'').trim(), gross:num(t.brutto)||null, employerCost:num(t.ag)||null }:{};
+    const lohnAmt=isLohn?(lohn.employerCost||lohn.gross||0):0;
+    const lohnNote=isLohn?[lohn.employee, lohn.month!=null?MONTHS[lohn.month]+' '+year:'', lohn.gross?'Brutto '+lohn.gross.toFixed(2).replace('.',',')+' €':'', lohn.employerCost?'AG-Kosten '+lohn.employerCost.toFixed(2).replace('.',',')+' €':''].filter(Boolean).join(' · '):'';
+    const docTitle=isLohn&&!t.title?('Lohnabrechnung '+(lohn.employee||'')+' '+(lohn.month!=null?MONTHS[lohn.month]:'')+' '+year).replace(/\s+/g,' ').trim():title;
+    const book=isLohn&&t.book&&lohnAmt>0&&lohn.month!=null;
+    setData(prev=>({...prev, taxDocs:[{id, account:t.acct||'unter', year, category:cat, title:docTitle, amount:isLohn?(lohnAmt||null):null, note:lohnNote, ...lohn, booked:book, summary:summary.slice(0,900), filePath:fi.path, fileName:fi.fname, createdAt:new Date().toISOString().slice(0,10)}, ...(prev.taxDocs||[])]}));
+    if(book){ const iso=year+'-'+String(lohn.month+1).padStart(2,'0')+'-'+String(new Date(year,lohn.month+1,0).getDate()).padStart(2,'0'); const bid=uid();
+      setData(prev=>ACT.addBooking(prev, namesRef.current, { account:'unter', kind:'aus', name:'Lohn '+(lohn.employee||'Personal'), amount:lohnAmt, date:iso, category:'Personal', mwst:0, netto:lohnAmt, status:'abgebucht', note:'Lohnabrechnung (extern erstellt) – '+lohnNote, filePath:fi.path, fileName:fi.fname }, { ids:[bid], today:iso }).data); }
     return { year, summary };
   };
   const uploadTaxDoc = async ()=>{
@@ -3843,6 +3851,86 @@ function App({session}) {
   const dlBlob=(name,blob)=>{ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); };
   const dlText=(name,text,mime)=>dlBlob(name,new Blob([text],{type:mime||'text/csv;charset=utf-8'}));
   const deNum=v=>Number(v||0).toFixed(2).replace('.',',');
+  /* ── Dokumente zur Umsatzsteuer: Protokoll + ELSTER-Anleitung und Steuer-Leitfaden (HTML, im Browser öffnen und als PDF drucken) ── */
+  const docEsc=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const docShell=(title,sub,body)=>'<!doctype html><html lang="de"><head><meta charset="utf-8"><title>'+docEsc(title)+'</title><style>body{font:14px/1.55 -apple-system,Segoe UI,Arial,sans-serif;color:#1d1d1f;max-width:900px;margin:32px auto;padding:0 20px}h1{font-size:26px;margin:0 0 4px}h2{font-size:17px;margin:28px 0 8px;border-bottom:2px solid #1d1d1f;padding-bottom:4px}h3{font-size:14.5px;margin:18px 0 4px}.sub{color:#6e6e73;margin-bottom:16px}.cards{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}.card{border:1px solid #d2d2d7;border-radius:12px;padding:10px 16px;min-width:160px}.card b{display:block;font-size:20px}.box{border-radius:12px;padding:12px 16px;margin:12px 0}.pay{background:#fff4e5;border:1px solid #ffcc80}.ok{background:#e8f7ee;border:1px solid #9fd8b4}.warn{background:#fff4e5;border:1px solid #ffcc80}.info{background:#eef4ff;border:1px solid #b6cdf5}table{border-collapse:collapse;width:100%;margin-top:6px;font-size:13px}th,td{padding:6px 8px;border-bottom:1px solid #e5e5ea;text-align:left;vertical-align:top}th{font-size:11px;text-transform:uppercase;color:#6e6e73}.r{text-align:right;white-space:nowrap}ol li,ul li{margin:4px 0}.small{font-size:12px;color:#6e6e73}@media print{body{margin:0}h2{break-after:avoid}tr{break-inside:avoid}}</style></head><body><h1>'+docEsc(title)+'</h1><div class="sub">'+docEsc(sub)+'</div>'+body+'<p class="small" style="margin-top:28px">Erstellt mit Buqo am '+docEsc(new Date().toLocaleDateString('de-DE'))+'. Rechenhilfe auf Basis deiner Buchungen – keine Steuerberatung und ohne Gewähr. Bitte Werte und Fristen vor der Abgabe prüfen; maßgeblich sind ELSTER und dein Finanzamt.</p></body></html>';
+  const docTbl=(head,body,right)=>'<table><thead><tr>'+head.map((h,i)=>'<th'+((right||[]).includes(i)?' class="r"':'')+'>'+docEsc(h)+'</th>').join('')+'</tr></thead><tbody>'+body.map(r=>'<tr>'+r.map((c,i)=>'<td'+((right||[]).includes(i)?' class="r"':'')+'>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
+  const kontoLabel=acc=>acc==='unter'?(names.unternehmen||'Firma'):(names[acc]||acc);
+  const isoDe=iso=>String(iso||'').split('-').reverse().join('.');
+  const exportUStVADoc=(year,months,label)=>{
+    const eur=v=>deNum(v)+' €'; const vs=months.map(mm=>calcVat(year,mm)); const sum=f=>r2(vs.reduce((t,v)=>t+(f(v)||0),0));
+    const base19=sum(v=>v.base19), base7=sum(v=>v.base7), baseFree=sum(v=>v.baseFree), st19=sum(v=>v.salesTax19), st7=sum(v=>v.salesTax7), salesTax=sum(v=>v.salesTax), inputTax=sum(v=>v.inputTax), payable=sum(v=>v.payableTax);
+    const rows=vs.flatMap(v=>v.rows).sort((a,b)=>String(a.datum).localeCompare(String(b.datum)));
+    const due=ACT.ustvaDeadline(year,months[months.length-1],{dauerfrist:!!ustvaSettings.dauerfrist});
+    const miss=rows.filter(r=>!r.hasVatInfo).length, noBeleg=rows.filter(r=>r.kind==='aus'&&!r.hasBeleg).length;
+    const hasImmo=rows.some(r=>r.account!=='unter');
+    const fl=v=>Math.floor(v+1e-9);
+    const konten={}; rows.forEach(r=>{ const k=konten[kontoLabel(r.account)]||(konten[kontoLabel(r.account)]={ust:0,vor:0,n:0}); k.n++; if(r.kind==='ein') k.ust+=r.vat; else k.vor+=r.vat; });
+    const body=''
+      +'<div class="box '+(payable>0?'pay':'ok')+'"><b style="font-size:18px">'+(payable>0?'Du musst voraussichtlich '+eur(payable)+' ans Finanzamt zahlen.':payable<0?'Du bekommst voraussichtlich '+eur(Math.abs(payable))+' erstattet.':'Es ergibt sich keine Zahllast.')+'</b><br>Abgabefrist: <b>'+isoDe(due)+'</b>'+(ustvaSettings.dauerfrist?' (mit Dauerfristverlängerung)':'')+(payable>0?' · Die Zahlung muss bis zu diesem Tag beim Finanzamt eingehen (Lastschrift über ELSTER oder Überweisung).':'')+'</div>'
+      +'<div class="cards"><div class="card">Umsatzsteuer (von dir eingenommen)<b>'+eur(salesTax)+'</b></div><div class="card">Vorsteuer (darfst du abziehen)<b>'+eur(inputTax)+'</b></div><div class="card">'+(payable>=0?'Zahllast – zur Seite legen':'Erstattung')+'<b>'+eur(Math.abs(payable))+'</b></div></div>'
+      +'<h2>1. Das trägst du in ELSTER ein</h2>'
+      +docTbl(['Kennzahl','Feld in der Voranmeldung','Wert laut Buqo','Eingabe in ELSTER'],[
+        ['81','Lieferungen und sonstige Leistungen zu 19 % – Bemessungsgrundlage (netto)',eur(base19),'<b>'+fl(base19)+'</b> (volle Euro)'],
+        ['86','Lieferungen und sonstige Leistungen zu 7 % – Bemessungsgrundlage (netto)',eur(base7),'<b>'+fl(base7)+'</b> (volle Euro)'],
+        ['48','Steuerfreie Umsätze (§ 4 Nr. 8–28 UStG, z. B. Wohnraumvermietung)',eur(baseFree),baseFree?'<b>'+fl(baseFree)+'</b> – nur wenn es wirklich solche Umsätze sind':'–'],
+        ['66','Vorsteuerbeträge aus Rechnungen anderer Unternehmer',eur(inputTax),'<b>'+deNum(inputTax)+'</b> (mit Cent)'],
+        ['83','Verbleibende Umsatzsteuer-Vorauszahlung (berechnet ELSTER selbst)',eur(payable),'Kontrollwert: '+deNum(payable)+' €']],[2,3])
+      +'<p class="small">Die Umsatzsteuer auf Kz 81 ('+eur(st19)+') und Kz 86 ('+eur(st7)+') berechnet ELSTER automatisch aus der Bemessungsgrundlage. Weicht Kz 83 in ELSTER um wenige Euro von diesem Dokument ab, liegt das meist an der Rundung auf volle Euro.</p>'
+      +(hasImmo?'<div class="box warn"><b>Wichtig bei Immobilien-Konten:</b> Die Vorsteuer aus Ausgaben der Immobilien ist nur abziehbar, wenn die Vermietung umsatzsteuerpflichtig ist (z. B. Ferienwohnung mit Option/ Kurzzeitvermietung). Bei steuerfreier Wohnraumvermietung (§ 4 Nr. 12 UStG) gibt es keinen Vorsteuerabzug – dann bitte diese Beträge in Kz 66 abziehen. Das Dokument weist sie unten pro Konto getrennt aus.</div>':'')
+      +(miss||noBeleg?'<div class="box warn"><b>Bitte vorher prüfen:</b> '+(miss?miss+' Buchung'+(miss===1?'':'en')+' ohne MwSt-Angabe (als 0 % gewertet). ':'')+(noBeleg?noBeleg+' Ausgabe'+(noBeleg===1?'':'n')+' ohne Beleg – ohne Rechnung gibt es keinen Vorsteuerabzug.':'')+'</div>':'')
+      +'<h2>2. Aufteilung nach Konto</h2>'+docTbl(['Konto','Buchungen','Umsatzsteuer','Vorsteuer'],Object.entries(konten).map(([l,k])=>[docEsc(l),String(k.n),eur(k.ust),eur(k.vor)]),[1,2,3])
+      +'<h2>3. So übermittelst du es mit ELSTER (ohne Steuerberater)</h2><ol>'
+      +'<li><b>Zugang:</b> Auf <b>mein-elster.de</b> anmelden. Noch kein Konto? Unter „Registrieren“ ein Benutzerkonto anlegen; du erhältst einen Aktivierungscode per Post/E-Mail und lädst danach dein Zertifikat (Datei oder Sicherheitsstick) herunter. Das dauert einige Tage – früh anfangen.</li>'
+      +'<li>Im Menü <b>Formulare &amp; Leistungen → Alle Formulare → Umsatzsteuer → Umsatzsteuer-Voranmeldung</b> öffnen (Menüführung kann leicht abweichen).</li>'
+      +'<li>Steuerfall (deine Steuernummer) wählen, <b>Jahr</b> und <b>Zeitraum</b> ('+docEsc(label)+') einstellen.</li>'
+      +'<li>Die Werte aus Tabelle 1 in die passenden Felder eintragen: Kz 81 und Kz 86 (Umsätze), ggf. Kz 48, und Kz 66 (Vorsteuer). Die Zahllast (Kz 83) rechnet ELSTER selbst – sie sollte zu deinem Kontrollwert passen.</li>'
+      +'<li>Auf <b>„Prüfen“</b> klicken, Hinweise beheben, dann <b>„Absenden“</b>. Das <b>Übermittlungsprotokoll</b> als PDF speichern – zusammen mit diesem Dokument ablegen.</li>'
+      +'<li><b>Zahlen:</b> Bei Zahllast entweder in ELSTER ein SEPA-Lastschriftmandat erteilen (dann zieht das Finanzamt zum Fälligkeitstag ein) oder rechtzeitig überweisen – mit Steuernummer und Zeitraum im Verwendungszweck.</li>'
+      +'<li><b>Dauerfristverlängerung:</b> Wenn du die Frist um einen Monat verschieben willst, beantragst du das einmalig in ELSTER (Formular „Antrag auf Dauerfristverlängerung“); bei monatlicher Abgabe ist eine Sondervorauszahlung von 1/11 der Vorjahres-Vorauszahlungen fällig.</li></ol>'
+      +'<div class="box info">Welcher Zeitraum (monatlich oder vierteljährlich) für dich gilt, legt dein Finanzamt fest – meist monatlich im Gründungsjahr und im Folgejahr. Zusätzlich zu den Voranmeldungen brauchst du später die <b>Umsatzsteuer-Jahreserklärung</b> (siehe Steuer-Leitfaden).</div>'
+      +'<h2>4. Protokoll der Buchungen ('+rows.length+')</h2>'
+      +docTbl(['Datum','Konto','Name','Art','Netto','MwSt','USt / Vorsteuer','Brutto','Beleg'],rows.map(r=>[docEsc(isoDe(r.datum)),docEsc(kontoLabel(r.account)),docEsc(r.name),r.kind==='ein'?'Einnahme':'Ausgabe',eur(r.netto),(r.rate||0)+' %',eur(r.vat),eur(r.brutto),r.hasBeleg?'ja':'<b style="color:#b25000">nein</b>']),[4,6,7])
+      ;
+    dlText('UStVA_Protokoll_'+String(label).replace(/[^0-9A-Za-z]+/g,'_')+'.html',docShell('Umsatzsteuer-Voranmeldung – Protokoll & ELSTER-Anleitung','Zeitraum: '+label+' · Datengrundlage: deine Buchungen in Buqo (ohne Privat)',body),'text/html;charset=utf-8');
+    setToast('Protokoll erstellt ✓ – im Browser öffnen und bei Bedarf als PDF drucken');
+  };
+  const exportTaxGuide=(year)=>{
+    const eur=v=>deNum(v)+' €'; const months=[...Array(12).keys()]; const vs=months.map(mm=>calcVat(year,mm)); const sum=f=>r2(vs.reduce((t,v)=>t+(f(v)||0),0));
+    const base19=sum(v=>v.base19), base7=sum(v=>v.base7), baseFree=sum(v=>v.baseFree), salesTax=sum(v=>v.salesTax), inputTax=sum(v=>v.inputTax), payable=sum(v=>v.payableTax); const fl=v=>Math.floor(v+1e-9);
+    const e=calcEUR(year); const all=collectBizBookings(year,null);
+    const immo=PROPS.filter(acctCreated).map(pid=>{ let ein=0; months.forEach(mm=>{ const inc=(((data[year]||{})[mm]||{}).props||{})[pid]; const I=inc&&inc.income; if(I) ['mieteinnahmen','airbnb','booking','sonstig'].forEach(f=>{ ein+=incomeVal(I,f); }); }); const rr=all.filter(r=>r.account===pid); ein+=rr.filter(r=>r.kind==='ein').reduce((t,r)=>t+r.brutto,0); const aus=rr.filter(r=>r.kind==='aus').reduce((t,r)=>t+r.brutto,0); return {pid,ein:r2(ein),aus:r2(aus)}; }).filter(x=>x.ein||x.aus);
+    const lohn=(data.taxDocs||[]).filter(d=>d.category==='Lohn & Personal'&&d.year===year); const lohnBy={}; lohn.forEach(d=>{ const k=d.employee||'(ohne Name)'; const x=lohnBy[k]||(lohnBy[k]={n:0,gross:0,ag:0}); x.n++; x.gross+=num(d.gross); x.ag+=num(d.employerCost); });
+    const docsY=(data.taxDocs||[]).filter(d=>d.year===year); const docCats={}; docsY.forEach(d=>{ docCats[d.category]=(docCats[d.category]||0)+1; });
+    const fr=year+1;
+    const body=''
+      +'<div class="box info">Dieser Leitfaden zeigt dir, <b>welche Erklärungen du für '+year+' abgeben musst, bis wann und mit welchen Zahlen aus Buqo</b> – damit du alles selbst über ELSTER (mein-elster.de) einreichen kannst. Fristen gelten in der Regel für Steuerpflichtige ohne Steuerberater; sie können sich ändern – bitte in ELSTER bzw. beim Finanzamt prüfen.</div>'
+      +'<h2>1. Fristen im Überblick</h2>'+docTbl(['Was','Wann','Wo'],[
+        ['Umsatzsteuer-Voranmeldung','bis zum 10. nach Ende des Monats bzw. Quartals (mit Dauerfristverlängerung +1 Monat)','ELSTER → Umsatzsteuer-Voranmeldung'],
+        ['Umsatzsteuer-Jahreserklärung '+year,'in der Regel bis 31.07.'+fr,'ELSTER → Umsatzsteuererklärung'],
+        ['Einkommensteuererklärung '+year+' (mit Anlage EÜR, ggf. Anlage G/S, V)','in der Regel bis 31.07.'+fr,'ELSTER → Einkommensteuererklärung'],
+        ['Gewerbesteuererklärung '+year+' (bei gewerblichem Einzelunternehmen)','in der Regel bis 31.07.'+fr,'ELSTER → Gewerbesteuererklärung'],
+        ['Minijob: Beitragsnachweis / Meldungen','laut deinem Lohnprogramm bzw. Minijob-Zentrale','Lohnprogramm / minijob-zentrale.de'],
+        ['Vorauszahlungen Einkommen-/Gewerbesteuer','10.03., 10.06., 10.09., 10.12. (laut Vorauszahlungsbescheid)','Überweisung / Lastschrift']])
+      +'<h2>2. Umsatzsteuer-Jahreserklärung '+year+'</h2>'
+      +docTbl(['Kennzahl','Bedeutung','Summe '+year],[['81','Umsätze 19 % (netto)',eur(base19)],['86','Umsätze 7 % (netto)',eur(base7)],['48','Steuerfreie Umsätze (§ 4 Nr. 8–28)',eur(baseFree)],['66','Abziehbare Vorsteuer',eur(inputTax)],['83','Umsatzsteuer – Vorsteuer = Zahllast',eur(payable)]],[2])
+      +'<p>Umsatzsteuer gesamt '+eur(salesTax)+' – Vorsteuer '+eur(inputTax)+' = <b>'+eur(payable)+'</b>. Davon ziehst du die bereits gezahlten Voranmeldungen ab; ELSTER zeigt dir am Ende den Restbetrag bzw. die Erstattung.</p>'
+      +'<p class="small">Anleitung: ELSTER → Formulare &amp; Leistungen → Umsatzsteuer → Umsatzsteuererklärung '+year+'. Die Werte aus den 12 Voranmeldungen sollten mit der Jahressumme übereinstimmen (vgl. UStVA-Protokolle). Bemessungsgrundlagen in vollen Euro.</p>'
+      +'<h2>3. Einnahmenüberschussrechnung (Anlage EÜR) '+year+'</h2>'
+      +docTbl(['Position','Betrag'],[['Betriebseinnahmen (netto)',eur(e.revenue)],['Betriebsausgaben (netto)',eur(e.expenses)],['<b>Gewinn / Verlust</b>','<b>'+eur(e.profit)+'</b>']],[1])
+      +(Object.keys(e.categories).length?'<h3>Ausgaben nach Kategorie</h3>'+docTbl(['Kategorie','Betrag (netto)'],Object.entries(e.categories).sort((a,b)=>b[1]-a[1]).map(([c,v])=>[docEsc(c),eur(v)]),[1]):'')
+      +'<p class="small">Als Einzelunternehmer/Freiberufler reichst du die Anlage EÜR zusammen mit der Einkommensteuererklärung elektronisch ein (ELSTER → Einkommensteuererklärung → Anlage EÜR und Anlage G bzw. S). Anschaffungen über 800 € netto werden über Jahre abgeschrieben (AfA) – bitte separat erfassen. Beträge hier: Firma inkl. Konten laut Buchungen, ohne Privat.</p>'
+      +'<h2>4. Vermietung (Anlage V) '+year+'</h2>'
+      +(immo.length?docTbl(['Konto','Einnahmen','Ausgaben','Überschuss'],immo.map(x=>[docEsc(kontoLabel(x.pid)),eur(x.ein),eur(x.aus),eur(x.ein-x.aus)]),[1,2,3])+'<p class="small">Pro Objekt eine Anlage V in der Einkommensteuererklärung. Einnahmen aus Airbnb/Booking (Inserate) sind getrennt erfasst und gehören – je nach Art der Vermietung – in die Anlage V oder als gewerbliche Einkünfte in Anlage G. Abschreibung (AfA) des Gebäudes (meist 2 % p. a.) und Finanzierungszinsen fehlen hier, falls nicht gebucht.</p>':'<p class="small">Keine Vermietungs-Buchungen für '+year+'.</p>')
+      +'<h2>5. Gewerbesteuer</h2><p>Einzelunternehmen und Personengesellschaften haben einen <b>Freibetrag von 24.500 €</b> auf den Gewerbeertrag. Dein Gewinn laut Buqo: <b>'+eur(e.profit)+'</b>. Liegt er (nach Hinzurechnungen/Kürzungen) darunter, fällt keine Gewerbesteuer an – die Erklärung ist bei gewerblichen Einkünften trotzdem abzugeben. Freiberufler zahlen keine Gewerbesteuer.</p>'
+      +'<h2>6. Personal / Minijobber</h2>'
+      +(Object.keys(lohnBy).length?docTbl(['Mitarbeiter/in','Abrechnungen','Brutto gesamt','AG-Kosten gesamt'],Object.entries(lohnBy).map(([k,x])=>[docEsc(k),String(x.n),eur(x.gross),x.ag?eur(x.ag):'–']),[1,2,3]):'<p class="small">In Buqo sind für '+year+' keine Lohnabrechnungen abgelegt (Steuerunterlagen → Kategorie „Lohn &amp; Personal“).</p>')
+      +'<ul><li>Löhne und Arbeitgeber-Pauschalabgaben sind <b>Betriebsausgaben</b> (ohne Umsatzsteuer, 0 % MwSt). Sie gehören in die EÜR.</li><li>Beitragsnachweise/Meldungen laufen über dein Lohnprogramm bzw. die Minijob-Zentrale – Buqo legt nur die Unterlagen ab.</li><li>Lohnunterlagen (Lohnkonto, Abrechnungen) mindestens <b>6 Jahre</b> aufbewahren (bitte aktuelle Fristen prüfen).</li></ul>'
+      +'<h2>7. Aufbewahrung &amp; Checkliste</h2><ul><li>Buchungsbelege: <b>8 Jahre</b> (seit 2025; früher 10), Geschäftsbriefe 6 Jahre – digital genügt, wenn lesbar und unveränderbar.</li><li>Bewahre zu jeder Abgabe das <b>Übermittlungsprotokoll</b> von ELSTER auf.</li><li>Steuerunterlagen in Buqo für '+year+': '+(Object.keys(docCats).length?Object.entries(docCats).map(([c,n])=>docEsc(c)+' ('+n+')').join(', '):'noch keine')+'.</li><li>Das Steuerberater-Paket (Mehr → Download) enthält alle Belege, Übersicht und Inserate-Dateien in sortierter Form.</li></ul>'
+      ;
+    dlText('Steuer_Leitfaden_'+year+'.html',docShell('Steuer-Leitfaden '+year+' – selbst über ELSTER einreichen','Zahlen aus deinen Buchungen in Buqo (ohne Privat)',body),'text/html;charset=utf-8');
+    setToast('Leitfaden erstellt ✓ – im Browser öffnen und bei Bedarf als PDF drucken');
+  };
   // UStVA-Kennzahlen als Datei (zum Übertragen in ELSTER; direkte Übermittlung braucht ein ELSTER-Zertifikat)
   const exportUStVA=(year,month)=>{ const v=calcVat(year,month); const lines=[
       'Umsatzsteuervoranmeldung – '+MONTHS[month]+' '+year+' (Buqo, ohne Gewähr)','',
@@ -3921,6 +4009,7 @@ function App({session}) {
       for(const iv of (data.invoices||[]).filter(x=>x.pdfPath && inP(x.date) && !used.has(x.pdfPath))){ const f=await fetchFile({filePath:iv.pdfPath}); if(f){ used.add(iv.pdfPath); put('Rechnungen-Ausgang/', 'Rechnung_'+(iv.number||''), f.ext, f.payload); } }
       const start=month==null?year+'-01-01':per+'-01', end=month==null?year+'-12-31':per+'-31';
       for(const st of (data.bankStatements||[]).filter(s0=>s0.path && ((s0.from||s0.to)?(s0.from<=end && (s0.to||s0.from)>=start):String(s0.year)===String(year)))){ const f=await fetchFile({filePath:st.path}); if(f) put('Kontoauszuege/', st.fileName.replace(/\.[^.]+$/,''), f.ext, f.payload); }
+      for(const d of (data.taxDocs||[]).filter(x=>x.category==='Lohn & Personal' && x.filePath && x.year===year && (month==null || x.month===month || x.month==null))){ const f=await fetchFile({filePath:d.filePath}); if(f) put('Lohn-Personal/'+(d.month!=null?year+'-'+pad2(d.month+1):String(year))+'/', [d.employee||'',d.title||''].filter(Boolean).join('_'), f.ext, f.payload); }
       const vlines=[]; months.forEach(mm=>{ const v=calcVat(year,mm); if(v.rows.length) vlines.push(MONTHS[mm]+' '+year+': Kz 81 '+deNum(v.base19)+' · Kz 86 '+deNum(v.base7)+' · Kz 48 '+deNum(v.baseFree)+' · Kz 66 '+deNum(v.inputTax)+' · Kz 83 '+deNum(v.payableTax)+' EUR'); });
       zip.file('UStVA_Kennzahlen_'+per+'.txt', ['Umsatzsteuer-Voranmeldung – Kennzahlen aus Buqo (Rechenhilfe, keine Steuerberatung)','',...(vlines.length?vlines:['Keine Buchungen im Zeitraum.'])].join('\r\n'));
       // 5) Übersicht (HTML, im Browser öffnen und bei Bedarf als PDF drucken)
@@ -3942,9 +4031,9 @@ function App({session}) {
         +'<h2>Umsatzsteuer-Kennzahlen</h2>'+(vlines.length?'<ul>'+vlines.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ul>':'<p class="sub">Keine Buchungen im Zeitraum.</p>')
         +(missRows.length?'<h2 class="warn">Ausgaben ohne Beleg ('+missRows.length+')</h2>'+tbl(['Datum','Name','Konto','Betrag'],missRows.slice(0,200).map(r=>[esc(r.datum),esc(r.name),esc(bar(r)),eur(r.brutto)]),[3])+(missRows.length>200?'<p class="sub">… und '+(missRows.length-200)+' weitere (siehe Buchungsliste).</p>':''):'')
         +(noteRows.length?'<h2>Notizen zu Buchungen ('+noteRows.length+')</h2>'+tbl(['Datum','Name','Konto','Notiz'],noteRows.slice(0,300).map(r=>[esc(r.datum),esc(r.name),esc(bar(r)),esc(r.note)])):'')
-        +'<h2>Inhalt des Pakets</h2><ul><li><b>Buchungen_'+esc(per)+'.csv</b> – alle Einnahmen und Ausgaben</li><li><b>Belege/</b> – nach Konto, Monat und Einnahmen/Ausgaben sortiert</li><li><b>Inserate/</b> – hinterlegte Airbnb-/Booking-Auszahlungen je Standort und Monat; <b>Inserate_Einnahmen_'+esc(per)+'.csv</b> mit den Beträgen</li><li><b>Rechnungen-Ausgang/</b> – erstellte Rechnungen (PDF)</li><li><b>Kontoauszuege/</b> – hochgeladene Kontoauszüge</li><li><b>UStVA_Kennzahlen_'+esc(per)+'.txt</b></li></ul></body></html>';
+        +'<h2>Inhalt des Pakets</h2><ul><li><b>Buchungen_'+esc(per)+'.csv</b> – alle Einnahmen und Ausgaben</li><li><b>Belege/</b> – nach Konto, Monat und Einnahmen/Ausgaben sortiert</li><li><b>Inserate/</b> – hinterlegte Airbnb-/Booking-Auszahlungen je Standort und Monat; <b>Inserate_Einnahmen_'+esc(per)+'.csv</b> mit den Beträgen</li><li><b>Lohn-Personal/</b> – abgelegte Lohnabrechnungen</li><li><b>Rechnungen-Ausgang/</b> – erstellte Rechnungen (PDF)</li><li><b>Kontoauszuege/</b> – hochgeladene Kontoauszüge</li><li><b>UStVA_Kennzahlen_'+esc(per)+'.txt</b></li></ul></body></html>';
       zip.file('Uebersicht_'+per+'.html', html);
-      zip.file('LIESMICH.txt',['Steuerberater-Paket · '+perLabel,'Erstellt mit Buqo am '+new Date().toLocaleDateString('de-DE'),'','Zuerst öffnen: Uebersicht_'+per+'.html (im Browser; über „Drucken“ als PDF speicherbar).','','Inhalt:','- Buchungen_'+per+'.csv – alle Einnahmen/Ausgaben des Zeitraums (ohne Privat)','- Belege/<Konto>/<Monat>/<Einnahmen|Ausgaben>/ – zugehörige Dateien ('+nFiles+' Dateien insgesamt im Paket)','- Inserate/<Standort>/<Monat>/ – hinterlegte Auszahlungs-Dateien von Airbnb/Booking','- Inserate_Einnahmen_'+per+'.csv – Beträge je Standort, Inserat und Kanal','- Rechnungen-Ausgang/ – erstellte Rechnungen (PDF)','- Kontoauszuege/ – hochgeladene Kontoauszüge','- UStVA_Kennzahlen_'+per+'.txt – Umsatzsteuer-Kennzahlen je Monat','','Buchungen ohne Beleg sind in der CSV mit „nein" gekennzeichnet.'].join('\r\n'));
+      zip.file('LIESMICH.txt',['Steuerberater-Paket · '+perLabel,'Erstellt mit Buqo am '+new Date().toLocaleDateString('de-DE'),'','Zuerst öffnen: Uebersicht_'+per+'.html (im Browser; über „Drucken“ als PDF speicherbar).','','Inhalt:','- Buchungen_'+per+'.csv – alle Einnahmen/Ausgaben des Zeitraums (ohne Privat)','- Belege/<Konto>/<Monat>/<Einnahmen|Ausgaben>/ – zugehörige Dateien ('+nFiles+' Dateien insgesamt im Paket)','- Inserate/<Standort>/<Monat>/ – hinterlegte Auszahlungs-Dateien von Airbnb/Booking','- Inserate_Einnahmen_'+per+'.csv – Beträge je Standort, Inserat und Kanal','- Lohn-Personal/<Monat>/ – abgelegte Lohnabrechnungen','- Rechnungen-Ausgang/ – erstellte Rechnungen (PDF)','- Kontoauszuege/ – hochgeladene Kontoauszüge','- UStVA_Kennzahlen_'+per+'.txt – Umsatzsteuer-Kennzahlen je Monat','','Buchungen ohne Beleg sind in der CSV mit „nein" gekennzeichnet.'].join('\r\n'));
       const blob=await zip.generateAsync({type:'blob'}); dlBlob('Steuerberater_'+per+'.zip',blob); setToast('Steuerberater-Paket erstellt ✓ ('+nFiles+' Dateien)');
     }catch(e){ setToast('Paket fehlgeschlagen: '+(e.message||e)); }
     setPackBusy(false); };
@@ -6089,7 +6178,7 @@ function App({session}) {
             return (<>
               <div style={{fontSize:isMobile?28:34,fontWeight:800,letterSpacing:'-0.03em'}}>Steuerunterlagen</div>
               <div style={{fontSize:13,color:C.sub,marginTop:4,marginBottom:16}}>Alles, was du für die Steuererklärung brauchst – sortiert nach Jahr und Kategorie. Lade hier z. B. deine EÜR, BWA oder einen Steuerbescheid hoch – die KI liest sie aus und der Assistent nutzt sie als Steuerberater. Belege kannst du auch im Assistenten hochladen, er legt sie hier ab.</div>
-              <button onClick={()=>setTaxUp({file:null,year:new Date().getFullYear()-1,cat:'EÜR / Gewinnermittlung',title:'',acct:'unter',ki:true,busy:false,msg:''})} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:16}}>+ Dokument hochladen</button>
+              <button onClick={()=>setTaxUp({file:null,year:new Date().getFullYear()-1,cat:'EÜR / Gewinnermittlung',title:'',acct:'unter',ki:true,busy:false,msg:'',emp:'',month:new Date().getMonth(),brutto:'',ag:'',book:false})} style={{background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'11px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',marginBottom:16}}>+ Dokument hochladen</button>
               {taxUp && (
                 <div onClick={()=>!taxUp.busy&&setTaxUp(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:170,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
                   <div onClick={e=>e.stopPropagation()} style={{background:C.surf,border:'1px solid '+C.bdr,borderRadius:18,padding:'20px 22px',maxWidth:460,width:'100%',boxShadow:'0 24px 60px rgba(0,0,0,0.3)'}}>
@@ -6101,7 +6190,20 @@ function App({session}) {
                         <select value={taxUp.year} onChange={e=>setTaxUp(x=>({...x,year:+e.target.value}))} style={{...SS,textAlign:'left',flex:1}}>{[0,1,2,3,4,5].map(i=>{ const y=new Date().getFullYear()-i; return <option key={y} value={y}>{y}</option>; })}</select>
                         <select value={taxUp.acct} onChange={e=>setTaxUp(x=>({...x,acct:e.target.value}))} style={{...SS,textAlign:'left',flex:1.4}}>{['unter',...PROPS.filter(acctCreated),'privat'].map(k=><option key={k} value={k}>{accLabel(k)}</option>)}</select>
                       </div>
-                      <input value={taxUp.title} onChange={e=>setTaxUp(x=>({...x,title:e.target.value}))} placeholder="Bezeichnung, z. B. EÜR 2025 vom Steuerberater" style={{...SS,textAlign:'left'}}/>
+                      {taxUp.cat==='Lohn & Personal' && (
+                        <div style={{display:'flex',flexDirection:'column',gap:8,background:C.surf2,borderRadius:12,padding:'10px 12px'}}>
+                          <div style={{fontSize:12,color:C.sub,lineHeight:1.5}}>Lohnabrechnungen aus deinem Lohnprogramm (z. B. Minijobber). Hier legst du sie sortiert ab – sie kommen ins Steuerberater-Paket.</div>
+                          <div style={{display:'flex',gap:8}}>
+                            <input value={taxUp.emp} onChange={e=>setTaxUp(x=>({...x,emp:e.target.value}))} placeholder="Mitarbeiter/in" style={{...SS,textAlign:'left',flex:1.4}}/>
+                            <select value={taxUp.month} onChange={e=>setTaxUp(x=>({...x,month:+e.target.value}))} style={{...SS,textAlign:'left',flex:1}}>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
+                          </div>
+                          <div style={{display:'flex',gap:8}}>
+                            <input value={taxUp.brutto} onChange={e=>setTaxUp(x=>({...x,brutto:e.target.value}))} inputMode="decimal" placeholder="Brutto-Lohn €" style={{...SS,textAlign:'left',flex:1}}/>
+                            <input value={taxUp.ag} onChange={e=>setTaxUp(x=>({...x,ag:e.target.value}))} inputMode="decimal" placeholder="Arbeitgeberkosten gesamt € (optional)" style={{...SS,textAlign:'left',flex:1.4}}/>
+                          </div>
+                          <label style={{display:'flex',gap:8,alignItems:'center',fontSize:12.5,cursor:'pointer',lineHeight:1.4}}><input type="checkbox" checked={taxUp.book} onChange={e=>setTaxUp(x=>({...x,book:e.target.checked}))}/> Zusätzlich als Betriebsausgabe „Personal“ (0 % MwSt) in der Firma buchen – nur ankreuzen, wenn der Lohn noch nicht gebucht ist</label>
+                        </div>)}
+                      <input value={taxUp.title} onChange={e=>setTaxUp(x=>({...x,title:e.target.value}))} placeholder={taxUp.cat==='Lohn & Personal'?'Bezeichnung (optional), z. B. Lohnabrechnung Mai':'Bezeichnung, z. B. EÜR 2025 vom Steuerberater'} style={{...SS,textAlign:'left'}}/>
                       <label style={{display:'flex',gap:8,alignItems:'center',fontSize:13,cursor:'pointer'}}><input type="checkbox" checked={taxUp.ki} onChange={e=>setTaxUp(x=>({...x,ki:e.target.checked}))}/> KI soll das Dokument auslesen (verbraucht KI-Guthaben)</label>
                       {taxUp.msg && <div style={{fontSize:12.5,color:C.sub}}>{taxUp.msg}</div>}
                       <div style={{display:'flex',gap:8,marginTop:4}}>
@@ -6119,7 +6221,7 @@ function App({session}) {
                   <div style={{flex:1,minWidth:0}}><div style={{fontSize:14.5,fontWeight:600,color:C.txt}}>{d.title}</div><div style={{fontSize:12,color:C.sub}}>{accLabel(d.account)}{d.note?' · '+d.note:''}</div>{d.summary && <div style={{fontSize:12,color:C.txt,marginTop:5,lineHeight:1.5,whiteSpace:'pre-wrap',background:C.surf3,borderRadius:8,padding:'6px 9px'}}>🤖 {d.summary}</div>}</div>
                   {d.amount!=null && <div style={{fontSize:14.5,fontWeight:700,...NUM}}>{fmt(d.amount)}</div>}
                   {d.filePath && <button onClick={()=>openFile(d.filePath,d.fileName)} style={{background:C.surf2,border:'1px solid '+C.bdr,color:C.txt,borderRadius:9,padding:'7px 12px',fontSize:12.5,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>Ansehen</button>}
-                  <button onClick={()=>askConfirm('„'+d.title+'" löschen? Die Datei wird ebenfalls entfernt.',async()=>{ try{ if(d.filePath) await sb.storage.from('belege').remove([d.filePath]); }catch(e){} setData(prev=>({...prev,taxDocs:(prev.taxDocs||[]).filter(x=>x.id!==d.id)})); })} title="Löschen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:18,fontFamily:'inherit'}}>×</button>
+                  <button onClick={()=>askConfirm('„'+d.title+'" löschen? '+(d.booked?'Die zugehörige Buchung und ihre Datei bleiben erhalten.':'Die Datei wird ebenfalls entfernt.'),async()=>{ try{ if(d.filePath&&!d.booked) await sb.storage.from('belege').remove([d.filePath]); }catch(e){} setData(prev=>({...prev,taxDocs:(prev.taxDocs||[]).filter(x=>x.id!==d.id)})); })} title="Löschen" style={{background:'none',border:'none',color:C.mut,cursor:'pointer',fontSize:18,fontFamily:'inherit'}}>×</button>
                 </div>))}
               </div>))}
             </>); })()}
@@ -6730,21 +6832,33 @@ function App({session}) {
                 );})}
               </div>
 
-              {steuernTab==='ustva' && (()=>{ const v=calcVat(stY,stM); return (<>
-                {secHead('Umsatzsteuervoranmeldung · '+MONTHS[stM]+' '+stY, monthSel)}
+              {steuernTab==='ustva' && (()=>{
+                const qStart=Math.floor(stM/3)*3; const perMonths=ustvaPer==='jahr'?[...Array(12).keys()]:ustvaPer==='quartal'?[qStart,qStart+1,qStart+2]:[stM];
+                const perLabel=ustvaPer==='jahr'?('Jahr '+stY):ustvaPer==='quartal'?('Q'+(qStart/3+1)+' '+stY):(MONTHS[stM]+' '+stY);
+                const vs=perMonths.map(mm=>calcVat(stY,mm)); const sm=f=>r2(vs.reduce((t,x)=>t+(f(x)||0),0));
+                const v={base19:sm(x=>x.base19),base7:sm(x=>x.base7),baseFree:sm(x=>x.baseFree),salesTax:sm(x=>x.salesTax),salesTax19:sm(x=>x.salesTax19),salesTax7:sm(x=>x.salesTax7),inputTax:sm(x=>x.inputTax),inputTax19:sm(x=>x.inputTax19),inputTax7:sm(x=>x.inputTax7),payableTax:sm(x=>x.payableTax),missingVat:sm(x=>x.missingVat),missingBeleg:sm(x=>x.missingBeleg)};
+                const yearVs=[...Array(12).keys()].map(mm=>calcVat(stY,mm)); let cum=0; const monthRows=yearVs.map((x,mm)=>{ cum=r2(cum+x.payableTax); return {mm,x,cum}; }).filter(r=>r.x.rows.length);
+                const yearTot=r2(yearVs.reduce((t,x)=>t+x.payableTax,0)); const due=ACT.ustvaDeadline(stY,perMonths[perMonths.length-1],{dauerfrist:!!ustvaSettings.dauerfrist});
+                const picker=(<div style={{display:'flex',gap:8,flexWrap:'wrap'}}><select value={ustvaPer} onChange={e=>setUstvaPer(e.target.value)} style={{...SS,width:'auto'}}><option value="monat">Monat</option><option value="quartal">Quartal</option><option value="jahr">Ganzes Jahr</option></select>{ustvaPer==='jahr'?yearSel:monthSel}</div>);
+                return (<>
+                {secHead('Mehrwertsteuer · '+perLabel, picker)}
+                <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:12}}>
+                  {kpi('Umsatzsteuer (eingenommen)',fmt(v.salesTax),C.txt,'19 %: '+fmt(v.salesTax19)+' · 7 %: '+fmt(v.salesTax7))}
+                  {kpi('Vorsteuer (abziehbar)',fmt(v.inputTax),C.grn,'19 %: '+fmt(v.inputTax19)+' · 7 %: '+fmt(v.inputTax7))}
+                  {kpi(v.payableTax>=0?'Zahllast – zur Seite legen':'Erstattung',fmt(Math.abs(v.payableTax)),v.payableTax>=0?C.exp:C.grn,'Umsatzsteuer − Vorsteuer · Frist '+isoDe(due))}
+                </div>
+                <div style={{background:v.payableTax>0?C.ambL:C.surf,border:'1px solid '+(v.payableTax>0?'rgba(255,159,10,0.35)':C.bdr),borderRadius:12,padding:'12px 14px',marginBottom:12,fontSize:13.5,lineHeight:1.6}}>
+                  {v.payableTax>0?<>Für <b>{perLabel}</b> musst du voraussichtlich <b>{fmt(v.payableTax)}</b> ans Finanzamt zahlen – spätestens am <b>{isoDe(due)}</b>. Lege diesen Betrag zur Seite.</>:v.payableTax<0?<>Für <b>{perLabel}</b> bekommst du voraussichtlich <b>{fmt(Math.abs(v.payableTax))}</b> erstattet.</>:<>Für <b>{perLabel}</b> ergibt sich keine Zahllast.</>}
+                  {ustvaPer!=='jahr' && yearTot>0 && <div style={{fontSize:12.5,color:C.sub,marginTop:4}}>Gesamte Zahllast {stY} bisher: <b style={{color:C.txt}}>{fmt(yearTot)}</b> (abzüglich bereits gezahlter Voranmeldungen).</div>}
+                </div>
                 <div style={{...SC,marginBottom:12,padding:'12px 14px',display:'flex',gap:14,flexWrap:'wrap',alignItems:'center'}}>
                   <span style={{fontSize:13,fontWeight:700}}>Voranmeldung</span>
                   <select value={ustvaSettings.mode} onChange={e=>setData(prev=>({...prev,ustvaSettings:{...(prev.ustvaSettings||{dauerfrist:false}),mode:e.target.value}}))} style={{...SS,width:'auto'}}><option value="monat">monatlich</option><option value="quartal">vierteljährlich</option><option value="aus">nicht erforderlich (z. B. Kleinunternehmer)</option></select>
                   <label style={{display:'flex',alignItems:'center',gap:7,fontSize:13,color:C.txt,cursor:'pointer'}}><input type="checkbox" checked={!!ustvaSettings.dauerfrist} onChange={e=>setData(prev=>({...prev,ustvaSettings:{...(prev.ustvaSettings||{mode:'monat'}),dauerfrist:e.target.checked}}))}/> Dauerfristverlängerung (Frist +1 Monat)</label>
                   <span style={{fontSize:11.5,color:C.mut,flex:1,minWidth:200}}>Frist: 10. nach Ende des Zeitraums, bei Wochenende der nächste Montag (Feiertage nicht berücksichtigt). Welcher Rhythmus gilt, legt das Finanzamt fest.</span>
                 </div>
-                <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:14}}>
-                  {kpi('Umsatzsteuer',fmt(v.salesTax),C.txt,'19 %: '+fmt(v.salesTax19)+' · 7 %: '+fmt(v.salesTax7))}
-                  {kpi('Vorsteuer',fmt(v.inputTax),C.txt,'19 %: '+fmt(v.inputTax19)+' · 7 %: '+fmt(v.inputTax7))}
-                  {kpi(v.payableTax>=0?'Zu zahlen':'Erstattung',fmt(Math.abs(v.payableTax)),v.payableTax>=0?C.exp:C.grn,'Zahllast = Umsatzsteuer − Vorsteuer')}
-                </div>
                 <div style={{...SC,marginBottom:12}}>
-                  <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>Kennzahlen (für ELSTER)</div>
+                  <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>Kennzahlen (für ELSTER) · {perLabel}</div>
                   {[['81','Steuerpflichtige Umsätze 19 % (netto)',v.base19],['86','Steuerpflichtige Umsätze 7 % (netto)',v.base7],['48','Steuerfreie Umsätze',v.baseFree],['—','Innergemeinschaftliche Erwerbe',0],['—','Reverse Charge (§13b UStG)',0],['66','Vorsteuerbeträge',v.inputTax],['83','Zahllast / Erstattung',v.payableTax]].map(([kz,lbl,val],i)=>(
                     <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:'1px solid '+C.sep,fontSize:13.5}}>
                       <span style={{width:38,flexShrink:0,fontWeight:700,color:C.sub,...NUM}}>{kz}</span>
@@ -6752,15 +6866,30 @@ function App({session}) {
                       <span style={{fontWeight:700,...NUM}}>{fmt(val)}</span>
                     </div>
                   ))}
-                  <div style={{fontSize:11,color:C.mut,marginTop:10,lineHeight:1.5}}>Innergemeinschaftliche Erwerbe und Reverse Charge werden ausgewiesen, sobald entsprechende Buchungen erfasst sind.</div>
+                  <div style={{fontSize:11,color:C.mut,marginTop:10,lineHeight:1.5}}>Innergemeinschaftliche Erwerbe und Reverse Charge werden ausgewiesen, sobald entsprechende Buchungen erfasst sind. Bei Immobilien-Konten ist die Vorsteuer nur bei umsatzsteuerpflichtiger Vermietung abziehbar.</div>
                 </div>
                 {(v.missingVat>0||v.missingBeleg>0) && (
                   <div style={{background:C.ambL,border:'1px solid rgba(255,159,10,0.35)',borderRadius:12,padding:'12px 14px',marginBottom:12,fontSize:13,color:C.txt,lineHeight:1.6}}>
                     ⚠ {v.missingVat>0?(v.missingVat+' Buchung'+(v.missingVat===1?'':'en')+' ohne MwSt-Angabe (als 0 % gewertet)'):''}{v.missingVat>0&&v.missingBeleg>0?' · ':''}{v.missingBeleg>0?(v.missingBeleg+' Ausgabe'+(v.missingBeleg===1?'':'n')+' ohne Beleg'):''} – bitte ergänzen, damit die Voranmeldung stimmt.
                   </div>
                 )}
-                <button onClick={()=>exportUStVA(stY,stM)} style={{display:'inline-flex',alignItems:'center',gap:8,background:C.act,color:C.actTxt,border:'none',borderRadius:11,padding:'12px 18px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}><Ic p={P.send} sz={15} col={C.actTxt}/> ELSTER übermitteln (Kennzahlen exportieren)</button>
-                <div style={{fontSize:11,color:C.mut,marginTop:8}}>Exportiert alle Kennzahlen zum Übertragen auf elster.de – die direkte Übermittlung (ELSTER-Zertifikat) ist in Vorbereitung.</div>
+                <div style={{...SC,marginBottom:12}}>
+                  <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>Jahresübersicht {stY}</div>
+                  {monthRows.length===0 ? <div style={{fontSize:13,color:C.mut}}>Noch keine Buchungen in diesem Jahr.</div> : <>
+                    <div style={{display:'flex',gap:8,fontSize:11,color:C.mut,fontWeight:600,padding:'0 0 6px'}}><span style={{flex:1}}>Monat</span><span style={{width:92,textAlign:'right'}}>Umsatzsteuer</span><span style={{width:92,textAlign:'right'}}>Vorsteuer</span><span style={{width:92,textAlign:'right'}}>Zahllast</span><span style={{width:92,textAlign:'right'}}>laufend</span></div>
+                    {monthRows.map(r=>(<div key={r.mm} onClick={()=>{ setStM(r.mm); setUstvaPer('monat'); }} style={{display:'flex',gap:8,padding:'8px 0',borderTop:'1px solid '+C.sep,fontSize:13,cursor:'pointer',background:(ustvaPer==='monat'&&r.mm===stM)?C.surf2:'transparent'}}><span style={{flex:1}}>{MONTHS[r.mm]}</span><span style={{width:92,textAlign:'right',...NUM}}>{fmt(r.x.salesTax)}</span><span style={{width:92,textAlign:'right',...NUM}}>{fmt(r.x.inputTax)}</span><span style={{width:92,textAlign:'right',fontWeight:700,color:r.x.payableTax>0?C.exp:C.grn,...NUM}}>{fmt(r.x.payableTax)}</span><span style={{width:92,textAlign:'right',color:C.sub,...NUM}}>{fmt(r.cum)}</span></div>))}
+                    <div style={{display:'flex',gap:8,padding:'9px 0 0',borderTop:'2px solid '+C.bdrM,fontSize:13.5,fontWeight:800}}><span style={{flex:1}}>Summe {stY}</span><span style={{width:92,textAlign:'right',...NUM}}>{fmt(yearVs.reduce((t,x)=>t+x.salesTax,0))}</span><span style={{width:92,textAlign:'right',...NUM}}>{fmt(yearVs.reduce((t,x)=>t+x.inputTax,0))}</span><span style={{width:92,textAlign:'right',...NUM}}>{fmt(yearTot)}</span><span style={{width:92}}/></div></>}
+                </div>
+                <div style={{...SC,marginBottom:12,border:'1px solid '+hexA(C.pri,0.35)}}>
+                  <div style={{fontSize:14,fontWeight:800,marginBottom:3}}>Dokumente zum Selbst-Einreichen (ohne Steuerberater)</div>
+                  <div style={{fontSize:12.5,color:C.sub,lineHeight:1.5,marginBottom:10}}>Fertige Dokumente zum Herunterladen: mit allen Werten für ELSTER, Schritt-für-Schritt-Anleitung, Protokoll aller Buchungen und Fristen. Im Browser öffnen und bei Bedarf als PDF drucken.</div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                    {expBtn('UStVA-Protokoll & ELSTER-Anleitung · '+perLabel,()=>exportUStVADoc(stY,perMonths,perLabel),true)}
+                    {expBtn('Steuer-Leitfaden '+stY+' (alle Erklärungen)',()=>exportTaxGuide(stY))}
+                    {expBtn('Kennzahlen als Text',()=>exportUStVA(stY,stM))}
+                  </div>
+                  <div style={{fontSize:11,color:C.mut,marginTop:8,lineHeight:1.5}}>Die direkte Übermittlung an das Finanzamt braucht ein ELSTER-Zertifikat – das Dokument führt dich durch die Eingabe auf mein-elster.de.</div>
+                </div>
               </>); })()}
 
               {steuernTab==='euer' && (()=>{ const e=calcEUR(stY); return (<>
