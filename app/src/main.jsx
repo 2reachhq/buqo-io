@@ -1868,6 +1868,24 @@ function App({session}) {
       return nd;
     });
   };
+  /* Auszahlungs-Dateien (PDF/Excel/CSV) je Standort, Kanal und Monat hinterlegen – kommen ins Steuerberater-Paket */
+  const addInsDoc=async(pid,ch,files)=>{
+    let n=0;
+    for(const file of Array.from(files||[])){
+      try{
+        const path=['Inserate',yr,String(mo+1).padStart(2,'0'),pid,ch+'_'+uid().slice(0,6)+'_'+safeName(file.name)].join('/');
+        const {error}=await sb.storage.from('belege').upload(path,file,{upsert:true,contentType:file.type||'application/octet-stream'}); if(error) throw error;
+        upd(m=>{ const p=m.props?.[pid]||emptyProp(); const docs=p.income?.insDocs||{}; return {...m,props:{...m.props,[pid]:{...p,income:{...p.income,insDocs:{...docs,[ch]:[...(docs[ch]||[]),{path,name:file.name}]}}}}}; });
+        n++;
+      }catch(e){ setToast('Upload fehlgeschlagen: '+(e.message||e)); }
+    }
+    if(n) setToast(n+' Datei'+(n>1?'en':'')+' hinterlegt ✓');
+  };
+  const removeInsDoc=(pid,ch,path)=>{
+    upd(m=>{ const p=m.props?.[pid]||emptyProp(); const docs=p.income?.insDocs||{}; return {...m,props:{...m.props,[pid]:{...p,income:{...p.income,insDocs:{...docs,[ch]:(docs[ch]||[]).filter(d=>d.path!==path)}}}}}; });
+    try{ sb.storage.from('belege').remove([path]); }catch(_){ /* egal */ }
+  };
+  const openInsDoc=async(path)=>{ const w=window.open('','_blank'); try{ const {data:dd,error}=await sb.storage.from('belege').createSignedUrl(path,3600); if(error||!dd) throw (error||new Error('Datei nicht gefunden')); if(w) w.location.href=dd.signedUrl; else window.open(dd.signedUrl,'_blank'); }catch(e){ if(w) w.close(); setToast('Datei konnte nicht geöffnet werden: '+(e.message||e)); } };
   const toggleRecurIncome=(pid,fld)=>{
     const inc=(md.props?.[pid]?.income)||{};
     const on=!(inc.recur && inc.recur[fld]);
@@ -3755,7 +3773,7 @@ function App({session}) {
         if(!netto) netto = rateIn!=null ? r2(brutto/(1+rateIn/100)) : brutto;
         const vat = r2(brutto-netto);
         const rate = rateIn!=null ? rateIn : (netto>0 && vat>0 ? Math.round(vat/netto*100) : 0);
-        out.push({ id:it.id, name:it.name||'', brutto, netto, vat, rate, category:it.category||'', skr:String(it.skr||suggestSKR(it.category||'',kind)), belegnr:it.belegnr||'', datum:toISO(it.datum)||'', kind, account, y:+year, m:+mk, hasBeleg:!!(it.filePath||it.fileData), hasVatInfo:(rateIn!=null || Math.abs(num(it.netto))>0), filePath:it.filePath||'', fileDataRaw:it.fileData||null });
+        out.push({ id:it.id, name:it.name||'', brutto, netto, vat, rate, category:it.category||'', skr:String(it.skr||suggestSKR(it.category||'',kind)), belegnr:it.belegnr||'', datum:toISO(it.datum)||'', kind, account, y:+year, m:+mk, hasBeleg:!!(it.filePath||it.fileData), note:String(it.note||'').trim(), hasVatInfo:(rateIn!=null || Math.abs(num(it.netto))>0), filePath:it.filePath||'', fileDataRaw:it.fileData||null });
       }); };
       if(M.unternehmen){ grab(M.unternehmen.clients,'unter','ein'); grab(M.unternehmen.items,'unter','aus'); }
       if(M.props) Object.keys(M.props).forEach(pid=>{ const p=M.props[pid]||{}; grab(p.einnahmen,pid,'ein'); grab(p.expenses,pid,'aus'); });
@@ -3872,21 +3890,61 @@ function App({session}) {
       const blob=await zip.generateAsync({type:'blob'}); dlBlob('DATEV_Export_'+year+'.zip',blob); setToast('DATEV-Paket erstellt ✓');
     }catch(e){ setToast('Export fehlgeschlagen: '+(e.message||e)); }
     setDatevBusy(false); };
-  /* Steuerberater-Paket: alles für einen Monat oder ein Jahr in einer ZIP – Buchungsliste, Belege, Rechnungs-PDFs, Kontoauszüge, UStVA-Kennzahlen */
+  /* Steuerberater-Paket: alles für einen Monat oder ein Jahr in einer ZIP – Übersicht (HTML zum Drucken), Buchungsliste, Belege nach Konto/Monat sortiert,
+     Inserate-Einnahmen (Airbnb/Booking) samt hinterlegter Auszahlungs-Dateien, Rechnungs-PDFs, Kontoauszüge, UStVA-Kennzahlen */
   const exportAdvisorPack = async (year, month)=>{ if(packBusy) return; setPackBusy(true); setToast('📦 Steuerberater-Paket wird gepackt…');
-    try{ await loadJSZip(); const zip=new window.JSZip(); const per=month==null?String(year):(year+'-'+String(month+1).padStart(2,'0')); const perLabel=month==null?('Jahr '+year):(MONTHS[month]+' '+year);
+    try{ await loadJSZip(); const zip=new window.JSZip(); const pad2=n=>String(n).padStart(2,'0'); const per=month==null?String(year):(year+'-'+pad2(month+1)); const perLabel=month==null?('Jahr '+year):(MONTHS[month]+' '+year);
       const rows=collectBizBookings(year, month); const used=new Set(); const seen={}; let nFiles=0;
+      const esc=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      const kLabel=acc=>acc==='unter'?(names.unternehmen||'Firma'):(names[acc]||acc);
       const fetchFile=async(r)=>{ try{ if(r.fileDataRaw){ const m2=String(r.fileDataRaw).match(/^data:([^;]+);base64,(.*)$/); if(m2) return {payload:Uint8Array.from(atob(m2[2]),c=>c.charCodeAt(0)), ext:/pdf/.test(m2[1])?'pdf':'jpg'}; } else if(r.filePath){ const {data:dd}=await sb.storage.from('belege').createSignedUrl(r.filePath,3600); if(dd&&dd.signedUrl){ const resp=await fetch(dd.signedUrl); return {payload:await resp.arrayBuffer(), ext:(r.filePath.split('.').pop()||'pdf').toLowerCase()}; } } }catch(_){} return null; };
       const put=(folder,base,ext,payload)=>{ const b=safeName(String(base||'Datei').slice(0,50))||'Datei'; let fn=b+'.'+ext, k=2; while(seen[folder+fn]){ fn=b+'_'+k+'.'+ext; k++; } seen[folder+fn]=1; zip.file(folder+fn, payload); nFiles++; };
-      zip.file('Buchungen_'+per+'.csv','﻿'+['Datum;Beleg-Nr;Name;Art;Konto;Kategorie;MwSt-Satz;Netto;Brutto;Beleg vorhanden',...rows.map(r=>[r.datum,r.belegnr,'"'+String(r.name).replace(/"/g,'""')+'"',r.kind==='ein'?'Einnahme':'Ausgabe',(names[r.account]||(r.account==='unter'?names.unternehmen:r.account)),r.category,(r.rate||0)+'%',deNum(r.netto),deNum(r.brutto),(r.hasBeleg?'ja':'nein')].join(';'))].join('\r\n'));
-      for(const r of rows){ const key=r.filePath||''; if(key&&used.has(key)) continue; const f=await fetchFile(r); if(!f) continue; if(key) used.add(key); put(r.kind==='ein'?'Einnahmen-Belege/':'Ausgaben-Belege/', [r.datum,r.belegnr||r.name].filter(Boolean).join('_'), f.ext, f.payload); }
+      const months=month==null?[...Array(12).keys()]:[month];
+      // Einnahmen aus Vermietung: Miete, Sonstiges, Airbnb/Booking je Inserat
+      const immo=[]; const immoDocs=[];
+      months.forEach(mm=>{ const M=(data[year]||{})[mm]; if(!M||!M.props) return; PROPS.filter(pid=>acctCreated(pid)).forEach(pid=>{ const inc=(M.props[pid]||{}).income; if(!inc) return; const mk=year+'-'+pad2(mm+1);
+        [['mieteinnahmen','Miete'],['sonstig','Sonstiges']].forEach(([f,l])=>{ const v=incomeVal(inc,f); if(v) immo.push({mk,mm,pid,art:l,inserat:'',betrag:v}); });
+        ['airbnb','booking'].forEach(ch=>{ const art=ch==='airbnb'?'Airbnb':'Booking'; const insM=(inc.ins&&inc.ins[ch])||{}; const ids=Object.keys(insM).filter(id=>num(insM[id]));
+          if(ids.length) ids.forEach(id=>{ const it=((names.inserate||{})[pid]||[]).find(x=>x.id===id); immo.push({mk,mm,pid,art,inserat:(it&&it.name)||'(Inserat)',betrag:num(insM[id])}); });
+          else { const v=incomeVal(inc,ch); if(v) immo.push({mk,mm,pid,art,inserat:'',betrag:v}); }
+          ((inc.insDocs||{})[ch]||[]).forEach(d=>immoDocs.push({mk,pid,art,path:d.path,name:d.name})); }); }); });
+      const bar=r=>kLabel(r.account);
+      // 1) Buchungsliste
+      zip.file('Buchungen_'+per+'.csv','﻿'+['Datum;Beleg-Nr;Name;Art;Konto;Kategorie;MwSt-Satz;Netto;Brutto;Beleg vorhanden;Notiz',...rows.map(r=>[r.datum,r.belegnr,'"'+String(r.name).replace(/"/g,'""')+'"',r.kind==='ein'?'Einnahme':'Ausgabe',bar(r),r.category,(r.rate||0)+'%',deNum(r.netto),deNum(r.brutto),(r.hasBeleg?'ja':'nein'),'"'+String(r.note||'').replace(/"/g,'""')+'"'].join(';'))].join('\r\n'));
+      // 2) Inserate / Vermietung
+      if(immo.length) zip.file('Inserate_Einnahmen_'+per+'.csv','﻿'+['Monat;Standort;Art;Inserat;Betrag',...immo.map(i=>[i.mk,'"'+kLabel(i.pid)+'"',i.art,'"'+i.inserat.replace(/"/g,'""')+'"',deNum(i.betrag)].join(';'))].join('\r\n'));
+      // 3) Belege, nach Konto > Monat > Einnahmen/Ausgaben sortiert
+      for(const r of rows){ const key=r.filePath||''; if(key&&used.has(key)) continue; const f=await fetchFile(r); if(!f) continue; if(key) used.add(key); put('Belege/'+(safeName(bar(r))||'Konto')+'/'+r.y+'-'+pad2(r.m+1)+'/'+(r.kind==='ein'?'Einnahmen':'Ausgaben')+'/', [r.datum,r.belegnr||r.name].filter(Boolean).join('_'), f.ext, f.payload); }
+      // 4) hinterlegte Auszahlungs-Dateien der Inserate (Airbnb/Booking)
+      for(const d of immoDocs){ const f=await fetchFile({filePath:d.path}); if(f) put('Inserate/'+(safeName(kLabel(d.pid))||'Standort')+'/'+d.mk+'/', d.art+'_'+String(d.name||'').replace(/\.[^.]+$/,''), f.ext, f.payload); }
       const inP=(d)=>{ const iso=toISO(d); return iso && (month==null ? iso.slice(0,4)===String(year) : iso.slice(0,7)===per); };
       for(const iv of (data.invoices||[]).filter(x=>x.pdfPath && inP(x.date) && !used.has(x.pdfPath))){ const f=await fetchFile({filePath:iv.pdfPath}); if(f){ used.add(iv.pdfPath); put('Rechnungen-Ausgang/', 'Rechnung_'+(iv.number||''), f.ext, f.payload); } }
       const start=month==null?year+'-01-01':per+'-01', end=month==null?year+'-12-31':per+'-31';
       for(const st of (data.bankStatements||[]).filter(s0=>s0.path && ((s0.from||s0.to)?(s0.from<=end && (s0.to||s0.from)>=start):String(s0.year)===String(year)))){ const f=await fetchFile({filePath:st.path}); if(f) put('Kontoauszuege/', st.fileName.replace(/\.[^.]+$/,''), f.ext, f.payload); }
-      const months=month==null?[...Array(12).keys()]:[month]; const vlines=[]; months.forEach(mm=>{ const v=calcVat(year,mm); if(v.rows.length) vlines.push(MONTHS[mm]+' '+year+': Kz 81 '+deNum(v.base19)+' · Kz 86 '+deNum(v.base7)+' · Kz 48 '+deNum(v.baseFree)+' · Kz 66 '+deNum(v.inputTax)+' · Kz 83 '+deNum(v.payableTax)+' EUR'); });
+      const vlines=[]; months.forEach(mm=>{ const v=calcVat(year,mm); if(v.rows.length) vlines.push(MONTHS[mm]+' '+year+': Kz 81 '+deNum(v.base19)+' · Kz 86 '+deNum(v.base7)+' · Kz 48 '+deNum(v.baseFree)+' · Kz 66 '+deNum(v.inputTax)+' · Kz 83 '+deNum(v.payableTax)+' EUR'); });
       zip.file('UStVA_Kennzahlen_'+per+'.txt', ['Umsatzsteuer-Voranmeldung – Kennzahlen aus Buqo (Rechenhilfe, keine Steuerberatung)','',...(vlines.length?vlines:['Keine Buchungen im Zeitraum.'])].join('\r\n'));
-      zip.file('LIESMICH.txt',['Steuerberater-Paket · '+perLabel,'Erstellt mit Buqo am '+new Date().toLocaleDateString('de-DE'),'','Inhalt:','- Buchungen_'+per+'.csv – alle Einnahmen/Ausgaben des Zeitraums','- Einnahmen-Belege/, Ausgaben-Belege/ – zugehörige Dateien ('+nFiles+' Dateien insgesamt im Paket)','- Rechnungen-Ausgang/ – erstellte Rechnungen (PDF)','- Kontoauszuege/ – hochgeladene Kontoauszüge','- UStVA_Kennzahlen_'+per+'.txt – Umsatzsteuer-Kennzahlen je Monat','','Buchungen ohne Beleg sind in der CSV mit „nein" gekennzeichnet.'].join('\r\n'));
+      // 5) Übersicht (HTML, im Browser öffnen und bei Bedarf als PDF drucken)
+      const eur=v=>deNum(v)+' €'; const sumBy=(arr,f)=>arr.reduce((t,x)=>t+f(x),0);
+      const konten={}; const kk=(l)=>konten[l]||(konten[l]={ein:0,aus:0,einN:0,ausN:0,n:0,miss:0,immo:0});
+      rows.forEach(r=>{ const k=kk(bar(r)); k.n++; if(r.kind==='ein'){ k.ein+=r.brutto; k.einN+=r.netto; } else { k.aus+=r.brutto; k.ausN+=r.netto; if(!r.hasBeleg) k.miss++; } });
+      immo.forEach(i=>{ const k=kk(kLabel(i.pid)); k.immo+=i.betrag; });
+      const totEin=sumBy(Object.values(konten),k=>k.ein+k.immo), totAus=sumBy(Object.values(konten),k=>k.aus), totMiss=sumBy(Object.values(konten),k=>k.miss);
+      const tbl=(head,body,right)=>'<table><thead><tr>'+head.map((h,i)=>'<th'+((right||[]).includes(i)?' class="r"':'')+'>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+body.map(r=>'<tr>'+r.map((c,i)=>'<td'+((right||[]).includes(i)?' class="r"':'')+'>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
+      const monthRows=months.map(mm=>{ const e=sumBy(rows.filter(r=>r.m===mm&&r.kind==='ein'),r=>r.brutto)+sumBy(immo.filter(i=>i.mm===mm),i=>i.betrag); const a=sumBy(rows.filter(r=>r.m===mm&&r.kind==='aus'),r=>r.brutto); return [esc(MONTHS[mm]),eur(e),eur(a),eur(e-a)]; });
+      const immoSum={}; immo.forEach(i=>{ const key=kLabel(i.pid)+'|'+i.art; immoSum[key]=(immoSum[key]||0)+i.betrag; });
+      const missRows=rows.filter(r=>r.kind==='aus'&&!r.hasBeleg); const noteRows=rows.filter(r=>r.note);
+      const html='<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Übersicht '+esc(perLabel)+'</title><style>body{font:14px/1.5 -apple-system,Segoe UI,Arial,sans-serif;color:#1d1d1f;max-width:980px;margin:32px auto;padding:0 20px}h1{font-size:26px;margin:0 0 4px}h2{font-size:17px;margin:28px 0 8px;border-bottom:2px solid #1d1d1f;padding-bottom:4px}.sub{color:#6e6e73;margin-bottom:18px}.cards{display:flex;gap:12px;flex-wrap:wrap}.card{border:1px solid #d2d2d7;border-radius:12px;padding:10px 16px;min-width:150px}.card b{display:block;font-size:20px}table{border-collapse:collapse;width:100%;margin-top:6px;font-size:13px}th,td{padding:6px 8px;border-bottom:1px solid #e5e5ea;text-align:left;vertical-align:top}th{font-size:11px;text-transform:uppercase;color:#6e6e73}.r{text-align:right;white-space:nowrap}.warn{color:#b25000}@media print{body{margin:0}h2{break-after:avoid}}</style></head><body>'
+        +'<h1>Übersicht für den Steuerberater</h1><div class="sub">'+esc(perLabel)+' · erstellt mit Buqo am '+esc(new Date().toLocaleDateString('de-DE'))+' · Privatbuchungen sind nicht enthalten</div>'
+        +'<div class="cards"><div class="card">Einnahmen<b>'+eur(totEin)+'</b></div><div class="card">Ausgaben<b>'+eur(totAus)+'</b></div><div class="card">Ergebnis<b>'+eur(totEin-totAus)+'</b></div><div class="card">Buchungen<b>'+rows.length+'</b></div><div class="card '+(totMiss?'warn':'')+'">Ausgaben ohne Beleg<b>'+totMiss+'</b></div></div>'
+        +'<h2>Nach Konto</h2>'+tbl(['Konto','Einnahmen brutto','davon Vermietung/Inserate','Ausgaben brutto','Ergebnis','Buchungen','ohne Beleg'],Object.entries(konten).map(([l,k])=>[esc(l),eur(k.ein+k.immo),eur(k.immo),eur(k.aus),eur(k.ein+k.immo-k.aus),String(k.n),String(k.miss)]),[1,2,3,4,5,6])
+        +(month==null?'<h2>Nach Monat</h2>'+tbl(['Monat','Einnahmen','Ausgaben','Ergebnis'],monthRows,[1,2,3]):'')
+        +'<h2>Inserate &amp; Vermietung (Einnahmen)</h2>'+(immo.length?tbl(['Monat','Standort','Art','Inserat','Betrag'],immo.sort((x,y)=>x.mk.localeCompare(y.mk)||kLabel(x.pid).localeCompare(kLabel(y.pid))).map(i=>[esc(i.mk),esc(kLabel(i.pid)),esc(i.art),esc(i.inserat||'–'),eur(i.betrag)]),[4])+'<p><b>Summen:</b> '+Object.entries(immoSum).map(([k2,v])=>esc(k2.replace('|',' · '))+' '+eur(v)).join(' &nbsp;|&nbsp; ')+'</p>'+'<p class="sub">Airbnb- und Booking-Einnahmen sind separat gebucht (nicht mit Ausgaben verrechnet). Die zugehörigen Auszahlungs-Dateien liegen im Ordner „Inserate“ ('+immoDocs.length+' Datei'+(immoDocs.length===1?'':'en')+').</p>':'<p class="sub">Keine Vermietungs-/Inserate-Einnahmen im Zeitraum.</p>')
+        +'<h2>Umsatzsteuer-Kennzahlen</h2>'+(vlines.length?'<ul>'+vlines.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ul>':'<p class="sub">Keine Buchungen im Zeitraum.</p>')
+        +(missRows.length?'<h2 class="warn">Ausgaben ohne Beleg ('+missRows.length+')</h2>'+tbl(['Datum','Name','Konto','Betrag'],missRows.slice(0,200).map(r=>[esc(r.datum),esc(r.name),esc(bar(r)),eur(r.brutto)]),[3])+(missRows.length>200?'<p class="sub">… und '+(missRows.length-200)+' weitere (siehe Buchungsliste).</p>':''):'')
+        +(noteRows.length?'<h2>Notizen zu Buchungen ('+noteRows.length+')</h2>'+tbl(['Datum','Name','Konto','Notiz'],noteRows.slice(0,300).map(r=>[esc(r.datum),esc(r.name),esc(bar(r)),esc(r.note)])):'')
+        +'<h2>Inhalt des Pakets</h2><ul><li><b>Buchungen_'+esc(per)+'.csv</b> – alle Einnahmen und Ausgaben</li><li><b>Belege/</b> – nach Konto, Monat und Einnahmen/Ausgaben sortiert</li><li><b>Inserate/</b> – hinterlegte Airbnb-/Booking-Auszahlungen je Standort und Monat; <b>Inserate_Einnahmen_'+esc(per)+'.csv</b> mit den Beträgen</li><li><b>Rechnungen-Ausgang/</b> – erstellte Rechnungen (PDF)</li><li><b>Kontoauszuege/</b> – hochgeladene Kontoauszüge</li><li><b>UStVA_Kennzahlen_'+esc(per)+'.txt</b></li></ul></body></html>';
+      zip.file('Uebersicht_'+per+'.html', html);
+      zip.file('LIESMICH.txt',['Steuerberater-Paket · '+perLabel,'Erstellt mit Buqo am '+new Date().toLocaleDateString('de-DE'),'','Zuerst öffnen: Uebersicht_'+per+'.html (im Browser; über „Drucken“ als PDF speicherbar).','','Inhalt:','- Buchungen_'+per+'.csv – alle Einnahmen/Ausgaben des Zeitraums (ohne Privat)','- Belege/<Konto>/<Monat>/<Einnahmen|Ausgaben>/ – zugehörige Dateien ('+nFiles+' Dateien insgesamt im Paket)','- Inserate/<Standort>/<Monat>/ – hinterlegte Auszahlungs-Dateien von Airbnb/Booking','- Inserate_Einnahmen_'+per+'.csv – Beträge je Standort, Inserat und Kanal','- Rechnungen-Ausgang/ – erstellte Rechnungen (PDF)','- Kontoauszuege/ – hochgeladene Kontoauszüge','- UStVA_Kennzahlen_'+per+'.txt – Umsatzsteuer-Kennzahlen je Monat','','Buchungen ohne Beleg sind in der CSV mit „nein" gekennzeichnet.'].join('\r\n'));
       const blob=await zip.generateAsync({type:'blob'}); dlBlob('Steuerberater_'+per+'.zip',blob); setToast('Steuerberater-Paket erstellt ✓ ('+nFiles+' Dateien)');
     }catch(e){ setToast('Paket fehlgeschlagen: '+(e.message||e)); }
     setPackBusy(false); };
@@ -6289,7 +6347,7 @@ function App({session}) {
                   <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
                     <div style={{flex:1,minWidth:240}}>
                       <div style={{fontSize:15,fontWeight:800}}>Für den Steuerberater</div>
-                      <div style={{fontSize:12.5,color:C.sub,marginTop:3,lineHeight:1.5}}>Ein Paket mit Buchungsliste, Belegen, Rechnungs-PDFs, Kontoauszügen und UStVA-Kennzahlen – für einen Monat oder das ganze Jahr.{(data.bankStatements||[]).length?' Abgelegte Kontoauszüge: '+(data.bankStatements||[]).length+'.':' Noch keine Kontoauszüge abgelegt (Mehr → Umzug aus sevDesk).'}</div>
+                      <div style={{fontSize:12.5,color:C.sub,marginTop:3,lineHeight:1.5}}>Ein Paket mit Übersicht (zum Drucken), Buchungsliste, nach Konto und Monat sortierten Belegen, Airbnb-/Booking-Einnahmen samt hinterlegten Auszahlungs-Dateien, Rechnungs-PDFs, Kontoauszügen und UStVA-Kennzahlen – für einen Monat oder das ganze Jahr.{(data.bankStatements||[]).length?' Abgelegte Kontoauszüge: '+(data.bankStatements||[]).length+'.':' Noch keine Kontoauszüge abgelegt (Mehr → Umzug aus sevDesk).'}</div>
                     </div>
                     <select value={packY} onChange={e=>setPackY(+e.target.value)} style={{...SS,width:'auto'}}>{[0,1,2,3,4].map(i=>now.getFullYear()-i).map(y=><option key={y} value={y}>{y}</option>)}</select>
                     <select value={packM} onChange={e=>setPackM(e.target.value)} style={{...SS,width:'auto'}}><option value="">Ganzes Jahr</option>{MONTHS.map((mn,i)=><option key={i} value={i}>{mn}</option>)}</select>
@@ -6962,6 +7020,15 @@ function App({session}) {
                           style={{background:'rgba(255,90,95,0.12)',border:'none',color:C.red,borderRadius:6,width:24,height:24,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.trash} sz={12} col={C.red}/></button>
                       </div>
                     ))}
+                    <div style={{marginTop:8,padding:'8px 10px',background:C.surf2,borderRadius:10}}>
+                      <div style={{fontSize:11,color:C.mut,fontWeight:600,marginBottom:4}}>Auszahlungs-Dateien {MONTHS[mo]} {yr} (PDF, Excel, CSV) – für den Steuerberater hinterlegt</div>
+                      {['airbnb','booking'].map(ch=>{ const docs=((md.props?.[pid]?.income?.insDocs)||{})[ch]||[]; return (
+                        <div key={ch} style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',padding:'3px 0'}}>
+                          <span style={{fontSize:12,color:C.sub,width:64,fontWeight:600}}>{ch==='airbnb'?'Airbnb':'Booking'}</span>
+                          {docs.map(d=>(<span key={d.path} style={{display:'inline-flex',alignItems:'center',gap:4,background:C.surf,border:'1px solid '+C.bdr,borderRadius:8,padding:'2px 4px 2px 8px',fontSize:12}}><button onClick={()=>openInsDoc(d.path)} title="Datei öffnen" style={{background:'none',border:'none',cursor:'pointer',color:C.txt,fontFamily:'inherit',fontSize:12,maxWidth:170,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📎 {d.name}</button><button onClick={()=>askConfirm('Datei „'+d.name+'" entfernen?',()=>removeInsDoc(pid,ch,d.path))} title="Entfernen" style={{background:'none',border:'none',cursor:'pointer',color:C.mut,fontSize:14,lineHeight:1}}>×</button></span>))}
+                          <label style={{fontSize:12,fontWeight:700,color:futureMonth?C.mut:C.pri,cursor:futureMonth?'default':'pointer',padding:'2px 6px'}}>+ Datei<input type="file" multiple disabled={futureMonth} accept=".pdf,.csv,.xls,.xlsx,.txt,image/*" style={{display:'none'}} onChange={e=>{ const fs=e.target.files; if(fs&&fs.length) addInsDoc(pid,ch,fs); e.target.value=''; }} /></label>
+                        </div>); })}
+                    </div>
                     <button onClick={()=>setInserate(pid,[...list,{id:uid(),name:''}])}
                       style={{background:'none',border:'1px dashed '+C.surf3,color:C.mut,borderRadius:8,padding:'7px 12px',fontSize:12.5,cursor:'pointer',fontFamily:'inherit',width:'100%',marginTop:8}}>+ Inserat bei {names[pid]||pid}</button>
                   </div>
