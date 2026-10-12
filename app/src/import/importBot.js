@@ -44,7 +44,7 @@ export function matchFilter(u, f) {
 export function normalizeActions(actions, { cats, accounts }) {
   const kontoKey = (v) => { if (!v) return null; const n = norm(v); const a = accounts.find(x => norm(x.key) === n || norm(x.label) === n || norm(x.label).includes(n) || n.includes(norm(x.label))); return a ? a.key : null; };
   const catOf = (v) => { if (!v) return null; const c = cats.find(x => norm(x) === norm(v)); return c || null; };
-  const ok = ['auswaehlen', 'setzen', 'ignorieren', 'wiederherstellen', 'notiz', 'merken', 'todo', 'beleg'];
+  const ok = ['auswaehlen', 'setzen', 'ignorieren', 'wiederherstellen', 'notiz', 'merken', 'todo', 'beleg', 'keinbeleg'];
   return (actions || []).filter(a => a && ok.includes(a.typ)).map(a => {
     const s = a.setzen || {}; const set = {};
     const kat = catOf(s.kategorie); if (kat) set.kategorie = kat;
@@ -76,7 +76,7 @@ export function relevantRows(units, text, limit = 40) {
   const words = String(text || '').toLowerCase().split(/[^a-zäöüß0-9]+/).filter(w => w.length >= 4 && !STOP.has(w)).map(norm).filter(Boolean);
   if (!words.length) return [];
   return units.filter(u => { const hay = norm(u.name + ' ' + (u.beschreibung || '') + ' ' + (u.notiz || '') + ' ' + (u.kategorie || '') + ' ' + String(u.brutto)); return words.some(w => hay.includes(w)); })
-    .slice(0, limit).map(u => [u.datum, u.name, (u.kind === 'ein' ? '+' : '-') + u.brutto + '€', 'Kat:' + u.kategorie, 'Konto:' + u.konto, u.mwst != null ? 'MwSt:' + u.mwst + '%' : '', u.hasFile ? 'Beleg' : 'ohneBeleg', u.skip ? 'ignoriert' : '', u.notiz ? 'Notiz:' + String(u.notiz).slice(0, 80) : ''].filter(Boolean).join(' | '));
+    .slice(0, limit).map(u => [u.key, u.datum, u.name, (u.kind === 'ein' ? '+' : '-') + u.brutto + '€', 'Kat:' + u.kategorie, 'Konto:' + u.konto, u.mwst != null ? 'MwSt:' + u.mwst + '%' : '', u.hasFile ? 'Beleg' : 'ohneBeleg', u.skip ? 'ignoriert' : '', u.notiz ? 'Notiz:' + String(u.notiz).slice(0, 80) : ''].filter(Boolean).join(' | '));
 }
 const STOP = new Set(['alle', 'alles', 'dass', 'diese', 'dieser', 'sowie', 'wurde', 'waren', 'sollen', 'bitte', 'einmal', 'machen', 'kannst', 'meine', 'meinen', 'oder', 'nicht', 'dann', 'habe', 'haben', 'wieder', 'immer', 'gedacht', 'verbuche', 'verbuchen', 'zeige', 'zeig']);
 
