@@ -6,7 +6,7 @@ import { decodeText, parseCSV, autoMap, detectFormat, FORMAT_LABEL, normalizeRow
 import { readZipEntries, baseName } from './zip.js';
 import { parseDatev } from './datevCompare.js';
 import { matchBank, matchDatev } from './reconcile.js';
-import { yearOverview, relevantRows, groupContext, parseBotJson, matchFilter, normalizeActions } from './importBot.js';
+import { belegCandidates, yearOverview, relevantRows, groupContext, parseBotJson, matchFilter, normalizeActions } from './importBot.js';
 
 const { useState, useMemo } = React;
 const MAP_FIELDS = [['datum','Datum'],['nummer','Nummer'],['name','Name / Kontakt'],['beschreibung','Beschreibung'],['brutto','Brutto'],['netto','Netto'],['mwst','MwSt-Satz'],['kategorie','Kategorie'],['status','Status'],['zahldatum','Zahldatum'],['faellig','Fällig']];
@@ -63,6 +63,10 @@ export default function SevdeskImport(props) {
   const [sortBy, setSortBy] = useState('datum');    // Sortierung innerhalb der Gruppen: datum | name | betrag
   const [kiApplied, setKiApplied] = useState({});   // Zeilen, bei denen der KI-Text schon in die Notiz geschrieben wurde
   const [forceDup, setForceDup] = useState({});    // als „doppelt/schon vorhanden" erkannte Zeilen, die der Nutzer trotzdem importieren will
+  const [botFile, setBotFile] = useState(null);   // im KI-Helfer angehängter Beleg {file, doc}
+  const [botPick, setBotPick] = useState(null);   // mehrere passende Buchungen zur Auswahl
+  const [recOn, setRecOn] = useState(false);        // Spracheingabe läuft
+  const recRef = React.useRef(null); const taRef = React.useRef(null);
   const [noteOpen, setNoteOpen] = useState({});     // Notizzeile unter der Buchung aufgeklappt
   const [botOpen, setBotOpen] = useState(false);     // KI-Helfer im Vollbild aufgeklappt
   const [groupBy, setGroupBy] = useState('monat');   // Abgleich-Tabelle gruppieren: monat | name | konto
@@ -285,7 +289,7 @@ export default function SevdeskImport(props) {
     const occ = {}; const sid = (b) => { const k = b.datum + '|' + Math.round(Math.abs(+b.amount) * 100) + '|' + normN(b.name).slice(0, 16); occ[k] = (occ[k] || 0) + 1; return k + '|' + occ[k]; };
     const recs = bankRowsY.map((b, i) => ({ b, i })).filter(({ b, i }) => !used.has(i) && b.datum && Math.abs(+b.amount) > 0).map(({ b, i }) => { const idx = sid(b);
       const brutto = Math.round(Math.abs(+b.amount) * 100) / 100; const aus = b.kind !== 'ein';
-      return { idx, kind: aus ? 'aus' : 'ein', datum: b.datum, y: +b.datum.slice(0, 4), m: +b.datum.slice(5, 7) - 1, nummer: b.belegnr || '', name: String(b.name || 'Umsatz').slice(0, 90), beschreibung: b.note || '', brutto, netto: brutto, mwst: 0, kategorie: aus ? (mapCategory(b.category || '', '') || mapCategory(b.note || '') || mapCategory(b.name || '') || 'Allgemein') : 'Allgemein', status: 'bezahlt', cancelled: false, dup: false, storno: false, file: null, inYear: true, bankOnly: true, warn: [], faellig: '', zahldatum: b.datum };
+      return { idx, bankRow: b, kind: aus ? 'aus' : 'ein', datum: b.datum, y: +b.datum.slice(0, 4), m: +b.datum.slice(5, 7) - 1, nummer: b.belegnr || '', name: String(b.name || 'Umsatz').slice(0, 90), beschreibung: b.note || '', brutto, netto: brutto, mwst: 0, kategorie: aus ? (mapCategory(b.category || '', '') || mapCategory(b.note || '') || mapCategory(b.name || '') || 'Allgemein') : 'Allgemein', status: 'bezahlt', cancelled: false, dup: false, storno: false, file: null, inYear: true, bankOnly: true, warn: [], faellig: '', zahldatum: b.datum };
     });
     return markDuplicates(recs, existing && existing.belege);
   }, [bankRowsY, bankMatch, existing]); // eslint-disable-line
@@ -372,12 +376,15 @@ export default function SevdeskImport(props) {
       const todos = [];
       allGo.forEach(({ r, k }) => { if (later[k + r.idx]) todos.push({ rowKey: k + r.idx, title: 'Prüfen: ' + (eff(k, r).name || 'Posten') + ' · ' + fmt(r.brutto), note: statusOf(k, r).chips.map(c => c.t).join('\n') }); });
       (dMatch ? dMatch.onlyDatev : []).forEach((d, i) => { if (datevAct['d' + i] === 'later') todos.push({ title: 'In DATEV, aber nicht im Import: ' + (d.name || 'Posten') + ' · ' + fmt(d.brutto), note: (d.datum || '') + (d.nummer ? ' · ' + d.nummer : '') }); });
+      // Kontoauszug-Umsätze mit ihrer Entscheidung im Abgleich: ignorierte kommen als „Ignoriert“ in die Bank-Ansicht, gebuchte werden mit ihrer Buchung verknüpft
+      const keyOfBank = new Map(); if (bankMatch) bankMatch.forEach((bRow, key) => keyOfBank.set(bRow, key)); xAll.forEach(r => { if (r.bankRow) keyOfBank.set(r.bankRow, 'x' + r.idx); });
+      const bankLinks = bankRowsY.map(bRow => { const key = keyOfBank.get(bRow) || null; return { row: bRow, key, ignored: !!(key && skip[key]) }; });
       const payload = {
-        confirmed, minCust, year, todos,
+        confirmed, minCust, year, todos, bankLinks,
         bank: bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })),
         extraDocs: extra.map(x => x.file),
-        belege: [...xGo.map(r0 => { const r = eff('x', r0); return { ...r, rowKey: 'x' + r.idx, taxNote: (notes['x' + r.idx] || '').trim(), dest: acctOf('x', r), file: fileFor(null, null, 'x' + r.idx), recur: null }; }), ...belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, rowKey: 'b' + r.idx, status: (bankMatch && bankMatch.has('b' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file, 'b' + r.idx), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; })],
-        rechnungen: rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, rowKey: 'r' + r.idx, status: (bankMatch && bankMatch.has('r' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file, 'r' + r.idx) }); }),
+        belege: [...xGo.map(r0 => { const r = eff('x', r0); return { ...r, rowKey: 'x' + r.idx, bankText: r0.name, bankDate: r0.datum, taxNote: (notes['x' + r.idx] || '').trim(), dest: acctOf('x', r), file: fileFor(null, null, 'x' + r.idx), recur: null }; }), ...belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, rowKey: 'b' + r.idx, bankText: ((bankMatch && bankMatch.get('b' + r.idx)) || {}).name || '', bankDate: ((bankMatch && bankMatch.get('b' + r.idx)) || {}).datum || '', status: (bankMatch && bankMatch.has('b' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file, 'b' + r.idx), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; })],
+        rechnungen: rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, rowKey: 'r' + r.idx, bankText: ((bankMatch && bankMatch.get('r' + r.idx)) || {}).name || '', bankDate: ((bankMatch && bankMatch.get('r' + r.idx)) || {}).datum || '', status: (bankMatch && bankMatch.has('r' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file, 'r' + r.idx) }); }),
         // laufende Rechnungs-Serien: ab dem Folgemonat automatisch weiter erzeugen
         recurInvoices: recurActive(recurR, rechGo, 'r').filter(g => g.ongoing && g.idxs.includes(g.last.idx) && rechGo.some(r => r.idx === g.last.idx)).map(g => ({ name: g.last.name, dest: acctOf('r', g.last), netto: g.last.netto, mwst: g.last.mwst, beschreibung: g.last.beschreibung, adresse: g.last.adresse, lastY: g.to.y, lastM: g.to.m })),
       };
@@ -414,18 +421,46 @@ export default function SevdeskImport(props) {
     const sp = [a.set.kategorie && 'Kategorie → ' + a.set.kategorie, a.set.konto && 'Konto → ' + ((accounts.find(x => x.key === a.set.konto) || {}).label || a.set.konto), a.set.mwst != null && 'MwSt → ' + a.set.mwst + ' %', a.set.notiz && 'Notiz „' + a.set.notiz + '"'].filter(Boolean).join(', ');
     const t = { auswaehlen: 'Auswählen', setzen: 'Ändern: ' + sp, ignorieren: 'Ignorieren (nicht importieren)', todo: 'Als To-do vormerken', wiederherstellen: 'Wiederherstellen', notiz: 'Notiz setzen: ' + sp, merken: 'Merken: ' + a.text }[a.typ];
     return t + (a.typ !== 'merken' && fp ? ' · ' + fp : ''); };
+  // Beleg im Chat anhängen: die KI liest ihn sofort (Name, Datum, Betrag, MwSt …)
+  const attachBotFile = async (file) => {
+    if (!file) return; setBotFile({ file, doc: null, busy: true });
+    try { const bytes = new Uint8Array(await file.arrayBuffer()); const doc = await withRetry(() => aiReadDoc(bytes, file.name, { kind: 'aus', name: '', brutto: 0 })); setBotFile({ file, doc, busy: false }); }
+    catch (e) { setBotFile({ file, doc: null, busy: false }); setBotMsgs(m => [...m, { role: 'ai', text: 'Beleg konnte nicht gelesen werden.' }]); }
+  };
+  // Spracheingabe (Browser-Spracherkennung, Deutsch)
+  const toggleRec = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) { setBotMsgs(m => [...m, { role: 'ai', text: 'Spracheingabe wird von diesem Browser nicht unterstützt.' }]); return; }
+    if (recOn) { try { recRef.current && recRef.current.stop(); } catch (e) { /* egal */ } setRecOn(false); return; }
+    const r = new SR(); r.lang = 'de-DE'; r.continuous = true; r.interimResults = true; let base = botInput ? botInput + ' ' : '';
+    r.onresult = (e) => { let interim = ''; for (let i = e.resultIndex; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) base += t + ' '; else interim += t; } setBotInput((base + interim).trim()); setTimeout(() => growTa(), 0); };
+    r.onerror = () => setRecOn(false); r.onend = () => setRecOn(false);
+    recRef.current = r; try { r.start(); setRecOn(true); } catch (e) { setRecOn(false); }
+  };
+  const growTa = () => { const t = taRef.current; if (!t) return; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 150) + 'px'; };
   const sendBot = async () => {
-    const text = botInput.trim(); if (!text || botBusy || !aiAsk) return;
-    setBotInput(''); setBotMsgs(m => [...m, { role: 'user', text }]); setBotBusy(true); setBotPending(null);
+    const typed = botInput.trim(); const att = botFile; if (att && att.busy) return;
+    const text = typed || (att ? 'Hinterlege diesen Beleg bei der passenden Abbuchung.' : ''); if (!text || botBusy || !aiAsk) return;
+    try { recRef.current && recRef.current.stop(); } catch (e) { /* egal */ } setRecOn(false);
+    setBotInput(''); setBotFile(null); setTimeout(() => growTa(), 0);
+    setBotMsgs(m => [...m, { role: 'user', text: (att ? '📎 ' + att.file.name + (typed ? '\n' : '') : '') + typed }]); setBotBusy(true); setBotPending(null); setBotPick(null);
     try {
       const units = dispRows.map(unitOf); const ctx = groupContext(units); const ov = yearOverview(units); const rel = relevantRows(units, text + ' ' + botMsgs.slice(-2).map(m => m.text).join(' '));
-      const system = 'Du bist der Import-Helfer von Buqo (deutsche Buchhaltung/Steuer) für den sevDesk-Import. Du kennst die gesamte Liste des Jahres (Kontoauszug-Umsätze, Belege, Rechnungen, Konten, Beleg-Status, Notizen, MwSt) und kannst sie ändern. Du darfst im Internet recherchieren (web_search), wenn steuerliche oder buchhalterische Fragen es erfordern (z. B. Notar-, Gerichts-, Finanzamtskosten, Grunderwerbsteuer, Abschreibung, Vorsteuer bei Airbnb/Booking/Auslandsrechnungen). Wenn der Nutzer erklärt, wofür eine Buchung war, setze die Notiz (sachlich: was, wofür, steuerliche Einordnung, Quelle/Begründung) und passe Kategorie, MwSt und Konto an. Frage ihn bei Beleg-Wissen nicht doppelt, wenn du es sicher weißt. Hinweis: Umsätze nur aus dem Kontoauszug haben keine MwSt-Angabe (Standard 0 %, „MwSt prüfen"). Schlage die richtige MwSt vor (0, 7 oder 19) und setze sie, wenn der Nutzer es möchte oder es eindeutig ist (z. B. Airbnb/Booking-Vermittlungsgebühren = Reverse Charge/0 %, Bank-/Versicherungsgebühren = 0 %, Gehälter/Steuern = 0 %, Software/Material/Bewirtung nach Beleg). Antworte NUR mit minifiziertem JSON ohne Markdown: {"antwort":"…","aktionen":[…]}. "antwort": kurz, klar, mit Zeilenumbrüchen (\\n), ohne Floskeln; bei Steuerfragen mit knapper Begründung und Hinweis, dass der Steuerberater das bestätigen soll. Aktionen: {"typ":"auswaehlen|setzen|ignorieren|wiederherstellen|notiz|todo|merken","filter":{"name":"Teil des Namens oder Liste","von":"YYYY-MM-DD","bis":"YYYY-MM-DD","art":"ein|aus","konto":"Schlüssel","kategorie":"…","min":0,"max":0,"status":"passt|hinweis|fehlt","ohneBeleg":true,"quelle":"bank|csv","text":"Suchwort in Name/Beschreibung/Notiz"},"setzen":{"kategorie":"aus der Liste","konto":"Schlüssel","privat":true,"mwst":0|7|19,"notiz":"…"},"text":"…"}. "todo" = Zeilen als To-do vormerken. "merken": text = kurzer Fakt über den Nutzer oder das Konto für die spätere Steuerberatung (max. 200 Zeichen), z. B. „Airbnb-Gebühren: 0 % MwSt, Vermittlung für Ferienwohnung". Nutze nur vorhandene Kategorien und Konten, erfinde keine Zahlen. Ist der Auftrag unklar, gib keine Aktion zurück und stelle in "antwort" eine kurze Rückfrage. Alle Änderungen werden dem Nutzer zur Bestätigung gezeigt.';
-      const user = 'Konten (Schlüssel=Name): ' + accounts.map(a => a.key + '=' + a.label).join(', ') + '\nKategorien: ' + CATS.join(', ') + '\n\nÜBERBLICK:\n' + ov.join('\n') + (taxFacts && taxFacts.length ? '\n\nBekannte Fakten über den Nutzer:\n' + taxFacts.slice(-25).join('\n') : '') + '\n\nListe nach Name zusammengefasst:\n' + ctx.join('\n') + (rel.length ? '\n\nEinzelbuchungen zur Frage:\n' + rel.join('\n') : '') + '\n\nBisheriges Gespräch:\n' + botMsgs.slice(-8).map(m => (m.role === 'user' ? 'Nutzer: ' : 'Helfer: ') + m.text).join('\n') + '\n\nAuftrag: ' + text;
+      const doc = att && att.doc; const cands = doc ? belegCandidates(units, doc) : [];
+      const system = 'Du bist der Import-Helfer von Buqo (deutsche Buchhaltung/Steuer) für den sevDesk-Import. Du kennst die gesamte Liste des Jahres (Kontoauszug-Umsätze, Belege, Rechnungen, Konten, Beleg-Status, Notizen, MwSt) und kannst sie ändern. Du darfst im Internet recherchieren (web_search), wenn steuerliche oder buchhalterische Fragen es erfordern. Wenn der Nutzer erklärt, wofür eine Buchung war, setze die Notiz (kurz und sachlich: was, wofür, steuerliche Einordnung) und passe Kategorie, MwSt und Konto an. Umsätze nur aus dem Kontoauszug haben keine MwSt-Angabe (Standard 0 %); schlage die richtige MwSt (0, 7 oder 19) vor und setze sie, wenn es eindeutig ist (Airbnb/Booking-Gebühren, Bank-, Versicherungsgebühren, Löhne, Steuern = 0 %). ANTWORTSTIL: extrem knapp – "antwort" ist höchstens EIN kurzer Satz (max. 12 Wörter), keine Erklärungen, keine Aufzählungen; Details stehen in den Aktionen (sie werden dem Nutzer als Tags gezeigt). Nur bei echten Steuerfragen bis zu 2 kurze Sätze. Antworte NUR mit minifiziertem JSON ohne Markdown: {"antwort":"…","aktionen":[…]}. Aktionen: {"typ":"auswaehlen|setzen|ignorieren|wiederherstellen|notiz|todo|merken|beleg","filter":{"name":"Teil des Namens oder Liste","von":"YYYY-MM-DD","bis":"YYYY-MM-DD","art":"ein|aus","konto":"Schlüssel","kategorie":"…","min":0,"max":0,"status":"passt|hinweis|fehlt","ohneBeleg":true,"quelle":"bank|csv","text":"Suchwort in Name/Beschreibung/Notiz"},"setzen":{"kategorie":"aus der Liste","konto":"Schlüssel","privat":true,"mwst":0|7|19,"notiz":"…"},"text":"…"}. "todo" = als To-do vormerken. "merken": text = kurzer Fakt für die spätere Steuerberatung (max 200 Zeichen). "beleg": der Nutzer hat einen Beleg angehängt (siehe ANGEHÄNGTER BELEG) – wähle aus den Kandidaten die passende Buchung: {"typ":"beleg","ziele":["<key>"],"setzen":{"notiz":"kurz, was es ist","mwst":0|7|19,"kategorie":"…"}}; nimm höchstens die Kandidaten, die wirklich passen (bei Raten/Wiederholungen den Monat laut Nutzerhinweis, sonst frage kurz „Welche?" und gib keine Aktion zurück). Nutze nur vorhandene Kategorien und Konten, erfinde keine Zahlen. Ist der Auftrag unklar, gib keine Aktion zurück und stelle in "antwort" eine kurze Rückfrage.';
+      const user = 'Konten (Schlüssel=Name): ' + accounts.map(a => a.key + '=' + a.label).join(', ') + '\nKategorien: ' + CATS.join(', ') + '\n\nÜBERBLICK:\n' + ov.join('\n') + (taxFacts && taxFacts.length ? '\n\nBekannte Fakten über den Nutzer:\n' + taxFacts.slice(-25).join('\n') : '') + '\n\nListe nach Name zusammengefasst:\n' + ctx.join('\n') + (rel.length ? '\n\nEinzelbuchungen zur Frage:\n' + rel.join('\n') : '') + (att ? '\n\nANGEHÄNGTER BELEG (' + att.file.name + '): ' + (doc ? JSON.stringify({ name: doc.name, datum: doc.datum, nummer: doc.nummer, brutto: doc.brutto, mwst: doc.mwst, kategorie: doc.kategorie, beschreibung: doc.beschreibung }) : 'nicht lesbar') + '\nKandidaten (key | Datum | Name | Betrag | Beleg):\n' + (cands.length ? cands.map(c => [c.u.key, c.u.datum, c.u.name, c.u.brutto, c.u.hasFile ? 'hat Beleg' : 'ohne Beleg'].join(' | ')).join('\n') : '(keine Buchung mit diesem Betrag gefunden)') : '') + '\n\nBisheriges Gespräch:\n' + botMsgs.slice(-8).map(m => (m.role === 'user' ? 'Nutzer: ' : 'Helfer: ') + m.text).join('\n') + '\n\nAuftrag: ' + text;
       const out = parseBotJson(await aiAsk(system, user, { max: 3000, web: true }));
-      const acts = normalizeActions(out.aktionen, { cats: CATS, accounts }).map(a => ({ ...a, keys: a.typ === 'merken' ? [] : units.filter(u => matchFilter(u, a.filter)).map(u => u.key), sample: units.filter(u => matchFilter(u, a.filter)).slice(0, 3).map(u => u.name) }));
-      setBotMsgs(m => [...m, { role: 'ai', text: out.antwort || (acts.length ? 'Das würde ich tun:' : 'Das habe ich nicht verstanden – kannst du es anders formulieren?') }]);
+      const candKeys = new Set(cands.map(c => c.u.key));
+      let acts = normalizeActions(out.aktionen, { cats: CATS, accounts }).map(a => {
+        if (a.typ === 'beleg') { const keys = a.ziele.filter(k => candKeys.has(k)); return { ...a, keys, sample: keys.map(k => (units.find(u => u.key === k) || {}).name), file: att && att.file, doc }; }
+        return { ...a, keys: a.typ === 'merken' ? [] : units.filter(u => matchFilter(u, a.filter)).map(u => u.key), sample: units.filter(u => matchFilter(u, a.filter)).slice(0, 3).map(u => u.name) };
+      }).filter(a => a.typ !== 'beleg' || (a.keys.length && a.file));
+      // Fallback ohne KI-Auswahl: genau ein eindeutiger Treffer
+      if (att && doc && !acts.some(a => a.typ === 'beleg') && cands.length && cands[0].exact && (!cands[1] || cands[1].score < cands[0].score - 20)) acts.push({ typ: 'beleg', filter: {}, set: {}, text: '', ziele: [], keys: [cands[0].u.key], sample: [cands[0].u.name], file: att.file, doc });
+      const needPick = att && doc && !acts.some(a => a.typ === 'beleg') && cands.length > 1;
+      setBotMsgs(m => [...m, { role: 'ai', text: out.antwort || (needPick ? 'Welche Buchung?' : acts.length ? '' : att && !cands.length ? 'Keine Buchung mit diesem Betrag gefunden.' : 'Nicht verstanden – bitte anders formulieren.') }]);
+      if (needPick) setBotPick({ cands: cands.map(c => c.u), file: att.file, doc, note: (out.aktionen || []).map(x => x && x.setzen && x.setzen.notiz).find(Boolean) || '' });
       if (acts.length) setBotPending(acts);
-    } catch (e) { setBotMsgs(m => [...m, { role: 'ai', text: 'Das hat nicht geklappt: ' + (e.message || e) }]); }
+    } catch (e) { setBotMsgs(m => [...m, { role: 'ai', text: 'Hat nicht geklappt: ' + (e.message || e) }]); }
     setBotBusy(false);
   };
   const applyBot = () => {
@@ -435,11 +470,16 @@ export default function SevdeskImport(props) {
       else if (a.typ === 'ignorieren') { bulk({ skip: true }, a.keys); n += a.keys.length; }
       else if (a.typ === 'wiederherstellen') { bulk({ skip: false }, a.keys); n += a.keys.length; }
       else if (a.typ === 'setzen' || a.typ === 'notiz') { bulk(a.set, a.keys); n += a.keys.length; if (a.set.notiz || a.set.kategorie) { const f = a.filter || {}; const who = f.name ? [].concat(f.name).join('/') : 'Auswahl'; const per = [f.von && 'ab ' + f.von.split('-').reverse().join('.'), f.bis && 'bis ' + f.bis.split('-').reverse().join('.')].filter(Boolean).join(' '); facts.push(who + (per ? ' (' + per + ')' : '') + ': ' + [a.set.kategorie && 'Kategorie ' + a.set.kategorie, a.set.konto && 'Konto ' + ((accounts.find(x => x.key === a.set.konto) || {}).label || a.set.konto), a.set.notiz && a.set.notiz].filter(Boolean).join(', ')); } }
+      else if (a.typ === 'beleg') { const keys = a.keys; const file = a.file; const doc = a.doc || {};
+        keys.forEach(k => { setUpPdf(p => ({ ...p, [k]: { name: file.name, data: async () => new Uint8Array(await file.arrayBuffer()) } })); });
+        setOcr(p => { const x = { ...p }; keys.forEach(k => { x[k] = doc; }); return x; }); setKiApplied(p => { const x = { ...p }; keys.forEach(k => { x[k] = true; }); return x; });
+        const set = { ...a.set }; if (!set.notiz) set.notiz = String(doc.urteil || doc.beschreibung || ('Beleg ' + (doc.name || ''))).slice(0, 220); if (set.mwst == null && [0, 7, 19].includes(doc.mwst)) set.mwst = doc.mwst;
+        bulk(set, keys); n += keys.length; if (set.notiz && onRemember && a.set.notiz) { /* Notiz zum Beleg gehört nur zur Buchung */ } }
       else if (a.typ === 'todo') { setLater(p => { const x = { ...p }; a.keys.forEach(k => { x[k] = true; }); return x; }); n += a.keys.length; }
       else if (a.typ === 'merken' && a.text) facts.push(a.text);
     });
     if (facts.length && onRemember) onRemember(facts);
-    setBotMsgs(m => [...m, { role: 'ai', text: '✓ Erledigt' + (n ? ' – ' + n + ' Zeilen betroffen.' : '.') + (facts.length ? '\nIch habe es mir für die Steuerberatung gemerkt.' : '') }]); setBotPending(null);
+    setBotMsgs(m => [...m, { role: 'ai', text: '✓ ' + (n ? n + (n === 1 ? ' Zeile' : ' Zeilen') : 'Erledigt') + (facts.length ? ' · gemerkt' : '') }]); setBotPending(null); setBotPick(null);
   };
 
   /* ── UI-Bausteine ── */
@@ -505,27 +545,52 @@ export default function SevdeskImport(props) {
   const noteBlur = (k, r, val) => { val = String(val || '').trim(); if (!val) return; const keys = sameName(k, r).filter(x => x !== k + r.idx && String(notes[x] || '').trim() !== val); if (keys.length) setAskA({ typ: 'notiz', key: k + r.idx, val, keys: [k + r.idx, ...keys], name: eff(k, r).name }); };
   const applyAskA = (all) => { const a = askA; if (all) { if (a.typ === 'konto') setKonto(a.keys, a.val); else setNotizKeys(a.keys, a.val); } else if (a.typ === 'konto') setKonto([a.key], a.val); setAskA(null); };
 
+  // Änderungen des KI-Helfers als Tags (statt Fließtext)
+  const actionTags = (a, unitsByKey) => {
+    const f = a.filter || {}; const tags = []; const lbl = { auswaehlen: 'Auswählen', ignorieren: 'Ignorieren', wiederherstellen: 'Wiederherstellen', todo: 'To-do', merken: 'Merken', beleg: '📎 Beleg hinterlegen', setzen: 'Ändern', notiz: 'Notiz' }[a.typ] || a.typ;
+    tags.push({ t: lbl, c: 'pri' });
+    if (a.typ === 'merken') { tags.push({ t: String(a.text || '').slice(0, 70) }); return tags; }
+    if (a.typ === 'beleg') { a.keys.forEach(k => { const u = unitsByKey[k]; if (u) tags.push({ t: u.datum.split('-').reverse().join('.') + ' · ' + u.name.slice(0, 26) + ' · ' + fmt(u.brutto), c: 'ok' }); }); }
+    else tags.push({ t: a.keys.length + (a.keys.length === 1 ? ' Zeile' : ' Zeilen'), c: 'ok' });
+    if (a.set.kategorie) tags.push({ t: 'Kategorie: ' + a.set.kategorie });
+    if (a.set.konto) tags.push({ t: 'Konto: ' + ((accounts.find(x => x.key === a.set.konto) || {}).label || a.set.konto) });
+    if (a.set.mwst != null) tags.push({ t: 'MwSt ' + a.set.mwst + ' %' });
+    if (a.set.notiz) tags.push({ t: 'Notiz: „' + a.set.notiz.slice(0, 50) + (a.set.notiz.length > 50 ? '…' : '') + '"' });
+    if (a.typ !== 'beleg') [f.name && 'Name: ' + [].concat(f.name).join('/'), f.von && 'ab ' + f.von.split('-').reverse().join('.'), f.bis && 'bis ' + f.bis.split('-').reverse().join('.'), f.art && (f.art === 'ein' ? 'Einnahmen' : 'Ausgaben'), f.kategorie && 'in ' + f.kategorie, f.ohneBeleg && 'ohne Beleg'].filter(Boolean).forEach(t => tags.push({ t, c: 'mut' }));
+    return tags;
+  };
+  const tagEl = (x, i) => { const col = x.c === 'pri' ? C.pri : x.c === 'ok' ? C.grn : x.c === 'mut' ? C.mut : C.txt; return <span key={i} style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, color: col, background: hexA(col, x.c ? 0.12 : 0.08), border: '1px solid ' + hexA(col, 0.3), borderRadius: 7, padding: '3px 8px', lineHeight: 1.3 }}>{x.t}</span>; };
   // KI-Helfer: als Karte über der Liste oder als Seitenleiste im Vollbild
-  const renderBot = (panel) => (
+  const renderBot = (panel) => {
+    const unitsByKey = {}; dispRows.forEach(x => { const e = eff(x.k, x.r); unitsByKey[x.k + x.r.idx] = { key: x.k + x.r.idx, name: e.name || '', datum: x.r.datum, brutto: x.r.brutto }; });
+    const tagsOf = (a) => actionTags(a, unitsByKey);
+    const canSend = !botBusy && (botInput.trim() || (botFile && !botFile.busy));
+    const pickRow = (u) => { const e = u; const act = { typ: 'beleg', filter: {}, set: botPick.note ? { notiz: botPick.note } : {}, text: '', ziele: [], keys: [u.key], sample: [u.name], file: botPick.file, doc: botPick.doc }; setBotPending([act]); setBotPick(null); };
+    return (
     <div style={panel ? { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 } : { ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.35) }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}><span style={{ width: 34, height: 34, borderRadius: 10, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic p={P.spark} sz={16} col="#fff" /></span><div style={{ flex: 1 }}><div style={{ fontSize: 15, fontWeight: 800 }}>KI-Helfer für diese Liste</div><div style={{ fontSize: 12.5, color: C.sub }}>Er kennt das ganze Jahr, kann recherchieren, Notizen, Kategorien und MwSt setzen – vor jeder Änderung frage ich nach.</div></div>{panel && <button onClick={() => setBotOpen(false)} style={{ background: 'none', border: 'none', color: C.mut, fontSize: 20, cursor: 'pointer' }} title="Zuklappen">×</button>}</div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '10px 0', flexShrink: 0 }}>
-        {['Wähle alle Buchungen ohne Beleg aus', 'Airbnb war immer Vermittlung für die Ferienwohnung – Notiz und MwSt setzen', 'Notarkosten: wie verbuche ich das?', 'Wo stimmt die MwSt wahrscheinlich nicht?'].map(t => <button key={t} onClick={() => setBotInput(t)} style={{ background: C.surf2, border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>{t}</button>)}
-      </div>
-      <div style={panel ? { flex: 1, minHeight: 0, overflowY: 'auto' } : undefined}>
-        {botMsgs.slice(panel ? -40 : -6).map((m, i) => <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', margin: '6px 0' }}><div style={{ maxWidth: '90%', background: m.role === 'user' ? C.act : C.surf2, color: m.role === 'user' ? C.actTxt : C.txt, borderRadius: 14, padding: '9px 13px', fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{m.text}</div></div>)}
-        {botBusy && <div style={{ fontSize: 12.5, color: C.sub, margin: '6px 0' }}>Ich überlege und recherchiere …</div>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}><span style={{ width: 30, height: 30, borderRadius: 9, background: AI_GRADIENT, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Ic p={P.spark} sz={15} col="#fff" /></span><div style={{ flex: 1, fontSize: 15, fontWeight: 800 }}>KI-Helfer</div>{panel && <button onClick={() => setBotOpen(false)} style={{ background: 'none', border: 'none', color: C.mut, fontSize: 20, cursor: 'pointer' }} title="Zuklappen">×</button>}</div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', margin: '8px 0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {!botMsgs.length && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>{['Wähle alle Buchungen ohne Beleg aus', 'Airbnb: Notiz und MwSt 0 %', 'Notarkosten: wie verbuchen?', 'Wo stimmt die MwSt nicht?'].map(t => <button key={t} onClick={() => setBotInput(t)} style={{ background: C.surf2, border: '1px solid ' + C.bdr, color: C.sub, borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>{t}</button>)}</div>}
+        {botMsgs.slice(-40).map((m, i) => m.text ? <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}><div style={{ maxWidth: '88%', background: m.role === 'user' ? C.act : C.surf2, color: m.role === 'user' ? C.actTxt : C.txt, borderRadius: m.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px', padding: '8px 12px', fontSize: 13.5, lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{m.text}</div></div> : null)}
+        {botBusy && <div style={{ fontSize: 13, color: C.mut, padding: '2px 6px' }}>…</div>}
+        {botPick && (
+          <div style={{ background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {botPick.cands.map(u => <button key={u.key} onClick={() => pickRow(u)} style={{ textAlign: 'left', background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 9, padding: '7px 10px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit', color: C.txt }}>{unitsByKey[u.key] ? unitsByKey[u.key].datum.split('-').reverse().join('.') + ' · ' + unitsByKey[u.key].name.slice(0, 30) + ' · ' + fmt(unitsByKey[u.key].brutto) : u.name}</button>)}
+          </div>)}
         {botPending && (
-          <div style={{ background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '10px 12px', margin: '8px 0' }}>
-            {botPending.map((a, i) => <div key={i} style={{ fontSize: 13, lineHeight: 1.5, padding: '3px 0' }}>• {describeAction(a)}{a.typ !== 'merken' && <span style={{ color: C.sub }}> – <b>{a.keys.length} Zeilen</b>{a.sample.length ? ' (z. B. ' + a.sample.join(', ') + ')' : ''}</span>}</div>)}
-            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}><button onClick={applyBot} style={{ ...btnP, padding: '8px 16px', fontSize: 13 }}>Anwenden</button><button onClick={() => setBotPending(null)} style={{ ...btnS, padding: '8px 14px', fontSize: 13 }}>Verwerfen</button></div>
+          <div style={{ background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 12, padding: '10px 11px' }}>
+            {botPending.map((a, i) => <div key={i} style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: '3px 0' }}>{tagsOf(a).map(tagEl)}</div>)}
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}><button onClick={applyBot} style={{ ...btnP, padding: '7px 16px', fontSize: 13 }}>Bestätigen</button><button onClick={() => setBotPending(null)} style={{ ...btnS, padding: '7px 14px', fontSize: 13 }}>Verwerfen</button></div>
           </div>)}
       </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexShrink: 0 }}>
-        <input value={botInput} onChange={e => setBotInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendBot(); }} placeholder="z. B. Bauhaus war für die Renovierung von Wohnung 2 …" style={{ ...SS, flex: 1, textAlign: 'left', padding: '11px 13px', minWidth: 0 }} />
-        <button onClick={sendBot} disabled={botBusy || !botInput.trim()} style={{ ...btnP, padding: '10px 18px', opacity: (botBusy || !botInput.trim()) ? 0.55 : 1 }}>Senden</button>
+      {botFile && <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '0 0 6px', fontSize: 12, flexShrink: 0 }}><span style={{ background: hexA(C.pri, 0.12), border: '1px solid ' + hexA(C.pri, 0.3), color: C.pri, borderRadius: 8, padding: '3px 8px', fontWeight: 700, maxWidth: '85%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📎 {botFile.file.name}{botFile.busy ? ' · liest …' : botFile.doc ? ' · ' + (botFile.doc.brutto != null ? fmt(botFile.doc.brutto) : '') : ''}</span><button onClick={() => setBotFile(null)} style={{ background: 'none', border: 'none', color: C.mut, cursor: 'pointer', fontSize: 16 }} title="Entfernen">×</button></div>}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, flexShrink: 0, background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 22, padding: '5px 5px 5px 8px' }}>
+        {aiReadDoc && <label title="Beleg anhängen (PDF oder Foto)" style={{ width: 34, height: 34, flexShrink: 0, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Ic p={P.clip} sz={18} col={C.sub} /><input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) attachBotFile(f); }} /></label>}
+        <textarea ref={taRef} rows={1} value={botInput} onChange={e => { setBotInput(e.target.value); growTa(); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); sendBot(); } }} placeholder="Nachricht …" style={{ flex: 1, minWidth: 0, resize: 'none', border: 'none', outline: 'none', background: 'transparent', color: C.txt, fontFamily: 'inherit', fontSize: 14, lineHeight: 1.4, padding: '8px 4px', maxHeight: 150, overflowY: 'auto', boxShadow: 'none', border: 'none', borderRadius: 0 }} />
+        <button onClick={toggleRec} title={recOn ? 'Aufnahme beenden' : 'Sprechen'} style={{ width: 34, height: 34, flexShrink: 0, borderRadius: '50%', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: recOn ? C.red : 'transparent' }}><Ic p={P.mic} sz={18} col={recOn ? '#fff' : C.sub} /></button>
+        <button onClick={sendBot} disabled={!canSend} title="Senden (Enter)" style={{ width: 34, height: 34, flexShrink: 0, borderRadius: '50%', border: 'none', cursor: canSend ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: canSend ? C.act : C.surf3, opacity: canSend ? 1 : 0.6 }}><Ic p={P.send} sz={16} col={canSend ? C.actTxt : C.mut} /></button>
       </div>
-    </div>);
+    </div>); };
 
   const renderList = () => {
     const q = normN(listQ);
