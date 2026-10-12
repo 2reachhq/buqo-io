@@ -2687,6 +2687,7 @@ function App({session}) {
       const nd={...prev, payGroups:ex?list.map(x=>x.id===id?item:x):[...list,item]}; const c=JSON.parse(JSON.stringify(nd)); return syncGroupItems(c); });
     setTimeout(()=>{ try{ assignGroupToBookings(id); }catch(e){} },50);
     return id; };
+  const patchGroup = (id,patch)=>setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); nd.payGroups=(nd.payGroups||[]).map(g=>g.id===id?{...g,...patch}:g); return syncGroupItems(nd); });
   const deleteGroup = async (id)=>{ const g=payGroups.find(x=>x.id===id); const paths=((g&&g.docs)||[]).map(d=>d.path).filter(Boolean); try{ if(paths.length) await sb.storage.from('belege').remove(paths); }catch(e){}
     setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); nd.payGroups=(nd.payGroups||[]).filter(x=>x.id!==id); return syncGroupItems(nd); }); };
   // KI liest Vertrag/Abrechnung der Gruppe: erwarteter Betrag, Anbieter, Kurzfassung (für Hinweise bei Abweichungen)
@@ -3660,7 +3661,7 @@ function App({session}) {
   const aiExtractPosten = async (file)=>{
     const isPdf = file.type==='application/pdf' || /\.pdf$/i.test(file.name);
     const isImg = /^image\//.test(file.type) || /\.(png|jpe?g|webp|gif)$/i.test(file.name);
-    const prompt = "Dies ist ein Bankauszug, eine Abrechnung (z. B. Airbnb/Booking.com Auszahlung/Monatsübersicht) oder ein Beleg/eine Rechnung (Deutschland). Lies ALLE einzelnen Umsätze bzw. Positionen aus (keine Saldo-/Summen-/Kontostandzeilen). "
+    const prompt = "Dies ist ein Bankauszug, eine Abrechnung (z. B. Airbnb/Booking.com Auszahlung/Monatsübersicht) oder ein Beleg/eine Rechnung (Deutschland). Lies ALLE einzelnen Umsätze bzw. Positionen auf ALLEN Seiten aus – auch bei mehreren Konten/Unterkonten, Kreditkarten- und Sammelbuchungen; jede Zeile einzeln, nichts auslassen oder zusammenfassen; Datum immer mit Jahr (keine Saldo-/Summen-/Kontostandzeilen). "
       + "Antworte AUSSCHLIESSLICH mit minifiziertem JSON (keine Leerzeichen, keine Zeilenumbrüche, kein Markdown): "
       + '{"quelle":"Airbnb|Booking|Bank|Beleg|Sonstiges","p":[{"b":"Name/Inserat/Kunde","a":12.34,"k":"e","d":"TT.MM.JJJJ","r":"","c":"","z":"","nt":null,"mw":null}]}\n'
       + "Felder: b=Name bzw. Inserat-Name/ID/Kunde (max 60 Zeichen), a=Bruttobetrag positiv mit Punkt, k=\"e\" bei Einnahme/Auszahlung/Gutschrift sonst \"a\", d=Datum (leer wenn keins), r=Beleg-/Buchungsnummer, c=Kategorie aus [Allgemein,Miete,Nebenkosten,Versicherung,Material,Personal,Steuern,Software,Marketing,Reise,Bewirtung,Bank & Gebühren,Sonstiges] (leer wenn unklar), z=Verwendungszweck/Inserat, nt=Netto falls ausgewiesen sonst null, mw=MwSt-Satz 19/7/0 falls erkennbar sonst null. Erfinde nichts.";
@@ -3668,10 +3669,18 @@ function App({session}) {
     if(isPdf){ const b64=await fileToB64(file); content=[{type:'document',source:{type:'base64',media_type:'application/pdf',data:b64}},{type:'text',text:prompt}]; }
     else if(isImg){ const b64=await fileToB64(file); content=[{type:'image',source:{type:'base64',media_type:(file.type||'image/jpeg'),data:b64}},{type:'text',text:prompt}]; }
     else { const txt=await file.text(); content=[{type:'text',text:'DATEIINHALT ('+file.name+'):\n'+String(txt).slice(0,40000)},{type:'text',text:prompt}]; }
-    const {data:resp,error}=await aiInvoke({body:{model:'claude-haiku-4-5',max_tokens:8000,messages:[{role:'user',content}]}});
-    if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
-    let t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; t=t.replace(/```json|```/g,'').trim(); const mm=t.match(/\{[\s\S]*\}/); if(mm)t=mm[0];
-    let parsed; try{parsed=JSON.parse(t);}catch(_){ const lo=t.lastIndexOf('}'); if(lo>0){ try{parsed=JSON.parse(t.slice(0,lo+1)+']}');}catch(e){throw new Error('Antwort unlesbar (Datei evtl. zu lang).');} } else throw new Error('Antwort unlesbar.'); }
+    // Mehrere Durchgänge: ist die Antwort abgeschnitten (lange Kontoauszüge), liest die KI ab dem letzten Posten weiter – so fehlt nichts
+    const onePass = async (extra)=>{
+      const c=extra?[...content,{type:'text',text:extra}]:content;
+      const {data:resp,error}=await aiInvoke({body:{model:'claude-haiku-4-5',max_tokens:16000,messages:[{role:'user',content:c}]}});
+      if(error) throw error; if(resp&&resp.error) throw new Error(resp.error.message||JSON.stringify(resp.error));
+      let t=(resp&&resp.content&&resp.content[0]&&resp.content[0].text)||''; t=t.replace(/```json|```/g,'').trim(); const mm=t.match(/\{[\s\S]*\}/); if(mm)t=mm[0];
+      let parsed, cut=(resp&&resp.stop_reason)==='max_tokens'; try{parsed=JSON.parse(t);}catch(_){ cut=true; const lo=t.lastIndexOf('}'); if(lo>0){ try{parsed=JSON.parse(t.slice(0,lo+1)+']}');}catch(e){ throw new Error('Antwort unlesbar (Datei evtl. zu lang).'); } } else throw new Error('Antwort unlesbar.'); }
+      return {parsed,cut};
+    };
+    let first=await onePass(''); let parsed=first.parsed; let all=(parsed.p||[]).slice(); let cut=first.cut, pass=1;
+    while(cut && pass<6 && all.length){ pass++; const last=all[all.length-1]; const nxt=await onePass('Du hast bereits '+all.length+' Umsätze gelesen; der letzte war: '+(last.d||'')+' · '+(last.b||'')+' · '+(last.a!=null?last.a:'')+'. Die Antwort war abgeschnitten. Lies NUR die Umsätze, die im Dokument NACH diesem Eintrag folgen (gleiches JSON-Format). Gibt es keine weiteren, antworte {"p":[]}.'); const more=(nxt.parsed.p||[]); if(!more.length) break; all=all.concat(more); cut=nxt.cut; }
+    parsed={...parsed,p:all};
     const list=(parsed.p||[]).map(p=>{ const belegnr=String(p.r||''); const datum=toISO(p.d||''); const name=String(p.b||'Posten').slice(0,70); const note=String(p.z||''); return { id:uid(), name, amount:Math.abs(parseFloat(String(p.a!=null?p.a:0).replace(',','.'))||0), kind:((p.k||'')==='e'?'ein':'aus'), belegnr, datum, category:(String(p.c||'')||guessCategory(name+' '+note)), note, netto:(p.nt!=null&&p.nt!=='')?Math.abs(parseFloat(String(p.nt).replace(',','.'))||0):'', mwst:(p.mw!=null&&p.mw!=='')?String(p.mw).replace('%','').trim():'', info:[belegnr&&('Nr. '+belegnr)].filter(Boolean).join(' · ') }; }).filter(p=>p.amount>0);
     return { quelle:String(parsed.quelle||''), list };
   };
@@ -5293,7 +5302,7 @@ function App({session}) {
                   <SevdeskImport ui={{C,SC,SS,NUM,fmt,Ic,P,hexA,AI_GRADIENT,MONTHS}} isMobile={isMobile} defaultYear={now.getFullYear()-1}
                     accounts={[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>({key:pp,label:names[pp]})),{key:'privat',label:names.privatLabel||'Privat'}]}
                     existing={sevdeskExisting()} onImport={runSevdeskImport}
-                    aiReadDoc={aiReadDoc} aiBankRows={aiBankRows} aiAsk={aiAsk} onRemember={rememberFacts} payGroups={payGroups} onSaveGroup={async(g,files)=>{ const id=saveGroup(g); if(files&&files.length) await addGroupDocs(id,files,{name:g.name}); return id; }} noBelegRules={data.noBelegRules||[]} onNoBelegRule={(list)=>setData(prev=>({...prev,noBelegRules:[...new Set([...(prev.noBelegRules||[]),...list])]}))} taxFacts={(Array.isArray(data.taxContext)?data.taxContext:[]).map(x=>x&&x.text).filter(Boolean)} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
+                    aiReadDoc={aiReadDoc} aiBankRows={aiBankRows} aiAsk={aiAsk} onRemember={rememberFacts} payGroups={payGroups} onUpdateGroup={patchGroup} onAddGroupDocs={(id,files)=>addGroupDocs(id,files)} onSaveGroup={async(g,files)=>{ const id=saveGroup(g); if(files&&files.length) await addGroupDocs(id,files,{name:g.name}); return id; }} noBelegRules={data.noBelegRules||[]} onNoBelegRule={(list)=>setData(prev=>({...prev,noBelegRules:[...new Set([...(prev.noBelegRules||[]),...list])]}))} taxFacts={(Array.isArray(data.taxContext)?data.taxContext:[]).map(x=>x&&x.text).filter(Boolean)} aiClassify={(rows, hint, onProgress)=>{ const mi=ASSISTANT_MODELS.find(m=>m.id===botModel)||ASSISTANT_MODELS[0]; const accts=[{key:'unter',label:names.unternehmen||'Firma'},...PROPS.filter(acctCreated).map(pp=>{ const ad=String((data['company_'+pp]||{}).address||'').replace(/\n/g,', ').trim(); return {key:pp,label:names[pp]+(ad?' ('+ad+')':'')}; }),{key:'privat',label:names.privatLabel||'Privat'}]; return classifyRows({ invoke:botInvoke, model:mi.id, adaptive:!!mi.adaptive, accounts:accts, rows, hint, onProgress }); }} />
                 )}
 
                 {importTab==='sevdesk' && (
