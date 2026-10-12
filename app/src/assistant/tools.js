@@ -419,6 +419,7 @@ export function buildSystemPrompt(ctx) {
   if (c.profile) lines.push('Steuerliches Profil des Nutzers: ' + c.profile + '.');
   if (c.accountInfo && c.accountInfo.length) lines.push('Details zu den Konten (jedes Konto = Business oder Standort, wird getrennt berechnet):\n' + c.accountInfo.map(x => '- ' + x).join('\n'));
   if (c.know && c.know.length) lines.push('Was der Nutzer dir erklärt hat (nutze es für Steuer-Tipps, Lücken und Spar-Hinweise):\n' + c.know.join('\n'));
+  if (c.payGroups && c.payGroups.length) lines.push('Abbuchungsgruppen des Nutzers (erwartete Beträge, Erkennung, hinterlegte Verträge – nutze sie, um Abweichungen und fehlende Abbuchungen zu erklären):\n' + c.payGroups.join('\n'));
   if (c.taxDocs && c.taxDocs.length) lines.push('Hochgeladene Steuerunterlagen (EÜR, BWA, Bescheide … – nutze sie für Steuerfragen und prüfe Buchungen dagegen):\n' + c.taxDocs.join('\n'));
   if (c.attachment) lines.push('An die aktuelle Nachricht ist eine Datei angehängt: ' + c.attachment + '.');
   return lines.join('\n');
