@@ -21,7 +21,7 @@ const idbDel = async (k) => { const d = await idbOpen(); return new Promise((res
 const normN = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
 
 export default function SevdeskImport(props) {
-  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows, aiAsk, onRemember, taxFacts, noBelegRules, onNoBelegRule } = props;
+  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows, aiAsk, onRemember, taxFacts, noBelegRules, onNoBelegRule, payGroups, onSaveGroup } = props;
   const { C, SC, SS, NUM, fmt, Ic, P, hexA, AI_GRADIENT, MONTHS } = ui;
   const [step, setStep] = useState(1);              // 1 Hochladen · 2 Abgleich · 3 Wiederkehrendes + Verbuchen
   const [belege, setBelege] = useState(null);      // {fileName, parsed, format, mapping, kind}
@@ -62,6 +62,9 @@ export default function SevdeskImport(props) {
   const [artTab, setArtTab] = useState('alle');    // Reiter: alle | belege (Ausgaben) | rechnungen (Einnahmen)
   const [sortBy, setSortBy] = useState('datum');    // Sortierung innerhalb der Gruppen: datum | name | betrag
   const [kiApplied, setKiApplied] = useState({});   // Zeilen, bei denen der KI-Text schon in die Notiz geschrieben wurde
+  const [rowGroup, setRowGroup] = useState({});      // manuell zugeordnete Abbuchungsgruppen: Zeilen-Schlüssel → Gruppen-ID
+  const [grpDlg, setGrpDlg] = useState(null);        // Dialog „Gruppe erstellen“
+  const grpCache = React.useRef({ sig: null, map: new Map() });
   const [noBeleg, setNoBeleg] = useState({});       // Abbuchungen, für die kein Beleg nötig ist (z. B. Nebenkosten der Stadt, Krankenkasse)
   const [forceDup, setForceDup] = useState({});    // als „doppelt/schon vorhanden" erkannte Zeilen, die der Nutzer trotzdem importieren will
   const [botFile, setBotFile] = useState(null);   // im KI-Helfer angehängter Beleg {file, doc}
@@ -170,6 +173,16 @@ export default function SevdeskImport(props) {
     };
     window.addEventListener('keydown', onKey, true); return () => window.removeEventListener('keydown', onKey, true);
   });
+  // Abbuchungsgruppe einer Zeile: manuell zugeordnet oder automatisch über Suchbegriffe in Name / Verwendungszweck
+  const grpOf = (k, r) => {
+    const gs = payGroups || []; if (!gs.length && !Object.keys(rowGroup).length) return null; const key = k + r.idx;
+    if (grpCache.current.sig !== gs || grpCache.current.rg !== rowGroup || grpCache.current.bm !== bankMatch) grpCache.current = { sig: gs, rg: rowGroup, bm: bankMatch, map: new Map() };
+    const mp = grpCache.current.map; if (mp.has(key)) return mp.get(key);
+    let hit = null;
+    if (rowGroup[key]) hit = gs.find(g => g.id === rowGroup[key]) || null;
+    else { const bm = bankMatch && bankMatch.get ? bankMatch.get(key) : null; const hay = normN([r.name, r.beschreibung, bm && bm.name, bm && bm.note].join(' ')); hit = gs.find(g => String(g.terms || '').split(/[,;\n]/).map(normN).filter(t => t.length >= 3).some(t => hay.includes(t))) || null; }
+    mp.set(key, hit); return hit;
+  };
   // Wirksame Zeile: Original + KI-Korrekturen (Name, Kategorie, Beschreibung, Nummer wenn leer, MwSt nur wenn der Brutto-Betrag im PDF übereinstimmt).
   // Betrag und Datum werden NIE automatisch geändert – Abweichungen erscheinen nur als Hinweis.
   const eff = (k, r) => {
@@ -182,6 +195,7 @@ export default function SevdeskImport(props) {
       if (o.nummer && !r.nummer) out.nummer = String(o.nummer).slice(0, 40);
       if ([0, 7, 19].includes(o.mwst) && (o.brutto == null || Math.abs(o.brutto - r.brutto) < Math.max(0.5, r.brutto * 0.01)) && o.mwst !== r.mwst) { out.mwst = o.mwst; out.netto = Math.round(r.brutto / (1 + o.mwst / 100) * 100) / 100; }
     }
+    { const G = grpOf(k, r); if (G && G.category && r.kind !== 'ein' && !(ovr[key] && ovr[key].kategorie)) { out = out === r ? { ...r } : out; out.kategorie = G.category; } }
     const v = ovr[key]; // Eingaben des Nutzers (Liste, Sammelaktionen, KI-Helfer) haben Vorrang vor der PDF-Lesung
     if (v) {
       out = { ...out };
@@ -210,7 +224,7 @@ export default function SevdeskImport(props) {
           if (f.datev && f.datev.length) setDatev(f.datev.map(x => ({ file: x.file, name: x.file.name })));
           if (f.extra && f.extra.length) setExtra(f.extra.map(x => ({ file: x.file, name: x.file.name })));
         }
-        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setOvr(st.ovr || {}); setForceDup(st.forceDup || {}); setNoBeleg(st.noBeleg || {}); setKiApplied(st.kiApplied || {}); setDraftInfo({ savedAt: s.savedAt }); }
+        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setOvr(st.ovr || {}); setForceDup(st.forceDup || {}); setNoBeleg(st.noBeleg || {}); setRowGroup(st.rowGroup || {}); setKiApplied(st.kiApplied || {}); setDraftInfo({ savedAt: s.savedAt }); }
       } catch (e) { /* kein Zwischenspeicher (z. B. privater Modus) */ }
       restored.current = true;
     })();
@@ -230,10 +244,10 @@ export default function SevdeskImport(props) {
     const t = setTimeout(() => {
       if (!anyFile()) return;
       const savedAt = Date.now();
-      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, noBeleg, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
+      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, noBeleg, rowGroup, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
     }, 700);
     return () => clearTimeout(t);
-  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, noBeleg, bank, belege && belege.mapping, rech && rech.mapping]);
+  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, noBeleg, rowGroup, bank, belege && belege.mapping, rech && rech.mapping]);
   const discardDraft = () => { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setBelege(null); setRech(null); setZipB(null); setZipR(null); setBank([]); setDatev([]); setDatevRows([]); setExtra([]); setRowAcct({}); setSkip({}); setNotes({}); setAi({}); setOcr({}); setOcrOff({}); setRecurOff({}); setLater({}); setDatevAct({}); setUpPdf({}); setOvr({}); setSel({}); setYearChosen(false); setStep(1); setDraftInfo(null); setResult(null); };
   const build = (src, zip, exist) => {
     if (!src) return null;
@@ -264,7 +278,7 @@ export default function SevdeskImport(props) {
   const defaultAcctFor = (r) => (propKeys.length && RE_PROP.test([r.kategorie, r.beschreibung, r.name].join(' '))) ? propKeys[0] : acct;
   const defaultInvAcct = (r) => (propKeys.length && RE_PROP.test([r.beschreibung, r.name].join(' '))) ? propKeys[0] : 'unter';
   // Reihenfolge: manuelle Wahl in der Tabelle > KI-Vorschlag > Stichwort-Regel
-  const acctOf = (k, r) => rowAcct[k + r.idx] || (ai[k + r.idx] && ai[k + r.idx].acct) || (k === 'r' ? defaultInvAcct(r) : defaultAcctFor(r));
+  const acctOf = (k, r) => rowAcct[k + r.idx] || (ai[k + r.idx] && ai[k + r.idx].acct) || (grpOf(k, r) || {}).account || (k === 'r' ? defaultInvAcct(r) : defaultAcctFor(r));
   const csvGo = [...belegeGo.map(r => ({ r, k: 'b' })), ...rechGo.map(r => ({ r, k: 'r' }))];
   const fileFor = (zip, name, key) => { if (upPdf[key]) return { name: upPdf[key].name, data: upPdf[key].data }; if (!zip || !name) return null; const e = zip.entries.find(x => x.name === name); return e ? { name: baseName(e.name), data: e.data } : null; };
 
@@ -316,10 +330,11 @@ export default function SevdeskImport(props) {
   const dMatch = useMemo(() => datevRowsY.length ? matchDatev([...allGo.map(({ r, k }) => ({ key: k + r.idx, y: r.y, m: r.m, kind: r.kind, name: r.name, amount: signed(r), datum: r.datum, nummer: r.nummer, category: r.kategorie, mwst: r.mwst })), ...existU], datevRowsY) : null, [B, R, skip, year, datevRowsY]); // eslint-disable-line
   // „Kein Beleg nötig“: einzeln gesetzt oder über eine gemerkte Regel für den Namen (gilt auch in künftigen Monaten)
   const ruleSet = useMemo(() => new Set((noBelegRules || []).map(String)), [noBelegRules]);
-  const isNoBeleg = (k, r) => { const key = k + r.idx; return noBeleg[key] !== undefined ? !!noBeleg[key] : ruleSet.has(normN(r.name)); };
+  const isNoBeleg = (k, r) => { const key = k + r.idx; const G = grpOf(k, r); if (G && G.noEinzel !== false && noBeleg[key] === undefined) return true; return noBeleg[key] !== undefined ? !!noBeleg[key] : ruleSet.has(normN(r.name)); };
   // Status je Zeile: passt / hinweis / fehlt, dazu die Kurz-Hinweise
   const statusOf = (k, r) => {
     const key = k + r.idx; const chips = []; let miss = false, hintF = false; const o = ocr[key];
+    { const G = grpOf(k, r); if (G) chips.push({ t: '↻ ' + G.name + ((G.docs || []).length ? ' 📎' : ''), c: 'ai' }); }
     if (!(r.file || upPdf[key])) { if (isNoBeleg(k, r)) chips.push({ t: 'kein Beleg nötig', c: 'ok' }); else { chips.push({ t: 'PDF fehlt', c: 'miss' }); miss = true; } }
     if (r.bankOnly) { chips.push({ t: 'Nur im Kontoauszug', c: 'ai' }); if (!(ovr[key] && ovr[key].mwst != null)) { chips.push({ t: 'MwSt prüfen', c: 'warn' }); hintF = true; } }
     if (bankMatch && !r.bankOnly) { if (bankMatch.has(key)) chips.push({ t: 'Kontoauszug ✓', c: 'ok' }); else if (r.kind === 'aus' && !r.storno) { chips.push({ t: 'nicht im Kontoauszug', c: 'miss' }); miss = true; } }
@@ -387,8 +402,8 @@ export default function SevdeskImport(props) {
         confirmed, minCust, year, todos, bankLinks,
         bank: bank.map(b => ({ file: b.file, name: b.name, kind: b.kind, rows: b.rows || null })),
         extraDocs: extra.map(x => x.file),
-        belege: [...xGo.map(r0 => { const r = eff('x', r0); return { ...r, rowKey: 'x' + r.idx, noBeleg: isNoBeleg('x', r0), bankText: r0.name, bankDate: r0.datum, taxNote: (notes['x' + r.idx] || '').trim(), dest: acctOf('x', r), file: fileFor(null, null, 'x' + r.idx), recur: null }; }), ...belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, rowKey: 'b' + r.idx, noBeleg: isNoBeleg('b', r0), bankText: ((bankMatch && bankMatch.get('b' + r.idx)) || {}).name || '', bankDate: ((bankMatch && bankMatch.get('b' + r.idx)) || {}).datum || '', status: (bankMatch && bankMatch.has('b' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file, 'b' + r.idx), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; })],
-        rechnungen: rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, rowKey: 'r' + r.idx, noBeleg: isNoBeleg('r', r0), bankText: ((bankMatch && bankMatch.get('r' + r.idx)) || {}).name || '', bankDate: ((bankMatch && bankMatch.get('r' + r.idx)) || {}).datum || '', status: (bankMatch && bankMatch.has('r' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file, 'r' + r.idx) }); }),
+        belege: [...xGo.map(r0 => { const r = eff('x', r0); return { ...r, rowKey: 'x' + r.idx, noBeleg: isNoBeleg('x', r0), groupId: (grpOf('x', r0) || {}).id || '', bankText: r0.name, bankDate: r0.datum, taxNote: (notes['x' + r.idx] || '').trim(), dest: acctOf('x', r), file: fileFor(null, null, 'x' + r.idx), recur: null }; }), ...belegeGo.map(r0 => { const r = eff('b', r0); const g = recurActive(recurB, belegeGo, 'b').find(x => x.idxs.includes(r.idx)); return { ...r, rowKey: 'b' + r.idx, noBeleg: isNoBeleg('b', r0), groupId: (grpOf('b', r0) || {}).id || '', bankText: ((bankMatch && bankMatch.get('b' + r.idx)) || {}).name || '', bankDate: ((bankMatch && bankMatch.get('b' + r.idx)) || {}).datum || '', status: (bankMatch && bankMatch.has('b' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['b' + r.idx] || '').trim(), dest: acctOf('b', r), file: fileFor(zipB, r.file, 'b' + r.idx), recur: g ? { from: g.from, until: g.ongoing ? null : g.to } : null }; })],
+        rechnungen: rechGo.map(r0 => { const r = eff('r', r0); return ({ ...r, rowKey: 'r' + r.idx, noBeleg: isNoBeleg('r', r0), groupId: (grpOf('r', r0) || {}).id || '', bankText: ((bankMatch && bankMatch.get('r' + r.idx)) || {}).name || '', bankDate: ((bankMatch && bankMatch.get('r' + r.idx)) || {}).datum || '', status: (bankMatch && bankMatch.has('r' + r.idx)) ? 'bezahlt' : r.status, taxNote: (notes['r' + r.idx] || '').trim(), dest: acctOf('r', r), file: fileFor(zipR, r.file, 'r' + r.idx) }); }),
         // laufende Rechnungs-Serien: ab dem Folgemonat automatisch weiter erzeugen
         recurInvoices: recurActive(recurR, rechGo, 'r').filter(g => g.ongoing && g.idxs.includes(g.last.idx) && rechGo.some(r => r.idx === g.last.idx)).map(g => ({ name: g.last.name, dest: acctOf('r', g.last), netto: g.last.netto, mwst: g.last.mwst, beschreibung: g.last.beschreibung, adresse: g.last.adresse, lastY: g.to.y, lastM: g.to.m })),
       };
@@ -451,7 +466,7 @@ export default function SevdeskImport(props) {
       const units = dispRows.map(unitOf); const ctx = groupContext(units); const ov = yearOverview(units); const rel = relevantRows(units, text + ' ' + botMsgs.slice(-2).map(m => m.text).join(' '));
       const doc = att && att.doc; const cands = doc ? belegCandidates(units, doc) : [];
       const system = 'Du bist der Import-Helfer von Buqo (deutsche Buchhaltung/Steuer) für den sevDesk-Import. Du kennst die gesamte Liste des Jahres (Kontoauszug-Umsätze, Belege, Rechnungen, Konten, Beleg-Status, Notizen, MwSt) und kannst sie ändern. Du darfst im Internet recherchieren (web_search), wenn steuerliche oder buchhalterische Fragen es erfordern. Wenn der Nutzer erklärt, wofür eine Buchung war, setze die Notiz (kurz und sachlich: was, wofür, steuerliche Einordnung) und passe Kategorie, MwSt und Konto an. Umsätze nur aus dem Kontoauszug haben keine MwSt-Angabe (Standard 0 %); schlage die richtige MwSt (0, 7 oder 19) vor und setze sie, wenn es eindeutig ist (Airbnb/Booking-Gebühren, Bank-, Versicherungsgebühren, Löhne, Steuern = 0 %). ANTWORTSTIL: extrem knapp – "antwort" ist höchstens EIN kurzer Satz (max. 12 Wörter), keine Erklärungen, keine Aufzählungen; Details stehen in den Aktionen (sie werden dem Nutzer als Tags gezeigt). Nur bei echten Steuerfragen bis zu 2 kurze Sätze. Antworte NUR mit minifiziertem JSON ohne Markdown: {"antwort":"…","aktionen":[…]}. Aktionen: {"typ":"auswaehlen|setzen|ignorieren|wiederherstellen|notiz|todo|merken|beleg","filter":{"name":"Teil des Namens oder Liste","von":"YYYY-MM-DD","bis":"YYYY-MM-DD","art":"ein|aus","konto":"Schlüssel","kategorie":"…","min":0,"max":0,"status":"passt|hinweis|fehlt","ohneBeleg":true,"quelle":"bank|csv","text":"Suchwort in Name/Beschreibung/Notiz"},"setzen":{"kategorie":"aus der Liste","konto":"Schlüssel","privat":true,"mwst":0|7|19,"notiz":"…"},"text":"…"}. "todo" = als To-do vormerken. "keinbeleg" = für diese Abbuchungen ist kein Beleg nötig (z. B. Nebenkosten der Stadt/Gemeinde, Krankenkassen-/Sozialabgaben, Löhne laut Abrechnung, die der Nutzer separat hat); setze dann auch Notiz/Kategorie (Personal, Nebenkosten) wenn passend. Eine Lohnabrechnung gehört zu MEHREREN Abbuchungen (Nettolohn, Krankenkasse/Minijob-Zentrale, Lohnsteuer): bei "beleg" darfst du dafür mehrere "ziele" aus der Liste der Einzelbuchungen nennen. "merken": text = kurzer Fakt für die spätere Steuerberatung (max 200 Zeichen). "beleg": der Nutzer hat einen Beleg angehängt (siehe ANGEHÄNGTER BELEG) – wähle aus den Kandidaten die passende Buchung: {"typ":"beleg","ziele":["<key>"],"setzen":{"notiz":"kurz, was es ist","mwst":0|7|19,"kategorie":"…"}}; nimm höchstens die Kandidaten, die wirklich passen (bei Raten/Wiederholungen den Monat laut Nutzerhinweis, sonst frage kurz „Welche?" und gib keine Aktion zurück). Nutze nur vorhandene Kategorien und Konten, erfinde keine Zahlen. Ist der Auftrag unklar, gib keine Aktion zurück und stelle in "antwort" eine kurze Rückfrage.';
-      const user = 'Konten (Schlüssel=Name): ' + accounts.map(a => a.key + '=' + a.label).join(', ') + '\nKategorien: ' + CATS.join(', ') + '\n\nÜBERBLICK:\n' + ov.join('\n') + (taxFacts && taxFacts.length ? '\n\nBekannte Fakten über den Nutzer:\n' + taxFacts.slice(-25).join('\n') : '') + '\n\nListe nach Name zusammengefasst:\n' + ctx.join('\n') + (rel.length ? '\n\nEinzelbuchungen zur Frage:\n' + rel.join('\n') : '') + (att ? '\n\nANGEHÄNGTER BELEG (' + att.file.name + '): ' + (doc ? JSON.stringify({ name: doc.name, datum: doc.datum, nummer: doc.nummer, brutto: doc.brutto, mwst: doc.mwst, kategorie: doc.kategorie, beschreibung: doc.beschreibung }) : 'nicht lesbar') + '\nKandidaten (key | Datum | Name | Betrag | Beleg):\n' + (cands.length ? cands.map(c => [c.u.key, c.u.datum, c.u.name, c.u.brutto, c.u.hasFile ? 'hat Beleg' : 'ohne Beleg'].join(' | ')).join('\n') : '(keine Buchung mit diesem Betrag gefunden)') : '') + '\n\nBisheriges Gespräch:\n' + botMsgs.slice(-8).map(m => (m.role === 'user' ? 'Nutzer: ' : 'Helfer: ') + m.text).join('\n') + '\n\nAuftrag: ' + text;
+      const user = 'Konten (Schlüssel=Name): ' + accounts.map(a => a.key + '=' + a.label).join(', ') + '\nKategorien: ' + CATS.join(', ') + '\n\nÜBERBLICK:\n' + ov.join('\n') + (taxFacts && taxFacts.length ? '\n\nBekannte Fakten über den Nutzer:\n' + taxFacts.slice(-25).join('\n') : '') + (payGroups && payGroups.length ? '\n\nAbbuchungsgruppen: ' + payGroups.map(g => g.name + ' (Erkennung: ' + (g.terms || '–') + (g.monthly ? ', erwartet ' + g.monthly + ' €/Monat' : '') + ((g.docs || []).length ? ', Beleg hinterlegt' : '') + ')').join('; ') : '') + '\n\nListe nach Name zusammengefasst:\n' + ctx.join('\n') + (rel.length ? '\n\nEinzelbuchungen zur Frage:\n' + rel.join('\n') : '') + (att ? '\n\nANGEHÄNGTER BELEG (' + att.file.name + '): ' + (doc ? JSON.stringify({ name: doc.name, datum: doc.datum, nummer: doc.nummer, brutto: doc.brutto, mwst: doc.mwst, kategorie: doc.kategorie, beschreibung: doc.beschreibung }) : 'nicht lesbar') + '\nKandidaten (key | Datum | Name | Betrag | Beleg):\n' + (cands.length ? cands.map(c => [c.u.key, c.u.datum, c.u.name, c.u.brutto, c.u.hasFile ? 'hat Beleg' : 'ohne Beleg'].join(' | ')).join('\n') : '(keine Buchung mit diesem Betrag gefunden)') : '') + '\n\nBisheriges Gespräch:\n' + botMsgs.slice(-8).map(m => (m.role === 'user' ? 'Nutzer: ' : 'Helfer: ') + m.text).join('\n') + '\n\nAuftrag: ' + text;
       const out = parseBotJson(await aiAsk(system, user, { max: 3000, web: true }));
       const candKeys = new Set(cands.map(c => c.u.key)); const unitKeySet = new Set(units.map(u => u.key));
       let acts = normalizeActions(out.aktionen, { cats: CATS, accounts }).map(a => {
@@ -548,6 +563,20 @@ export default function SevdeskImport(props) {
   const setNotizKeys = (keys, val) => setNotes(a => { const n = { ...a }; keys.forEach(x => { n[x] = val; }); return n; });
   const changeKonto = (k, r, val) => { const keys = sameName(k, r); if (keys.length > 1) setAskA({ typ: 'konto', key: k + r.idx, val, keys, name: eff(k, r).name }); else setKonto([k + r.idx], val); };
   const noteBlur = (k, r, val) => { val = String(val || '').trim(); if (!val) return; const keys = sameName(k, r).filter(x => x !== k + r.idx && String(notes[x] || '').trim() !== val); if (keys.length) setAskA({ typ: 'notiz', key: k + r.idx, val, keys: [k + r.idx, ...keys], name: eff(k, r).name }); };
+  const openGrpDlg = () => {
+    const us = selKeys.map(k => dispRows.find(x => x.k + x.r.idx === k)).filter(Boolean); if (!us.length) return;
+    const top = (arr) => { const c = {}; arr.forEach(v => { if (v) c[v] = (c[v] || 0) + 1; }); return Object.entries(c).sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || ''; };
+    const names = [...new Set(us.map(x => String(eff(x.k, x.r).name || '').trim()).filter(Boolean))];
+    const words = (n) => n.split(/\s+/).slice(0, 2).join(' ');
+    const amts = us.map(x => x.r.brutto).sort((a, b) => a - b); const med = amts[Math.floor(amts.length / 2)] || 0;
+    setGrpDlg({ name: names[0] ? names[0].slice(0, 40) : '', account: top(us.map(x => acctOf(x.k, x.r))) || 'unter', category: top(us.map(x => eff(x.k, x.r).kategorie).filter(c => c && c !== 'Allgemein')) || '', terms: [...new Set(names.map(words))].slice(0, 4).join(', '), monthly: med ? String(med).replace('.', ',') : '', noEinzel: true, files: [], busy: false, keys: selKeys.slice() });
+  };
+  const createGroup = async (withFiles) => {
+    const d = grpDlg; if (!d || !String(d.name).trim() || !onSaveGroup) return; setGrpDlg(x => ({ ...x, busy: true }));
+    try { const id = await onSaveGroup({ name: d.name, account: d.account, category: d.category, terms: d.terms, monthly: d.monthly, yearly: '', note: '', noEinzel: d.noEinzel }, withFiles ? d.files : []);
+      setRowGroup(p => { const n = { ...p }; d.keys.forEach(k => { n[k] = id; }); return n; }); setSel({}); setGrpDlg(null);
+      setBotMsgs(m => [...m, { role: 'ai', text: '✓ Gruppe „' + d.name + '“ · ' + d.keys.length + (d.keys.length === 1 ? ' Zeile' : ' Zeilen') }]);
+    } catch (e) { setErr('Gruppe konnte nicht angelegt werden: ' + (e.message || e)); setGrpDlg(x => (x ? { ...x, busy: false } : x)); } };
   const toggleNoBeleg = (k, r) => { const key = k + r.idx; const on = !isNoBeleg(k, r);
     if (!on) { setNoBeleg(p => ({ ...p, [key]: false })); return; }
     const keys = sameName(k, r); if (keys.length > 1) setAskA({ typ: 'nobeleg', key, val: true, keys, name: eff(k, r).name, rule: normN(r.name) }); else setNoBeleg(p => ({ ...p, [key]: true })); };
@@ -664,6 +693,7 @@ export default function SevdeskImport(props) {
           <input value={bulkNote} onChange={e => setBulkNote(e.target.value)} placeholder="Notiz für alle …" style={{ ...SS, textAlign: 'left', padding: '6px 10px', fontSize: 12.5, width: 160 }} />
           <button onClick={() => { if (bulkNote.trim()) { bulk({ notiz: bulkNote.trim() }); setBulkNote(''); } }} style={sm}>Notiz setzen</button>
           <button onClick={() => bulk({ konto: (accounts.find(a => a.key === 'privat') || {}).key || 'privat' })} style={sm}>Privat</button>
+          <button onClick={openGrpDlg} title="Aus den ausgewählten Abbuchungen eine Gruppe bilden (z. B. Strom Wohnung 1, Personal) – PDFs gelten für alle" style={{ ...sm, background: C.act, color: C.actTxt, border: 'none' }}>↻ Gruppe erstellen</button>
           <button onClick={() => bulk({ kategorie: 'Personal', mwst: 0 })} title="Kategorie Personal, MwSt 0 % (Lohn, Krankenkasse, Abgaben)" style={sm}>Personal</button>
           <button onClick={() => { const ks = selKeys; setNoBeleg(p => { const n = { ...p }; ks.forEach(x => { n[x] = true; }); return n; }); }} title="Für alle Ausgewählten ist kein Beleg nötig" style={sm}>Kein Beleg nötig</button>
           <label title="Einen Beleg (z. B. Lohnabrechnung) für alle ausgewählten Abbuchungen hinterlegen" style={{ ...sm, display: 'inline-block' }}>📎 Beleg für alle<input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; const src = { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) }; const ks = selKeys; setUpPdf(p => { const n = { ...p }; ks.forEach(x => { n[x] = src; }); return n; }); setNoBeleg(p => { const n = { ...p }; ks.forEach(x => { n[x] = false; }); return n; }); }} /></label>
@@ -718,6 +748,29 @@ export default function SevdeskImport(props) {
               </React.Fragment>); })}
             </tbody>
           </table>
+        </div>)}
+      {grpDlg && (
+        <div onClick={() => !grpDlg.busy && setGrpDlg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 175, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 18, padding: '20px 22px', maxWidth: 480, width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 4 }}>Abbuchungsgruppe erstellen</div>
+            <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5, marginBottom: 12 }}>{grpDlg.keys.length} ausgewählte Abbuchungen. Weitere werden über die Suchbegriffe automatisch erkannt – auch in künftigen Monaten. Die PDFs gelten als Beleg für die ganze Gruppe.</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <input value={grpDlg.name} onChange={e => setGrpDlg(x => ({ ...x, name: e.target.value }))} placeholder="Name, z. B. Strom Wohnung 1" style={{ ...SS, textAlign: 'left' }} />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <select value={grpDlg.account} onChange={e => setGrpDlg(x => ({ ...x, account: e.target.value }))} style={{ ...SS, textAlign: 'left', flex: 1.3 }}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select>
+                <select value={grpDlg.category} onChange={e => setGrpDlg(x => ({ ...x, category: e.target.value }))} style={{ ...SS, textAlign: 'left', flex: 1 }}><option value="">Kategorie …</option>{CATS.map(c => <option key={c} value={c}>{c}</option>)}</select>
+              </div>
+              <textarea value={grpDlg.terms} onChange={e => setGrpDlg(x => ({ ...x, terms: e.target.value }))} rows={2} placeholder="Erkennung: Wörter im Namen oder Verwendungszweck, mit Komma getrennt" style={{ ...SS, textAlign: 'left', resize: 'vertical' }} />
+              <input value={grpDlg.monthly} onChange={e => setGrpDlg(x => ({ ...x, monthly: e.target.value }))} inputMode="decimal" placeholder="Erwarteter Betrag € / Monat (optional – bei Abweichung gibt es ein To-do)" style={{ ...SS, textAlign: 'left' }} />
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, cursor: 'pointer', lineHeight: 1.4 }}><input type="checkbox" checked={grpDlg.noEinzel} onChange={e => setGrpDlg(x => ({ ...x, noEinzel: e.target.checked }))} /> Kein Einzelbeleg nötig – Gruppen-PDF genügt</label>
+              <label style={{ display: 'block', border: '1.5px dashed ' + C.bdrM, borderRadius: 12, padding: '12px', textAlign: 'center', cursor: 'pointer', fontSize: 13, color: grpDlg.files.length ? C.txt : C.sub, fontWeight: grpDlg.files.length ? 700 : 500 }}>{grpDlg.files.length ? grpDlg.files.length + ' Datei(en): ' + grpDlg.files.map(f => f.name).join(', ').slice(0, 80) : 'PDFs hochladen (Vertrag, Abschlagsplan, Abrechnung – mehrere möglich)'}<input type="file" multiple accept=".pdf,image/*,.txt" style={{ display: 'none' }} onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ''; setGrpDlg(x => ({ ...x, files: [...x.files, ...fs] })); }} /></label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button disabled={grpDlg.busy || !String(grpDlg.name).trim() || !grpDlg.files.length} onClick={() => createGroup(true)} style={{ ...btnP, flex: 1, justifyContent: 'center', borderRadius: 11, opacity: (grpDlg.busy || !String(grpDlg.name).trim() || !grpDlg.files.length) ? 0.5 : 1 }}>{grpDlg.busy ? 'Läuft …' : 'Anlegen & hochladen'}</button>
+                <button disabled={grpDlg.busy || !String(grpDlg.name).trim()} onClick={() => createGroup(false)} style={{ ...btnS, justifyContent: 'center', borderRadius: 11, opacity: (grpDlg.busy || !String(grpDlg.name).trim()) ? 0.5 : 1 }}>Später</button>
+                <button disabled={grpDlg.busy} onClick={() => setGrpDlg(null)} style={{ ...btnS, borderRadius: 11 }}>×</button>
+              </div>
+            </div>
+          </div>
         </div>)}
       {askA && (
         <div onClick={() => setAskA(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 175, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
