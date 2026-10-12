@@ -2120,6 +2120,15 @@ function App({session}) {
   const setDrafts = updater => setData(prev=>({...prev, drafts: updater(prev.drafts||[])}));
   const updateDraft = (id,patch) => setDrafts(ds=>ds.map(d=>d.id===id?{...d,...patch}:d));
   const draftFile = async (id,f) => { if(!f) return; f=await imageToPdfFile(f); const isPdf=/pdf$/i.test(f.name||'')||f.type==='application/pdf'; setDraftUpId(id); setDraftUpProg(8); const tick=setInterval(()=>setDraftUpProg(p=>p<90?p+Math.max(2,(90-p)*0.18):p),120); try{ const dr=(drafts||[]).find(x=>x.id===id)||{}; let blob=f, mime='image/jpeg', ext='.jpg'; if(isPdf){ mime='application/pdf'; ext='.pdf'; } else { try{ blob=await compressImage(f,1500,0.6); }catch(_){} } const b64=await fileToB64(blob); const fname=belegFileName(dr.name, dr.belegnr, f.name).replace(/\.[a-z0-9]+$/i,ext); clearInterval(tick); setDraftUpProg(100); updateDraft(id,{fileData:'data:'+mime+';base64,'+b64, fileName:fname}); setToast('Beleg angehängt'); setTimeout(()=>{ setDraftUpId(null); setDraftUpProg(0); },350); }catch(e){ clearInterval(tick); setDraftUpId(null); setDraftUpProg(0); setToast('Beleg-Fehler: '+(e.message||e)); } };
+  // Verknüpfte Buchung eines zugeordneten Bank-Eintrags finden / Beleg dort ablegen (z. B. Lohnabrechnung nachträglich)
+  const findLinked = (dd, lk)=>{ if(!lk) return null; const M=dd[lk.ty]&&dd[lk.ty][lk.tm]; if(!M) return null; const cont=lk.account==='unter'?M.unternehmen:lk.account==='privat'?M.privat:(M.props&&M.props[lk.account]); if(!cont) return null; for(const k of ['items','clients','einnahmen','expenses']){ const it=(cont[k]||[]).find(x=>x.id===lk.itemId); if(it) return {it,cont,k}; } return null; };
+  const attachToLinked = async (d,f)=>{ if(!f||!d.linkedTo) return; setDraftUpId(d.id); setDraftUpProg(30);
+    try{ const li=findLinked(dataRef.current||data,d.linkedTo); const iso=toISO(d.datum)||''; const y=iso.slice(0,4)||String(yr);
+      const fi=await storeAttachment(f,['Belege',y,'Bank'],(safeName(d.name||'Beleg').slice(0,40))+'_'+(iso||uid().slice(0,6)));
+      setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const hit=findLinked(nd,d.linkedTo); if(hit){ hit.it.filePath=fi.path; hit.it.fileName=fi.fname; delete hit.it.fileData; } return nd; });
+      setToast('Beleg bei der Buchung hinterlegt ✓'); }
+    catch(e){ setToast('Beleg-Fehler: '+(e.message||e)); }
+    setDraftUpId(null); setDraftUpProg(0); };
   const delDraft = id => { setDrafts(ds=>ds.filter(d=>d.id!==id)); setDraftSel(s=>s.filter(x=>x!==id)); };
   // ── Kontoauszug-Status + Dedup ──
   const draftSig = (d)=> normName(d.name)+'|'+Math.round(num(d.amount)*100)+'|'+(toISO(d.datum)||'')+'|'+String(d.belegnr||'').toLowerCase();
@@ -2711,14 +2720,14 @@ function App({session}) {
     const minCust=Math.max(1,+payload.minCust||1); const perName={}; rec.forEach(r=>{ const n=normName(r.name||'Kunde'); perName[n]=(perName[n]||0)+1; }); const wantCust=(nm)=>perName[normName(nm)]>=minCust; const knownNames=new Set(customers.map(c=>normName(c.name))); const newNames=new Set(); rec.forEach(r=>{ const n=normName(r.name||'Kunde'); if(!knownNames.has(n) && wantCust(r.name||'Kunde')) newNames.add(n); });
     setData(prev=>{ const nd=JSON.parse(JSON.stringify(prev)); const now2=new Date().toISOString();
       bel.forEach(r=>{ if(!nd[r.y]) nd[r.y]={}; if(!nd[r.y][r.m]) nd[r.y][r.m]=emptyMonth(); const done=payload.confirmed||r.status==='bezahlt';
-        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), id:r._id, ...(r.recur?{recurring:true, from:r.recur.from, until:r.recur.until}:{}), amount:(r.storno?-r.brutto:r.brutto), netto:(r.storno?-r.netto:r.netto), mwst:r.mwst, category:r.kategorie||'', note:[r.taxNote,(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
+        const item={...newItem((r.name||r.beschreibung||'Beleg').slice(0,90)), id:r._id, ...(r.recur?{recurring:true, from:r.recur.from, until:r.recur.until}:{}), amount:(r.storno?-r.brutto:r.brutto), netto:(r.storno?-r.netto:r.netto), mwst:r.mwst, category:r.kategorie||'', note:[r.taxNote,(r.beschreibung&&r.beschreibung!==r.name)?r.beschreibung:'','Import aus sevDesk'].filter(Boolean).join(' · '), datum:r.datum, belegnr:r.nummer||'', status: done?(r.kind==='ein'?'bezahlt':'abgebucht'):'offen', bankConfirmed:done, bankName:r.bankText||'', bankDate:r.bankDate||'', filePath:r.filePath, fileName:r.fileName, nutzung:r.acct==='privat'?'':'geschaeftlich', imported:'sevdesk', importedAt:now2 };
         _bookKind(nd[r.y][r.m], r.acct, r.kind, item); });
       const custs=[...(nd.customers||[])]; const invs=[...(nd.invoices||[])];
       rec.forEach(r=>{ const nm=(r.name||'Kunde').trim(); let c=custs.find(x=>normName(x.name)===normName(nm)); if(!c && wantCust(nm)){ const nums=custs.filter(x=>(x.domain||'unter')===r.acct).map(x=>parseInt(x.custNo,10)).filter(n=>!isNaN(n)); c={id:uid(), name:nm, company:nm, firstName:'', lastName:'', anrede:'', address:String(r.adresse||'').replace(/,\s*/,'\n'), email:'', phone:'', website:'', custNo:String(r.kdnr||(nums.length?Math.max(...nums)+1:1001)), domain:r.acct, imported:'sevdesk'}; custs.push(c); }
         const invId=uid(); const paid=r.status==='bezahlt'||!!r.storno;
         invs.push({ id:invId, number:r.nummer||('IMP-'+r.datum), domain:r.acct, account:r.acct, customerId:c?c.id:'', custName:nm, custAddress:String(r.adresse||'').replace(/,\s*/,'\n'), custEmail:'', date:r.datum, due:r.faellig||'', items:[{desc:r.beschreibung||'Leistung laut Rechnung', qty:1, price:(r.storno?-r.netto:r.netto), mwst:r.mwst}], note:'Import aus sevDesk', total:(r.storno?-r.brutto:r.brutto), paid, paidDate:paid?(r.zahldatum||r.datum):'', pdfPath:r.pdfPath, sentDate:r.datum, booked:true, imported:'sevdesk', importedAt:now2 });
         if(!nd[r.y]) nd[r.y]={}; if(!nd[r.y][r.m]) nd[r.y][r.m]=emptyMonth();
-        const item={...newItem(('Rechnung '+(r.nummer||'')+' · '+nm).slice(0,90)), id:r._id, amount:(r.storno?-r.brutto:r.brutto), netto:(r.storno?-r.netto:r.netto), mwst:r.mwst, belegnr:r.nummer||'', datum:r.datum, category:'Allgemein', note:[r.taxNote,'Rechnung · Import aus sevDesk'].filter(Boolean).join(' · '), invId, customerId:c?c.id:'', custName:nm, paid, status:paid?'bezahlt':'offen', bankConfirmed:paid, filePath:r.pdfPath, fileName:r.pdfPath?('Rechnung_'+(r.nummer||'')+'.pdf'):'', imported:'sevdesk', importedAt:now2 };
+        const item={...newItem(('Rechnung '+(r.nummer||'')+' · '+nm).slice(0,90)), id:r._id, amount:(r.storno?-r.brutto:r.brutto), netto:(r.storno?-r.netto:r.netto), mwst:r.mwst, belegnr:r.nummer||'', datum:r.datum, category:'Allgemein', note:[r.taxNote,'Rechnung · Import aus sevDesk'].filter(Boolean).join(' · '), invId, customerId:c?c.id:'', custName:nm, paid, status:paid?'bezahlt':'offen', bankConfirmed:paid, bankName:r.bankText||'', bankDate:r.bankDate||'', filePath:r.pdfPath, fileName:r.pdfPath?('Rechnung_'+(r.nummer||'')+'.pdf'):'', imported:'sevdesk', importedAt:now2 };
         _bookKind(nd[r.y][r.m], r.acct, 'ein', item); });
       nd.customers=custs; nd.invoices=invs;
       // Laufende Rechnungs-Serien (aus dem Import erkannt): ab dem Folgemonat automatisch weiter erzeugen
@@ -2741,6 +2750,9 @@ function App({session}) {
       let path=null; try{ path=['Kontoauszüge',y,safeName(b.name)].join('/'); const {error}=await sb.storage.from('belege').upload(path, b.file, {upsert:true, contentType:b.file.type||'application/octet-stream'}); if(error) throw error; files++; }catch(e){ path=null; fehler++; }
       stmts.push({id:uid(), fileName:b.name, size:b.file.size, rows:rows.slice(0,3000).map(compactRow), path, year:+y, from:dates[0]||'', to:dates[dates.length-1]||'', count:rows.length, importedAt:new Date().toISOString()});
       bankDrafts=bankDrafts.concat(rows.map(r=>({id:uid(), ...r}))); }
+    // Bank-Ansicht = Abgleich: ignorierte Umsätze als „Ignoriert“, gebuchte mit ihrer Buchung verknüpft (Zugeordnet), der Rest bleibt offen
+    if(Array.isArray(payload.bankLinks)){ const byKey=new Map([...bel,...rec].map(x=>[x.rowKey,x]));
+      bankDrafts=payload.bankLinks.map(l=>{ const hit=l.key?byKey.get(l.key):null; const d={id:uid(), ...l.row}; if(l.ignored) d.ignored=true; if(hit){ d.confirmed=true; d.linkedTo={ty:hit.y,tm:hit.m,account:hit.acct,itemId:hit._id,kind:hit.kind==='ein'?'ein':'aus'}; } return d; }); }
     if(stmts.length) setData(prev=>({...prev, bankStatements:[...(prev.bankStatements||[]), ...stmts]}));
     if(bankDrafts.length) setTimeout(()=>{ try{ addDraftsRef.current&&addDraftsRef.current(bankDrafts); }catch(e){} }, 1200);
     setToast('Import abgeschlossen: '+bel.length+' Belege, '+rec.length+' Rechnungen'+(stmts.length?', '+stmts.length+' Kontoauszug/-auszüge':''));
@@ -3781,7 +3793,7 @@ function App({session}) {
         if(!netto) netto = rateIn!=null ? r2(brutto/(1+rateIn/100)) : brutto;
         const vat = r2(brutto-netto);
         const rate = rateIn!=null ? rateIn : (netto>0 && vat>0 ? Math.round(vat/netto*100) : 0);
-        out.push({ id:it.id, name:it.name||'', brutto, netto, vat, rate, category:it.category||'', skr:String(it.skr||suggestSKR(it.category||'',kind)), belegnr:it.belegnr||'', datum:toISO(it.datum)||'', kind, account, y:+year, m:+mk, hasBeleg:!!(it.filePath||it.fileData), note:String(it.note||'').trim(), hasVatInfo:(rateIn!=null || Math.abs(num(it.netto))>0), filePath:it.filePath||'', fileDataRaw:it.fileData||null });
+        out.push({ id:it.id, name:it.name||'', brutto, netto, vat, rate, category:it.category||'', skr:String(it.skr||suggestSKR(it.category||'',kind)), belegnr:it.belegnr||'', datum:toISO(it.datum)||'', kind, account, y:+year, m:+mk, hasBeleg:!!(it.filePath||it.fileData), note:String(it.note||'').trim(), bankName:String(it.bankName||''), hasVatInfo:(rateIn!=null || Math.abs(num(it.netto))>0), filePath:it.filePath||'', fileDataRaw:it.fileData||null });
       }); };
       if(M.unternehmen){ grab(M.unternehmen.clients,'unter','ein'); grab(M.unternehmen.items,'unter','aus'); }
       if(M.props) Object.keys(M.props).forEach(pid=>{ const p=M.props[pid]||{}; grab(p.einnahmen,pid,'ein'); grab(p.expenses,pid,'aus'); });
@@ -3998,7 +4010,7 @@ function App({session}) {
           ((inc.insDocs||{})[ch]||[]).forEach(d=>immoDocs.push({mk,pid,art,path:d.path,name:d.name})); }); }); });
       const bar=r=>kLabel(r.account);
       // 1) Buchungsliste
-      zip.file('Buchungen_'+per+'.csv','﻿'+['Datum;Beleg-Nr;Name;Art;Konto;Kategorie;MwSt-Satz;Netto;Brutto;Beleg vorhanden;Notiz',...rows.map(r=>[r.datum,r.belegnr,'"'+String(r.name).replace(/"/g,'""')+'"',r.kind==='ein'?'Einnahme':'Ausgabe',bar(r),r.category,(r.rate||0)+'%',deNum(r.netto),deNum(r.brutto),(r.hasBeleg?'ja':'nein'),'"'+String(r.note||'').replace(/"/g,'""')+'"'].join(';'))].join('\r\n'));
+      zip.file('Buchungen_'+per+'.csv','﻿'+['Datum;Beleg-Nr;Name;Art;Konto;Kategorie;MwSt-Satz;Netto;Brutto;Beleg vorhanden;Notiz;Bank-Buchungstext',...rows.map(r=>[r.datum,r.belegnr,'"'+String(r.name).replace(/"/g,'""')+'"',r.kind==='ein'?'Einnahme':'Ausgabe',bar(r),r.category,(r.rate||0)+'%',deNum(r.netto),deNum(r.brutto),(r.hasBeleg?'ja':'nein'),'"'+String(r.note||'').replace(/"/g,'""')+'"','"'+String(r.bankName||'').replace(/"/g,'""')+'"'].join(';'))].join('\r\n'));
       // 2) Inserate / Vermietung
       if(immo.length) zip.file('Inserate_Einnahmen_'+per+'.csv','﻿'+['Monat;Standort;Art;Inserat;Betrag',...immo.map(i=>[i.mk,'"'+kLabel(i.pid)+'"',i.art,'"'+i.inserat.replace(/"/g,'""')+'"',deNum(i.betrag)].join(';'))].join('\r\n'));
       // 3) Belege, nach Konto > Monat > Einnahmen/Ausgaben sortiert
@@ -5180,9 +5192,14 @@ function App({session}) {
                     <Ic p={P.receipt} sz={17} col={C.pri}/>
                     <span style={{position:'absolute',right:-3,bottom:-3,width:14,height:14,borderRadius:'50%',background:C.pri,border:'2px solid '+C.surf2,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.spark} sz={7} col={C.priTxt}/></span>
                   </button>
-                ) : done ? (
-                  <div title="Zugeordnet" style={{width:44,height:44,flexShrink:0,borderRadius:13,background:hexA(C.grn,0.16),border:'1px solid '+hexA(C.grn,0.4),display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={hasFile?P.clip:P.check} sz={18} col={C.grn}/></div>
+                ) : done ? (()=>{ const li=d.linkedTo?findLinked(data,d.linkedTo):null; const lf=!!(li&&(li.it.filePath||li.it.fileData)); return (li && !lf) ? (
+                  <label onClick={e=>e.stopPropagation()} title="Beleg zur Buchung hochladen" style={{width:44,height:44,flexShrink:0,borderRadius:13,background:hexA(C.red,0.12),border:'1px solid '+hexA(C.red,0.35),display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
+                    <Ic p={P.upload} sz={17} col={C.red}/>
+                    <input type="file" accept="image/*,.pdf" onChange={e=>{const f=e.target.files[0];e.target.value='';attachToLinked(d,f);}} style={{display:'none'}}/>
+                  </label>
                 ) : (
+                  <button onClick={e=>{e.stopPropagation(); if(li&&li.it.filePath) openFile(li.it.filePath,li.it.fileName);}} title={lf?'Beleg ansehen':'Zugeordnet'} style={{width:44,height:44,flexShrink:0,borderRadius:13,background:hexA(C.grn,0.16),border:'1px solid '+hexA(C.grn,0.4),display:'flex',alignItems:'center',justifyContent:'center',cursor:lf?'pointer':'default',padding:0}}><Ic p={(hasFile||lf)?P.clip:P.check} sz={18} col={C.grn}/></button>
+                ); })() : (
                 <label onClick={e=>e.stopPropagation()} title={hasFile?'Beleg ersetzen':'Beleg hochladen'} style={{position:'relative',width:44,height:44,flexShrink:0,borderRadius:13,background:hasFile?hexA(C.pri,0.16):C.surf3,border:'1px solid '+(hasFile?'transparent':C.sep),display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
                   <Ic p={hasFile?P.clip:P.upload} sz={17} col={hasFile?C.pri:C.sub}/>
                   {hasFile && <span style={{position:'absolute',right:-3,bottom:-3,width:14,height:14,borderRadius:'50%',background:C.grn,border:'2px solid '+C.surf2,display:'flex',alignItems:'center',justifyContent:'center'}}><Ic p={P.check} sz={7} col={'#06281C'}/></span>}
