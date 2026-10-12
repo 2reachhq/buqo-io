@@ -44,7 +44,7 @@ export function matchFilter(u, f) {
 export function normalizeActions(actions, { cats, accounts }) {
   const kontoKey = (v) => { if (!v) return null; const n = norm(v); const a = accounts.find(x => norm(x.key) === n || norm(x.label) === n || norm(x.label).includes(n) || n.includes(norm(x.label))); return a ? a.key : null; };
   const catOf = (v) => { if (!v) return null; const c = cats.find(x => norm(x) === norm(v)); return c || null; };
-  const ok = ['auswaehlen', 'setzen', 'ignorieren', 'wiederherstellen', 'notiz', 'merken', 'todo', 'beleg', 'keinbeleg'];
+  const ok = ['auswaehlen', 'setzen', 'ignorieren', 'wiederherstellen', 'notiz', 'merken', 'todo', 'beleg', 'keinbeleg', 'gruppe'];
   return (actions || []).filter(a => a && ok.includes(a.typ)).map(a => {
     const s = a.setzen || {}; const set = {};
     const kat = catOf(s.kategorie); if (kat) set.kategorie = kat;
