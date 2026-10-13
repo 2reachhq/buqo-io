@@ -28,14 +28,17 @@ export function detectGroups(rows, { catOf, minMonths = 3, skipKeys } = {}) {
     let g = map.get(key); if (!g) { g = { fam, kind: r.kind === 'ein' ? 'ein' : 'aus', names: {}, rows: [], months: new Set(), base, first }; map.set(key, g); }
     g.rows.push(r); g.months.add(String(r.datum).slice(0, 7)); const nm = String(r.name || '').trim().slice(0, 40); g.names[nm] = (g.names[nm] || 0) + 1;
   });
+  const mIdx = (iso) => { const s = String(iso || ''); return (+s.slice(0, 4)) * 12 + (+s.slice(5, 7)) - 1; };
+  const latest = rows.reduce((a, r) => (r.datum && String(r.datum) > a ? String(r.datum) : a), '');
   const out = [];
   map.forEach((g, key) => {
     const amts = g.rows.map(r => r.brutto); const med = median(amts); const spread = med ? (Math.max(...amts) - Math.min(...amts)) / med : 1;
     const enough = g.months.size >= minMonths || (g.fam && g.rows.length >= 2) || (g.rows.length >= 2 && g.months.size >= 2 && spread < 0.03);
     if (!enough) return;
+    const last = g.rows.reduce((a, r) => (String(r.datum) > a ? String(r.datum) : a), ''); const ongoing = !!latest && (mIdx(latest) - mIdx(last)) <= 1;
     const topName = Object.entries(g.names).sort((a, b) => b[1] - a[1])[0][0];
     const category = (g.fam && g.fam.cat) || (catOf ? catOf(topName + ' ' + (g.rows[0].text || '')) : '') || '';
-    out.push({ sid: key, name: g.fam ? g.fam.label : topName, terms: g.fam ? (g.fam.terms || [g.fam.term]) : [g.first], kind: g.kind, category: category === 'Allgemein' ? '' : category, monthly: spread < 0.25 ? Math.round(med * 100) / 100 : '', variable: spread >= 0.25, keys: g.rows.map(r => r.key), months: g.months.size, count: g.rows.length });
+    out.push({ sid: key, name: g.fam ? g.fam.label : topName, terms: g.fam ? (g.fam.terms || [g.fam.term]) : [g.first], kind: g.kind, category: category === 'Allgemein' ? '' : category, monthly: spread < 0.25 ? Math.round(med * 100) / 100 : '', variable: spread >= 0.25, keys: g.rows.map(r => r.key), months: g.months.size, count: g.rows.length, last, ongoing });
   });
   return out.sort((a, b) => b.count - a.count);
 }
