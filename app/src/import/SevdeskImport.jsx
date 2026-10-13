@@ -22,7 +22,7 @@ const idbDel = async (k) => { const d = await idbOpen(); return new Promise((res
 const normN = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
 
 export default function SevdeskImport(props) {
-  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows, aiAsk, onRemember, taxFacts, noBelegRules, onNoBelegRule, payGroups, onSaveGroup, onUpdateGroup, onAddGroupDocs, onDeleteAllGroups } = props;
+  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows, aiAsk, onRemember, taxFacts, noBelegRules, onNoBelegRule, payGroups, onSaveGroup, onUpdateGroup, onAddGroupDocs, onDeleteAllGroups, onDeleteGroup } = props;
   const { C, SC, SS, NUM, fmt, Ic, P, hexA, AI_GRADIENT, MONTHS } = ui;
   const [step, setStep] = useState(1);              // 1 Hochladen · 2 Abgleich · 3 Wiederkehrendes + Verbuchen
   const [belege, setBelege] = useState(null);      // {fileName, parsed, format, mapping, kind}
@@ -73,6 +73,9 @@ export default function SevdeskImport(props) {
   const [pdfIdx, setPdfIdx] = useState({});            // von der KI gelesene Beleg-PDFs aus den ZIPs: Dateiname → Beleg-Daten
   const [belegBusy, setBelegBusy] = useState(null);   // KI-Zuordnung der Belege: {done,total}
   const [belegMsg, setBelegMsg] = useState('');
+  const [autoBeleg, setAutoBeleg] = useState(true);   // nach dem Abgleich: nicht zugeordnete PDFs per KI zuordnen
+  const [autoGroups, setAutoGroups] = useState(true); // nach dem Abgleich: erkannte Gruppen automatisch anlegen
+  const pendingAutoRef = React.useRef(null);         // nach „Abgleich starten“ einmalig auszuführende Automatik
   const [grpDlg, setGrpDlg] = useState(null);        // Dialog „Gruppe erstellen“
   const grpCache = React.useRef({ sig: null, map: new Map() });
   const [noBeleg, setNoBeleg] = useState({});       // Abbuchungen, für die kein Beleg nötig ist (z. B. Nebenkosten der Stadt, Krankenkasse)
@@ -176,7 +179,7 @@ export default function SevdeskImport(props) {
   const redo = () => { const h = histRef.current; if (!h.redo.length) return; h.stack.push(h.cur); h.t = 0; restoreSnap(h.redo.pop()); };
   React.useEffect(() => {
     const onKey = (ev) => {
-      if (!(ev.metaKey || ev.ctrlKey) || ev.key.toLowerCase() !== 'z' || step !== 2) return;
+      if (!(ev.metaKey || ev.ctrlKey) || ev.key.toLowerCase() !== 'z' || step !== 3) return;
       const el = document.activeElement; if (el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text'))) return; // beim Tippen gilt das normale Rückgängig des Feldes
       ev.preventDefault(); ev.stopImmediatePropagation(); // verhindert das globale Rückgängig der App, solange der Abgleich offen ist
       if (ev.shiftKey) redo(); else undo();
@@ -235,7 +238,7 @@ export default function SevdeskImport(props) {
           if (f.datev && f.datev.length) setDatev(f.datev.map(x => ({ file: x.file, name: x.file.name })));
           if (f.extra && f.extra.length) setExtra(f.extra.map(x => ({ file: x.file, name: x.file.name })));
         }
-        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setOvr(st.ovr || {}); setForceDup(st.forceDup || {}); setNoBeleg(st.noBeleg || {}); setRowGroup(st.rowGroup || {}); setGrpDismiss(st.grpDismiss || {}); setPdfIdx(st.pdfIdx || {}); setKiApplied(st.kiApplied || {}); setDraftInfo({ savedAt: s.savedAt }); }
+        if (s && s.state) { const st = s.state; setYear(st.year); setYearChosen(st.yearChosen !== false); setAcct(st.acct); setRowAcct(st.rowAcct || {}); setSkip(st.skip || {}); setNotes(st.notes || {}); setRecurOff(st.recurOff || {}); setMinCust(st.minCust || 2); setAi(st.ai || {}); setKiRows(st.kiRows || {}); setKiAll(!!st.kiAll); setHint(st.hint || ''); setOcr(st.ocr || {}); setLater(st.later || {}); setDatevAct(st.datevAct || {}); setOvr(st.ovr || {}); setForceDup(st.forceDup || {}); setNoBeleg(st.noBeleg || {}); setRowGroup(st.rowGroup || {}); setGrpDismiss(st.grpDismiss || {}); setPdfIdx(st.pdfIdx || {}); if (st.autoBeleg != null) setAutoBeleg(!!st.autoBeleg); if (st.autoGroups != null) setAutoGroups(!!st.autoGroups); setKiApplied(st.kiApplied || {}); setDraftInfo({ savedAt: s.savedAt }); }
       } catch (e) { /* kein Zwischenspeicher (z. B. privater Modus) */ }
       restored.current = true;
     })();
@@ -255,10 +258,10 @@ export default function SevdeskImport(props) {
     const t = setTimeout(() => {
       if (!anyFile()) return;
       const savedAt = Date.now();
-      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, noBeleg, rowGroup, grpDismiss, pdfIdx, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
+      idbSet('state', { savedAt, mappings: { belege: belege && belege.mapping, rech: rech && rech.mapping }, state: { year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, noBeleg, rowGroup, grpDismiss, pdfIdx, autoBeleg, autoGroups, bankCache: Object.fromEntries(bank.filter(b => b.kind === 'datei' && b.rows && b.rows.length).map(b => [b.name + '|' + b.file.size, b.rows])) } }).then(() => setDraftInfo({ savedAt })).catch(() => {});
     }, 700);
     return () => clearTimeout(t);
-  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, noBeleg, rowGroup, grpDismiss, pdfIdx, bank, belege && belege.mapping, rech && rech.mapping]);
+  }, [year, yearChosen, acct, rowAcct, skip, notes, confirmed, recurOff, minCust, ai, kiRows, kiAll, hint, ocr, later, datevAct, ovr, forceDup, kiApplied, noBeleg, rowGroup, grpDismiss, pdfIdx, autoBeleg, autoGroups, bank, belege && belege.mapping, rech && rech.mapping]);
   const discardDraft = () => { idbDel('files').catch(() => {}); idbDel('state').catch(() => {}); setBelege(null); setRech(null); setZipB(null); setZipR(null); setBank([]); setDatev([]); setDatevRows([]); setExtra([]); setRowAcct({}); setSkip({}); setNotes({}); setAi({}); setOcr({}); setOcrOff({}); setRecurOff({}); setLater({}); setDatevAct({}); setUpPdf({}); setOvr({}); setSel({}); setYearChosen(false); setStep(1); setDraftInfo(null); setResult(null); };
   const build = (src, zip, exist) => {
     if (!src) return null;
@@ -393,7 +396,8 @@ export default function SevdeskImport(props) {
       for (const d of datev) { setAnaProg('DATEV lesen: ' + d.name); try { dr.push(...parseDatev(await d.file.arrayBuffer())); } catch (e) { setErr(x => (x ? x + '\n' : '') + 'DATEV „' + d.name + '": ' + (e.message || e)); } setAnaDone(x => x + 1); }
       setDatevRows(dr);
       await runOcr(kiTargets(false));
-      setStep(2);
+      pendingAutoRef.current = { beleg: autoBeleg && !!(zipB || zipR) && !!aiReadDoc, groups: autoGroups };
+      setStep(3);
     } catch (e) { setErr('Abgleich fehlgeschlagen: ' + (e.message || e)); }
     setAnalysing(false); setAnaProg(''); setAnaTotal(0); setAnaDone(0);
   };
@@ -499,7 +503,7 @@ export default function SevdeskImport(props) {
       const units = dispRows.map(unitOf); const ctx = groupContext(units); const ov = yearOverview(units); const rel = relevantRows(units, text + ' ' + botMsgs.slice(-2).map(m => m.text).join(' '));
       const doc = att && att.doc; const cands = doc ? belegCandidates(units, doc) : [];
       const system = 'Du bist der Import-Helfer von Buqo (deutsche Buchhaltung/Steuer) für den sevDesk-Import. Du kennst die gesamte Liste des Jahres (Kontoauszug-Umsätze, Belege, Rechnungen, Konten, Beleg-Status, Notizen, MwSt) und kannst sie ändern. Du darfst im Internet recherchieren (web_search), wenn steuerliche oder buchhalterische Fragen es erfordern. Wenn der Nutzer erklärt, wofür eine Buchung war, setze die Notiz (kurz und sachlich: was, wofür, steuerliche Einordnung) und passe Kategorie, MwSt und Konto an. Umsätze nur aus dem Kontoauszug haben keine MwSt-Angabe (Standard 0 %); schlage die richtige MwSt (0, 7 oder 19) vor und setze sie, wenn es eindeutig ist (Airbnb/Booking-Gebühren, Bank-, Versicherungsgebühren, Löhne, Steuern = 0 %). ANTWORTSTIL: extrem knapp – "antwort" ist höchstens EIN kurzer Satz (max. 12 Wörter), keine Erklärungen, keine Aufzählungen; Details stehen in den Aktionen (sie werden dem Nutzer als Tags gezeigt). Nur bei echten Steuerfragen bis zu 2 kurze Sätze. Antworte NUR mit minifiziertem JSON ohne Markdown: {"antwort":"…","aktionen":[…]}. Aktionen: {"typ":"auswaehlen|setzen|ignorieren|wiederherstellen|notiz|todo|merken|beleg","filter":{"name":"Teil des Namens oder Liste","von":"YYYY-MM-DD","bis":"YYYY-MM-DD","art":"ein|aus","konto":"Schlüssel","kategorie":"…","min":0,"max":0,"status":"passt|hinweis|fehlt","ohneBeleg":true,"quelle":"bank|csv","text":"Suchwort in Name/Beschreibung/Notiz"},"setzen":{"kategorie":"aus der Liste","konto":"Schlüssel","privat":true,"mwst":0|7|19,"notiz":"…"},"text":"…"}. "todo" = als To-do vormerken. "gruppe" = legt eine Abbuchungsgruppe an (z. B. Strom Wohnung 1, Airbnb, Personal) und ordnet die gefilterten Zeilen zu: {"typ":"gruppe","text":"Gruppenname","filter":{…},"setzen":{"kategorie":"…","konto":"…","notiz":"Beschreibung"}} – Erkennung läuft über Teile des Namens (filter.name). "keinbeleg" = für diese Abbuchungen ist kein Beleg nötig (z. B. Nebenkosten der Stadt/Gemeinde, Krankenkassen-/Sozialabgaben, Löhne laut Abrechnung, die der Nutzer separat hat); setze dann auch Notiz/Kategorie (Personal, Nebenkosten) wenn passend. Eine Lohnabrechnung gehört zu MEHREREN Abbuchungen (Nettolohn, Krankenkasse/Minijob-Zentrale, Lohnsteuer): bei "beleg" darfst du dafür mehrere "ziele" aus der Liste der Einzelbuchungen nennen. "merken": text = kurzer Fakt für die spätere Steuerberatung (max 200 Zeichen). "beleg": der Nutzer hat einen Beleg angehängt (siehe ANGEHÄNGTER BELEG) – wähle aus den Kandidaten die passende Buchung: {"typ":"beleg","ziele":["<key>"],"setzen":{"notiz":"kurz, was es ist","mwst":0|7|19,"kategorie":"…"}}; nimm höchstens die Kandidaten, die wirklich passen (bei Raten/Wiederholungen den Monat laut Nutzerhinweis, sonst frage kurz „Welche?" und gib keine Aktion zurück). Nutze nur vorhandene Kategorien und Konten, erfinde keine Zahlen. Ist der Auftrag unklar, gib keine Aktion zurück und stelle in "antwort" eine kurze Rückfrage.';
-      const user = 'Konten (Schlüssel=Name): ' + accounts.map(a => a.key + '=' + a.label).join(', ') + '\nKategorien: ' + CATS.join(', ') + '\n\nÜBERBLICK:\n' + ov.join('\n') + (taxFacts && taxFacts.length ? '\n\nBekannte Fakten über den Nutzer:\n' + taxFacts.slice(-25).join('\n') : '') + (payGroups && payGroups.length ? '\n\nAbbuchungsgruppen: ' + payGroups.map(g => g.name + ' (Erkennung: ' + (g.terms || '–') + (g.monthly ? ', erwartet ' + g.monthly + ' €/Monat' : '') + ((g.docs || []).length ? ', Beleg hinterlegt' : '') + ')').join('; ') : '') + '\n\nListe nach Name zusammengefasst:\n' + ctx.join('\n') + (rel.length ? '\n\nEinzelbuchungen zur Frage:\n' + rel.join('\n') : '') + (att ? '\n\nANGEHÄNGTER BELEG (' + att.file.name + '): ' + (doc ? JSON.stringify({ name: doc.name, datum: doc.datum, nummer: doc.nummer, brutto: doc.brutto, mwst: doc.mwst, kategorie: doc.kategorie, beschreibung: doc.beschreibung }) : 'nicht lesbar') + '\nKandidaten (key | Datum | Name | Betrag | Beleg):\n' + (cands.length ? cands.map(c => [c.u.key, c.u.datum, c.u.name, c.u.brutto, c.u.hasFile ? 'hat Beleg' : 'ohne Beleg'].join(' | ')).join('\n') : '(keine Buchung mit diesem Betrag gefunden)') : '') + '\n\nBisheriges Gespräch:\n' + botMsgs.slice(-8).map(m => (m.role === 'user' ? 'Nutzer: ' : 'Helfer: ') + m.text).join('\n') + '\n\nAuftrag: ' + text;
+      const user = 'Konten (Schlüssel=Name): ' + accounts.map(a => a.key + '=' + a.label).join(', ') + '\nKategorien: ' + CATS.join(', ') + '\n\nÜBERBLICK:\n' + ov.join('\n') + (taxFacts && taxFacts.length ? '\n\nBekannte Fakten über den Nutzer:\n' + taxFacts.slice(-25).join('\n') : '') + (payGroups && payGroups.length ? '\n\nAbbuchungsgruppen: ' + payGroups.map(g => g.name + ' (' + (grpStatus(g.id) || (g.ended ? 'beendet' : 'laufend')) + ', Art: ' + (g.art || 'abo') + ', Erkennung: ' + (g.terms || '–') + (g.monthly ? ', erwartet ' + g.monthly + ' €/Monat' : '') + ((g.docs || []).length ? ', Beleg hinterlegt' : '') + ')').join('; ') : '') + '\n\nListe nach Name zusammengefasst:\n' + ctx.join('\n') + (rel.length ? '\n\nEinzelbuchungen zur Frage:\n' + rel.join('\n') : '') + (att ? '\n\nANGEHÄNGTER BELEG (' + att.file.name + '): ' + (doc ? JSON.stringify({ name: doc.name, datum: doc.datum, nummer: doc.nummer, brutto: doc.brutto, mwst: doc.mwst, kategorie: doc.kategorie, beschreibung: doc.beschreibung }) : 'nicht lesbar') + '\nKandidaten (key | Datum | Name | Betrag | Beleg):\n' + (cands.length ? cands.map(c => [c.u.key, c.u.datum, c.u.name, c.u.brutto, c.u.hasFile ? 'hat Beleg' : 'ohne Beleg'].join(' | ')).join('\n') : '(keine Buchung mit diesem Betrag gefunden)') : '') + '\n\nBisheriges Gespräch:\n' + botMsgs.slice(-8).map(m => (m.role === 'user' ? 'Nutzer: ' : 'Helfer: ') + m.text).join('\n') + '\n\nAuftrag: ' + text;
       const out = parseBotJson(await aiAsk(system, user, { max: 3000, web: true }));
       const candKeys = new Set(cands.map(c => c.u.key)); const unitKeySet = new Set(units.map(u => u.key));
       let acts = normalizeActions(out.aktionen, { cats: CATS, accounts }).map(a => {
@@ -567,7 +571,7 @@ export default function SevdeskImport(props) {
   const Stat = ({ l, v, c }) => <div style={{ flex: 1, minWidth: 120 }}><div style={{ fontSize: 11.5, color: C.sub, fontWeight: 600 }}>{l}</div><div style={{ fontSize: 18, fontWeight: 800, color: c || C.txt, ...NUM }}>{v}</div></div>;
   const Steps = () => (
     <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-      {[[1, 'Hochladen'], [2, 'Abgleich'], [3, 'Wiederkehrendes & Verbuchen']].map(([n, t]) => (
+      {[[1, 'Kontoauszüge'], [2, 'Belege & Rechnungen'], [3, 'Abgleich & Verbuchen']].map(([n, t]) => (
         <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: step === n ? C.act : C.surf2, color: step === n ? C.actTxt : (step > n ? C.grn : C.sub), border: '1px solid ' + (step === n ? C.act : C.bdr) }}>{step > n ? '✓' : n} {t}</span>))}
     </div>);
   // Fortschrittsbalken mit Prozentzahl (done/total); ohne Gesamtzahl der laufende Balken
@@ -605,11 +609,11 @@ export default function SevdeskImport(props) {
     const names = [...new Set(us.map(x => String(eff(x.k, x.r).name || '').trim()).filter(Boolean))];
     const words = (n) => n.split(/\s+/).slice(0, 2).join(' ');
     const amts = us.map(x => x.r.brutto).sort((a, b) => a - b); const med = amts[Math.floor(amts.length / 2)] || 0;
-    setGrpDlg({ name: names[0] ? names[0].slice(0, 40) : '', account: top(us.map(x => acctOf(x.k, x.r))) || 'unter', category: top(us.map(x => eff(x.k, x.r).kategorie).filter(c => c && c !== 'Allgemein')) || '', terms: [...new Set(names.map(words))].slice(0, 4).join(', '), monthly: med ? String(med).replace('.', ',') : '', noEinzel: true, files: [], busy: false, keys: useKeys.slice() });
+    setGrpDlg({ name: names[0] ? names[0].slice(0, 40) : '', account: top(us.map(x => acctOf(x.k, x.r))) || 'unter', category: top(us.map(x => eff(x.k, x.r).kategorie).filter(c => c && c !== 'Allgemein')) || '', terms: [...new Set(names.map(words))].slice(0, 4).join(', '), monthly: med ? String(med).replace('.', ',') : '', noEinzel: true, art: 'abo', files: [], busy: false, keys: useKeys.slice() });
   };
   const createGroup = async (withFiles) => {
     const d = grpDlg; if (!d || !String(d.name).trim() || !onSaveGroup) return; setGrpDlg(x => ({ ...x, busy: true }));
-    try { const id = await onSaveGroup({ name: d.name, account: d.account, category: d.category, terms: d.terms, monthly: d.monthly, yearly: '', note: '', noEinzel: d.noEinzel }, withFiles ? d.files : []);
+    try { const id = await onSaveGroup({ name: d.name, account: d.account, category: d.category, terms: d.terms, monthly: d.monthly, yearly: '', note: '', noEinzel: d.noEinzel, art: d.art || 'abo' }, withFiles ? d.files : []);
       setRowGroup(p => { const n = { ...p }; d.keys.forEach(k => { n[k] = id; }); return n; }); setSel({}); setGrpDlg(null);
       setBotMsgs(m => [...m, { role: 'ai', text: '✓ Gruppe „' + d.name + '“ · ' + d.keys.length + (d.keys.length === 1 ? ' Zeile' : ' Zeilen') }]);
     } catch (e) { setErr('Gruppe konnte nicht angelegt werden: ' + (e.message || e)); setGrpDlg(x => (x ? { ...x, busy: false } : x)); } };
@@ -624,11 +628,18 @@ export default function SevdeskImport(props) {
   };
   // alle erkennbaren Gruppen unabhängig von bestehenden Zuordnungen (um sie nach „Alles rückgängig“ nicht wieder vorzuschlagen)
   const detectAllSids = () => detectGroups(dispRows.filter(({ k, r }) => !skip[k + r.idx]).map(({ k, r }) => { const bm = bankMatch && bankMatch.get ? bankMatch.get(k + r.idx) : null; return { key: k + r.idx, name: r.name, text: [r.beschreibung, bm && bm.name, bm && bm.note].filter(Boolean).join(' '), kind: r.kind, datum: r.datum, brutto: r.brutto }; }), { catOf: (t) => mapCategory(t || '') }).map(x => x.sid);
+  const grpStatus = (gid, rows) => { const mine = (rows || dispRows).filter(x => (grpOf(x.k, x.r) || {}).id === gid); if (mine.length < 2) return null; const mi = (d) => (+String(d).slice(0, 4)) * 12 + (+String(d).slice(5, 7)) - 1; const latest = dispRows.reduce((a, x) => (x.r.datum > a ? x.r.datum : a), ''); const last = mine.reduce((a, x) => (x.r.datum > a ? x.r.datum : a), ''); return (mi(latest) - mi(last)) <= 1 ? 'läuft' : 'beendet'; };
+  const statusChip = (st) => st ? <span style={{ fontSize: 10.5, fontWeight: 700, color: st === 'läuft' ? C.grn : C.sub, background: hexA(st === 'läuft' ? C.grn : C.sub, 0.12), border: '1px solid ' + hexA(st === 'läuft' ? C.grn : C.sub, 0.3), borderRadius: 6, padding: '1px 6px' }}>{st}</span> : null;
   const acceptSug = async (sg) => {
     if (!onSaveGroup) return; const first = dispRows.find(x => x.k + x.r.idx === sg.keys[0]);
-    const id = await onSaveGroup({ name: sg.name, account: first ? acctOf(first.k, first.r) : 'unter', category: sg.category, terms: sg.terms.join(', '), monthly: sg.monthly, yearly: '', note: '', noEinzel: true }, []);
+    const id = await onSaveGroup({ name: sg.name, account: first ? acctOf(first.k, first.r) : 'unter', category: sg.category, terms: sg.terms.join(', '), monthly: sg.monthly, yearly: '', note: sg.ongoing ? '' : 'Beendet – letzte Buchung ' + (sg.last || '').split('-').reverse().join('.'), noEinzel: true, art: 'abo', ended: !sg.ongoing }, []);
     setRowGroup(p => { const n = { ...p }; sg.keys.forEach(k => { if (n[k] !== 'none') n[k] = id; }); return n; }); return id; };
   const acceptAllSug = async (list) => { for (const sg of list) { try { await acceptSug(sg); } catch (e) { /* weiter */ } } setBotMsgs(m => [...m, { role: 'ai', text: '✓ ' + list.length + (list.length === 1 ? ' Gruppe' : ' Gruppen') + ' übernommen' }]); };
+  // Nach „Abgleich starten“: Belege per KI zuordnen und erkannte Gruppen anlegen (läuft, sobald die Liste steht)
+  React.useEffect(() => {
+    if (!pendingAutoRef.current || step !== 3 || analysing) return; const todo = pendingAutoRef.current; pendingAutoRef.current = null;
+    (async () => { try { if (todo.beleg) await assignBelege(); } catch (e) { /* weiter */ } try { if (todo.groups) { const sug = getSugList(); if (sug.length) await acceptAllSug(sug); } } catch (e) { /* egal */ } })();
+  }, [step, analysing]); // eslint-disable-line
   const toggleNoBeleg = (k, r) => { const key = k + r.idx; const on = !isNoBeleg(k, r);
     if (!on) { setNoBeleg(p => ({ ...p, [key]: false })); return; }
     const keys = sameName(k, r); if (keys.length > 1) setAskA({ typ: 'nobeleg', key, val: true, keys, name: eff(k, r).name, rule: normN(r.name) }); else setNoBeleg(p => ({ ...p, [key]: true })); };
@@ -686,8 +697,8 @@ export default function SevdeskImport(props) {
     const q = normN(listQ);
     const list = (filt === 'doppelt' ? dupList : dispRows).filter(({ k, r }) => {
       const key = k + r.idx; const hasP = !!(r.file || upPdf[key]);
-      if (filt === 'ignoriert') return !!skip[key];
-      if (filt !== 'doppelt' && skip[key]) return false;
+      if (filt === 'ignoriert') { if (!skip[key]) return false; }
+      else if (filt !== 'doppelt' && skip[key]) return false;
       if (grpFilter && (grpOf(k, r) || {}).id !== grpFilter) return false;
       if (artTab === 'belege' && r.kind === 'ein') return false; if (artTab === 'rechnungen' && r.kind !== 'ein') return false;
       if (filt === 'pdf' && !hasP) return false; if (filt === 'nopdf' && (hasP || isNoBeleg(k, r))) return false; if (filt === 'todo' && !later[key]) return false;
@@ -857,9 +868,9 @@ export default function SevdeskImport(props) {
                 <div style={{ padding: 10 }}><input value={grpQ} onChange={e => setGrpQ(e.target.value)} placeholder="Gruppe suchen …" style={{ ...ctlS, width: '100%', boxSizing: 'border-box' }} /></div>
                 <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 10px' }}>
                   {savedL.filter(match).length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: C.mut, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '4px 2px' }}>Meine Gruppen · {savedL.filter(match).length}</div>}
-                  {savedL.filter(match).map(x => <button key={x.id} onClick={() => { setGrpSel(x.id); setAddQ(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', background: grpSel === x.id ? hexA(C.pri, 0.14) : C.surf2, border: '1px solid ' + (grpSel === x.id ? C.pri : C.bdr), borderRadius: 10, padding: '8px 10px', marginBottom: 6, cursor: 'pointer', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 13.5, fontWeight: 700 }}>↻ {x.name}</div><div style={{ fontSize: 11.5, color: C.sub }}>{x.rows.length} Buchungen · {fmt(Math.abs(sumR(x.rows)))}{(x.g.docs || []).length ? ' · 📎 ' + x.g.docs.length : ''}</div></button>)}
+                  {savedL.filter(match).map(x => <button key={x.id} onClick={() => { setGrpSel(x.id); setAddQ(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', background: grpSel === x.id ? hexA(C.pri, 0.14) : C.surf2, border: '1px solid ' + (grpSel === x.id ? C.pri : C.bdr), borderRadius: 10, padding: '8px 10px', marginBottom: 6, cursor: 'pointer', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 13.5, fontWeight: 700 }}>↻ {x.name}</div><div style={{ fontSize: 11.5, color: C.sub, display: 'flex', gap: 6, alignItems: 'center' }}>{x.rows.length} Buchungen · {fmt(Math.abs(sumR(x.rows)))}{(x.g.docs || []).length ? ' · 📎 ' + x.g.docs.length : ''} {statusChip(grpStatus(x.g.id, x.rows))}</div></button>)}
                   {sugL.filter(match).length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: C.mut, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '10px 2px 4px' }}>Vorschläge der KI · {sugL.filter(match).length}</div>}
-                  {sugL.filter(match).map(x => <button key={x.id} onClick={() => setGrpSel(x.id)} style={{ display: 'block', width: '100%', textAlign: 'left', background: grpSel === x.id ? hexA(C.amb, 0.16) : C.surf2, border: '1px dashed ' + (grpSel === x.id ? C.amb : C.bdr), borderRadius: 10, padding: '8px 10px', marginBottom: 6, cursor: 'pointer', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 13.5, fontWeight: 700 }}>{x.name}</div><div style={{ fontSize: 11.5, color: C.sub }}>{x.rows.length} Buchungen · Vorschlag</div></button>)}
+                  {sugL.filter(match).map(x => <button key={x.id} onClick={() => setGrpSel(x.id)} style={{ display: 'block', width: '100%', textAlign: 'left', background: grpSel === x.id ? hexA(C.amb, 0.16) : C.surf2, border: '1px dashed ' + (grpSel === x.id ? C.amb : C.bdr), borderRadius: 10, padding: '8px 10px', marginBottom: 6, cursor: 'pointer', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 13.5, fontWeight: 700 }}>{x.name}</div><div style={{ fontSize: 11.5, color: C.sub, display: 'flex', gap: 6, alignItems: 'center' }}>{x.rows.length} Buchungen · Vorschlag {statusChip(x.sg.ongoing ? 'läuft' : 'beendet')}</div></button>)}
                   {!savedL.filter(match).length && !sugL.filter(match).length && <div style={{ fontSize: 13, color: C.mut, padding: 8 }}>Keine Gruppe gefunden. Wähle Buchungen in der Liste aus und klicke „↻ Gruppe erstellen“.</div>}
                 </div>
               </div>
@@ -868,7 +879,10 @@ export default function SevdeskImport(props) {
                 {sel && (<>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: 180 }}><div style={{ fontSize: 17, fontWeight: 800 }}>{sel.g ? '↻ ' : ''}{sel.name}</div><div style={{ fontSize: 12, color: C.sub }}>{sel.rows.length} Buchungen · Summe {fmt(Math.abs(sumR(sel.rows)))}{sel.g ? ' · Erkennung: ' + (sel.g.terms || '–') : ' · Erkennung: ' + sel.sg.terms.join(', ')}{sel.g && sel.g.monthly > 0 ? ' · erwartet ' + fmt(sel.g.monthly) + '/Monat' : ''}</div></div>
+                    {sel.g && statusChip(grpStatus(sel.g.id, sel.rows))}
                     {sel.g && <button onClick={() => { setGrpFilter(sel.g.id); setGrpPop(false); }} style={{ ...sm, background: C.act, color: C.actTxt, border: 'none' }}>Nur diese in der Liste zeigen</button>}
+                    {sel.g && onAddGroupDocs && <label style={{ ...sm, display: 'inline-block' }} title="PDFs (Vertrag, Abrechnung, Beleg) für die ganze Gruppe">📎 PDF für alle<input type="file" multiple accept=".pdf,image/*,.txt" style={{ display: 'none' }} onChange={async e => { const fs = e.target.files; if (fs && fs.length) await onAddGroupDocs(sel.g.id, fs); e.target.value = ''; }} /></label>}
+                    {sel.g && onDeleteGroup && <button onClick={() => { if (window.confirm('Gruppe „' + sel.g.name + '“ auflösen? Die Buchungen bleiben, nur die Gruppe und ihre Dokumente werden entfernt.')) { const gid = sel.g.id; onDeleteGroup(gid); setRowGroup(p => { const n = { ...p }; Object.keys(n).forEach(k => { if (n[k] === gid) delete n[k]; }); return n; }); setGrpSel(null); } }} style={{ ...sm, color: C.red }}>Gruppe auflösen</button>}
                     {sel.sg && <><button onClick={async () => { await acceptSug(sel.sg); setGrpSel(null); }} style={{ ...sm, background: C.act, color: C.actTxt, border: 'none' }}>Übernehmen</button><button onClick={() => { setGrpDismiss(p => ({ ...p, [sel.sg.sid]: true })); setGrpSel(null); }} style={sm}>Verwerfen</button></>}
                   </div>
                   {sel.g && sel.g.note && <div style={{ fontSize: 12.5, color: C.txt, background: C.surf3, borderRadius: 8, padding: '6px 9px', marginTop: 8, whiteSpace: 'pre-wrap' }}>📝 {sel.g.note}</div>}
@@ -896,7 +910,10 @@ export default function SevdeskImport(props) {
                 <select value={grpDlg.category} onChange={e => setGrpDlg(x => ({ ...x, category: e.target.value }))} style={{ ...SS, textAlign: 'left', flex: 1 }}><option value="">Kategorie …</option>{CATS.map(c => <option key={c} value={c}>{c}</option>)}</select>
               </div>
               <textarea value={grpDlg.terms} onChange={e => setGrpDlg(x => ({ ...x, terms: e.target.value }))} rows={2} placeholder="Erkennung: Wörter im Namen oder Verwendungszweck, mit Komma getrennt" style={{ ...SS, textAlign: 'left', resize: 'vertical' }} />
-              <input value={grpDlg.monthly} onChange={e => setGrpDlg(x => ({ ...x, monthly: e.target.value }))} inputMode="decimal" placeholder="Erwarteter Betrag € / Monat (optional – bei Abweichung gibt es ein To-do)" style={{ ...SS, textAlign: 'left' }} />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <select value={grpDlg.art || 'abo'} onChange={e => setGrpDlg(x => ({ ...x, art: e.target.value }))} style={{ ...SS, textAlign: 'left', flex: 1 }}><option value="abo">Abo / Vertrag (laufend)</option><option value="rate">Ratenzahlung (ein Beleg, endet)</option><option value="kunde">Kunde (wiederkehrende Rechnung)</option><option value="sonst">Sonstiges</option></select>
+                <input value={grpDlg.monthly} onChange={e => setGrpDlg(x => ({ ...x, monthly: e.target.value }))} inputMode="decimal" placeholder="Erwartet € / Monat (optional)" style={{ ...SS, textAlign: 'left', flex: 1 }} />
+              </div>
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, cursor: 'pointer', lineHeight: 1.4 }}><input type="checkbox" checked={grpDlg.noEinzel} onChange={e => setGrpDlg(x => ({ ...x, noEinzel: e.target.checked }))} /> Kein Einzelbeleg nötig – Gruppen-PDF genügt</label>
               <label style={{ display: 'block', border: '1.5px dashed ' + C.bdrM, borderRadius: 12, padding: '12px', textAlign: 'center', cursor: 'pointer', fontSize: 13, color: grpDlg.files.length ? C.txt : C.sub, fontWeight: grpDlg.files.length ? 700 : 500 }}>{grpDlg.files.length ? grpDlg.files.length + ' Datei(en): ' + grpDlg.files.map(f => f.name).join(', ').slice(0, 80) : 'PDFs hochladen (Vertrag, Abschlagsplan, Abrechnung – mehrere möglich)'}<input type="file" multiple accept=".pdf,image/*,.txt" style={{ display: 'none' }} onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ''; setGrpDlg(x => ({ ...x, files: [...x.files, ...fs] })); }} /></label>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -946,7 +963,7 @@ export default function SevdeskImport(props) {
         <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <span style={{ width: 44, height: 44, borderRadius: '50%', background: C.txt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.swap} sz={20} col={C.bg} /></span>
           <div style={{ flex: 1, minWidth: 240, fontSize: 13.5, lineHeight: 1.6, color: C.txt }}>
-            <b>Schritt 1: Alles hochladen.</b> Starte mit den <b>Kontoauszügen aller Monate</b> – danach wirst du gefragt, <b>welches Jahr</b> importiert werden soll; nur dieses Jahr wird geladen. Dann kannst du CSV, PDFs/ZIPs, DATEV und weitere Unterlagen als Hilfe dazulegen, so viele du willst. <b>Es wird nichts angezeigt und nichts gespeichert</b>, bis du auf „Abgleich starten" klickst. Im nächsten Schritt siehst du alles auf einen Blick: was passt, was fehlt, Hinweise der KI. Gebucht wird erst ganz am Ende.
+            <b>Schritt 1: Kontoauszüge.</b> Lade die Auszüge <b>aller Konten und Unterkonten</b> für alle Monate hoch – danach wirst du gefragt, <b>welches Jahr</b> importiert werden soll. Der Kontoauszug ist die Hauptquelle: jeder Umsatz wird eine Buchung, und die Dateien werden für den Steuerberater abgelegt. In Schritt 2 kommen Belege und Rechnungen aus sevDesk dazu. <b>Es wird nichts gespeichert</b>, bis du am Ende auf „Verbuchen" klickst. Im nächsten Schritt siehst du alles auf einen Blick: was passt, was fehlt, Hinweise der KI. Gebucht wird erst ganz am Ende.
           </div>
         </div>
       </div>
@@ -962,8 +979,8 @@ export default function SevdeskImport(props) {
           <button onClick={() => setYearAsk(true)} style={{ background: 'none', border: 'none', color: C.pri, cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700 }}>Jahr ändern</button>
         </div>)}
       <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.4) }}>
-        <div style={{ fontSize: 16, fontWeight: 800 }}>1 · Kontoauszüge aller Monate</div>
-        <div style={{ fontSize: 12.5, color: C.sub, margin: '3px 0 12px', lineHeight: 1.55 }}>Der Kontoauszug ist die Hauptquelle: <b>jeder Umsatz wird eine Buchung</b>. Lade alle Monate auf einmal hoch (PDF, Foto oder CSV). Die CSV-Dateien und Belege unten sind nur Hilfe und ergänzen Name, MwSt, Kategorie und Beleg.</div>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>Kontoauszüge aller Konten</div>
+        <div style={{ fontSize: 12.5, color: C.sub, margin: '3px 0 12px', lineHeight: 1.55 }}><b>Jeder Umsatz wird eine Buchung.</b> Lade alle Monate und alle Unterkonten auf einmal hoch (PDF, Foto oder CSV). Die Auszüge werden beim Verbuchen für den Steuerberater abgelegt.</div>
         {slotMulti('Kontoauszüge hochladen', 'Alle Monate auf einmal – PDF, Foto oder CSV', '.csv,.txt,.pdf,image/*,text/csv', [], addBank, () => setBank([]))}
         {bank.some(b => b.kind === 'datei' && b.rows) && aiBankRows && <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}><button onClick={() => rereadBank()} disabled={!!rereading} style={{ ...btnS, padding: '7px 14px', fontSize: 12.5 }}>⟳ Alle Kontoauszüge neu lesen</button>{rereading && <span style={{ fontSize: 12.5, color: C.sub }}>Liest … {rereading.done} / {rereading.total}</span>}<span style={{ fontSize: 12, color: C.mut }}>Fehlen Umsätze? Die KI liest dann jede Datei komplett neu (auch lange Auszüge mit mehreren Konten). Deine Entscheidungen im Abgleich bleiben erhalten.</span></div>}
         {bank.length > 0 && (
@@ -977,9 +994,22 @@ export default function SevdeskImport(props) {
               </div>))}
           </div>)}
       </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+        <button onClick={() => setStep(2)} disabled={!yearChosen && bank.length > 0} style={{ ...btnP, opacity: (!yearChosen && bank.length > 0) ? 0.55 : 1 }}>Weiter: Belege & Rechnungen ›</button>
+        <span style={{ fontSize: 12.5, color: C.sub }}>{!bank.length ? 'Ohne Kontoauszug kannst du auch nur mit sevDesk-Dateien weitermachen.' : !yearChosen ? 'Bitte zuerst das Jahr wählen.' : bank.length + ' Datei' + (bank.length === 1 ? '' : 'en') + ' bereit.'}</span>
+      </div>
+    </>)}
+
+    {step === 2 && (<>
       <div style={{ ...card, marginBottom: 14 }}>
-        <div style={{ fontSize: 16, fontWeight: 800 }}>2 · Hilfsdateien <span style={{ fontSize: 12.5, fontWeight: 600, color: C.sub }}>(optional)</span></div>
-        <div style={{ fontSize: 12.5, color: C.sub, margin: '3px 0 12px', lineHeight: 1.55 }}>CSV aus sevDesk, PDFs, DATEV: Buqo ordnet die Belege und Rechnungen den Umsätzen automatisch zu und übernimmt Namen, MwSt-Satz und Rechnungsnummer.</div>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <span style={{ width: 44, height: 44, borderRadius: '50%', background: C.txt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Ic p={P.doc} sz={20} col={C.bg} /></span>
+          <div style={{ flex: 1, minWidth: 240, fontSize: 13.5, lineHeight: 1.6, color: C.txt }}><b>Schritt 2: Belege & Rechnungen aus sevDesk.</b> Lade die ZIPs mit den PDFs hoch – <b>Belege</b> (was du bezahlt hast) und <b>Rechnungen</b> (was du Kunden gestellt hast) werden getrennt abgelegt und den Umsätzen aus dem Kontoauszug automatisch zugeordnet. Die CSV-Dateien sind nur Hilfe für Name, MwSt und Rechnungsnummer. Danach erkennt die KI wiederkehrende Abbuchungen und Raten als Gruppen.</div>
+        </div>
+      </div>
+      <div style={{ ...card, marginBottom: 14, border: '1px solid ' + hexA(C.pri, 0.4) }}>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>Belege & Rechnungen <span style={{ fontSize: 12.5, fontWeight: 600, color: C.sub }}>(PDF-ZIPs und CSV aus sevDesk)</span></div>
+        <div style={{ fontSize: 12.5, color: C.sub, margin: '3px 0 12px', lineHeight: 1.55 }}>Buqo ordnet die PDFs den Umsätzen über Betrag, Datum und Name zu. Belege landen bei den Ausgaben, Rechnungen bei den Einnahmen und im Rechnungsbereich.</div>
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12 }}>
         {slot('Belege · CSV oder DATEV', 'sevDesk → Belege → Exportieren → CSV', '.csv,.txt,text/csv', belege, f => readCsv(f, 'aus', setBelege), belege && (belege.parsed.rows.length + ' Zeilen · ' + FORMAT_LABEL[belege.format]))}
         {slotMulti('Belege · PDFs (ZIP oder einzelne Dateien)', 'sevDesk → Belege → Exportieren → ZIP, mehrere möglich', '.zip,application/zip,.pdf,image/*', zipB ? [zipB.fileName + ' (' + zipB.entries.length + ' Dateien)'] : [], fs => readDocs(fs, setZipB, zipB), () => setZipB(null))}
@@ -990,20 +1020,24 @@ export default function SevdeskImport(props) {
       </div>
       {slotMulti('Weitere Unterlagen und Infos für die KI', 'z. B. EÜR, BWA, Steuerbescheid, Verträge, Notizen – landen in den Steuerunterlagen, die KI nutzt sie als Steuerberater', '.pdf,.csv,.txt,image/*', extra.map(x => x.name), fs => setExtra(x => [...x, ...fs.map(f => ({ file: f, name: f.name }))]), () => setExtra([]))}
       <div style={{ ...card, margin: '14px 0' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, cursor: 'pointer' }}><input type="checkbox" checked={kiAll} onChange={e => setKiAll(e.target.checked)} /> <span><b>KI liest alle PDFs</b> vor dem Abgleich (genauer, verbraucht KI-Guthaben). Ohne Haken liest sie nur auffällige Zeilen (mögliche Doppelungen, Notizen mit „prüfen").</span></label>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 8 }}>Was die KI automatisch macht</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, cursor: 'pointer', marginBottom: 6 }}><input type="checkbox" checked={autoBeleg} onChange={e => setAutoBeleg(e.target.checked)} /> <span><b>Belege den Umsätzen zuordnen</b> – PDFs aus den ZIPs, die über die CSV nicht zugeordnet werden konnten, liest die KI und hängt sie an die passende Abbuchung (verbraucht KI-Guthaben).</span></label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, cursor: 'pointer', marginBottom: 6 }}><input type="checkbox" checked={autoGroups} onChange={e => setAutoGroups(e.target.checked)} /> <span><b>Gruppen anlegen</b> – wiederkehrende Abbuchungen und Einnahmen (Strom, Versicherung, Raten, Airbnb, Kunden …) werden als Gruppen angelegt, mit Hinweis ob sie noch laufen oder beendet sind. Du kannst jede Gruppe später ändern oder auflösen.</span></label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, cursor: 'pointer' }}><input type="checkbox" checked={kiAll} onChange={e => setKiAll(e.target.checked)} /> <span><b>Alle zugeordneten PDFs lesen</b> und Name, MwSt und Kategorie daraus übernehmen (genauer, verbraucht KI-Guthaben). Ohne Haken liest sie nur auffällige Zeilen.</span></label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 14 }}>
-          <button onClick={analyze} disabled={analysing || !yearChosen || (!belegeGo.length && !rechGo.length && !bank.length)} style={{ ...btnP, opacity: (analysing || !yearChosen || (!belegeGo.length && !rechGo.length && !bank.length)) ? 0.55 : 1 }}><Ic p={P.spark} sz={16} col={C.actTxt} /> {analysing ? 'Läuft …' : 'Weiter: Abgleich starten'}</button>
+          <button onClick={analyze} disabled={analysing || !yearChosen || (!belegeGo.length && !rechGo.length && !bank.length)} style={{ ...btnP, opacity: (analysing || !yearChosen || (!belegeGo.length && !rechGo.length && !bank.length)) ? 0.55 : 1 }}><Ic p={P.spark} sz={16} col={C.actTxt} /> {analysing ? 'Läuft …' : 'Abgleich starten ›'}</button>
+          <button onClick={() => setStep(1)} style={btnS}>‹ Kontoauszüge</button>
           <span style={{ fontSize: 12.5, color: C.sub }}>{anaProg || (!(belege || rech || bank.length) ? 'Lade zuerst die Kontoauszüge (oder eine CSV).' : !yearChosen ? 'Bitte zuerst das Jahr wählen.' : '')}</span>
         </div>
         {analysing && <Bar done={anaDone} total={anaTotal} label={anaProg || 'Abgleich läuft …'} />}
       </div>
     </>)}
 
-    {step === 2 && (<>
+    {step === 3 && (<>
       <div style={{ ...card, marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 17, fontWeight: 800, flex: 1, minWidth: 200 }}>Abgleich · {year === 'alle' ? 'Alle Jahre' : year}</div>
-          <button onClick={() => setStep(1)} style={btnS}>‹ Zurück zum Hochladen</button>
+          <button onClick={() => setStep(2)} style={btnS}>‹ Zurück zu den Dateien</button>
         </div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 12 }}>
           <Stat l="Ausgaben" v={stats.ausg} /><Stat l="Einnahmen" v={stats.einn} /><Stat l="✅ Passt" v={stats.passt} c={C.grn} /><Stat l="⚠ Hinweise" v={stats.hinweis} c={stats.hinweis ? C.amb : C.sub} /><Stat l="❌ Fehlt" v={stats.fehlt} c={stats.fehlt ? C.red : C.sub} />{dMatch && <Stat l="Nur in DATEV" v={dMatch.onlyDatev.length} c={dMatch.onlyDatev.length ? C.amb : C.sub} />}
@@ -1053,13 +1087,7 @@ export default function SevdeskImport(props) {
         <div style={{ fontSize: 12, color: C.mut, marginTop: 10, lineHeight: 1.5 }}>Jede Rechnung und jeder Beleg landet auf dem Konto, das in der Tabelle steht. Einmalige Gäste werden nicht als Kunde angelegt (ihre Rechnung bleibt mit Namen erhalten) – nur wer mindestens so viele Rechnungen hat, wie oben gewählt. Lass die KI unten alles vorsortieren und korrigiere nur, was gelb markiert ist.</div>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
-        <button onClick={() => setStep(1)} style={btnS}>‹ Zurück</button>
-        <button onClick={() => setStep(3)} style={btnP}>Weiter: Wiederkehrendes prüfen ›</button>
-      </div>
-    </>)}
 
-    {step === 3 && (<>
       {(recurB.length + recurR.length > 0) ? (() => {
         const M = (f) => ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'][f.m] + ' ' + f.y;
         const sec = (title, groups, go, k, note) => groups.filter(g => g.idxs.some(i => goIdx(go).has(i))).length > 0 && (
@@ -1082,7 +1110,7 @@ export default function SevdeskImport(props) {
       })() : <div style={{ ...card, marginBottom: 14, fontSize: 13.5, color: C.sub }}>Keine wiederkehrenden Buchungen (Leasing, Raten, Abos) erkannt.</div>}
 
       <div style={{ ...card, marginBottom: 14 }}>
-        <div style={{ fontSize: 11.5, fontWeight: 800, color: C.pri, letterSpacing: '0.05em', marginBottom: 2 }}>SCHRITT 3 VON 3</div>
+        <div style={{ fontSize: 11.5, fontWeight: 800, color: C.pri, letterSpacing: '0.05em', marginBottom: 2 }}>ZUM SCHLUSS</div>
         <div style={{ fontSize: 15, fontWeight: 700 }}>{belegeGo.length} Belege, {rechGo.length} Rechnungen{xGo.length ? ' und ' + xGo.length + ' Buchungen aus dem Kontoauszug' : ''}{year !== 'alle' ? ' aus ' + year : ''} verbuchen</div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', margin: '10px 0' }}>
           <Stat l="✅ Passt" v={stats.passt} c={C.grn} /><Stat l="⚠ Hinweise" v={stats.hinweis} c={stats.hinweis ? C.amb : C.sub} /><Stat l="❌ Fehlt" v={stats.fehlt} c={stats.fehlt ? C.red : C.sub} /><Stat l="To-do" v={Object.keys(later).filter(k => later[k]).length + Object.values(datevAct).filter(v => v === 'later').length} />
@@ -1090,7 +1118,7 @@ export default function SevdeskImport(props) {
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.txt, cursor: 'pointer', marginBottom: 6 }}><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> Alles sofort als bezahlt buchen (sonst bleiben Posten offen, die nicht im Kontoauszug gefunden wurden)</label>
         <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>{progress || 'Beim Verbuchen landen Buchungen in den Konten, PDFs im Beleg-Speicher, Kunden und Rechnungen im Rechnungsbereich, Kontoauszüge und weitere Unterlagen bei den Steuerunterlagen.'}</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
-          <button onClick={() => setStep(2)} style={btnS}>‹ Zurück zum Abgleich</button>
+          <button onClick={() => setStep(2)} style={btnS}>‹ Zurück zu den Dateien</button>
           <button onClick={() => setConfirmRun(true)} disabled={busy || (!belegeGo.length && !rechGo.length && !xGo.length)} style={{ ...btnP, opacity: (busy || (!belegeGo.length && !rechGo.length && !xGo.length)) ? 0.55 : 1 }}><Ic p={P.check} sz={16} col={C.actTxt} /> {busy ? 'Verbucht …' : 'Alles richtig verbuchen'}</button>
         </div>
         {busy && (() => { const [d, t] = progPct(progress); return <Bar done={d} total={t} label={progress || 'Verbucht …'} />; })()}
