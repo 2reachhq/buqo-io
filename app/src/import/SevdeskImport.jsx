@@ -712,7 +712,7 @@ export default function SevdeskImport(props) {
       if (artTab === 'belege' && r.kind === 'ein') return false; if (artTab === 'rechnungen' && r.kind !== 'ein') return false;
       if (filt === 'pdf' && !hasP) return false; if (filt === 'nopdf' && (hasP || isNoBeleg(k, r))) return false; if (filt === 'todo' && !later[key]) return false;
       if (['passt', 'hinweis', 'fehlt'].includes(filt) && statusOf(k, r).cls !== filt) return false;
-      if (q && !normN(eff(k, r).name + ' ' + (r.nummer || '') + ' ' + r.brutto + ' ' + (notes[key] || '') + ' ' + (kiNotes[key] || '') + ' ' + ((grpOf(k, r) || {}).name || '')).includes(q)) return false; return true;
+      if (q) { const bt = r.bankRow || (bankMatch && bankMatch.get ? bankMatch.get(key) : null); if (!normN(eff(k, r).name + ' ' + (r.nummer || '') + ' ' + r.brutto + ' ' + (notes[key] || '') + ' ' + (kiNotes[key] || '') + ' ' + ((grpOf(k, r) || {}).name || '') + ' ' + (r.beschreibung || '') + ' ' + (bt ? bt.name + ' ' + (bt.note || '') : '')).includes(q)) return false; } return true;
     }).sort(sortBy === 'name' ? (a, b) => String(eff(a.k, a.r).name).localeCompare(String(eff(b.k, b.r).name), 'de', { sensitivity: 'base' }) || String(b.r.datum).localeCompare(String(a.r.datum)) : sortBy === 'betrag' ? (a, b) => { const sv = (x) => (x.r.kind === 'ein' ? 1 : -1) * (x.r.storno ? -1 : 1) * x.r.brutto; return sv(b) - sv(a); } : (a, b) => String(b.r.datum).localeCompare(String(a.r.datum)));
     const groups = new Map();
     list.forEach(x => {
@@ -767,7 +767,7 @@ export default function SevdeskImport(props) {
         </div>);
       })()}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8, flexShrink: 0 }}>
-        <input value={listQ} onChange={e => setListQ(e.target.value)} placeholder="Name, Betrag, Notiz, Gruppe suchen …" style={{ ...ctlS, flex: 1, minWidth: 200, maxWidth: 420, width: 'auto' }} />
+        <input value={listQ} onChange={e => setListQ(e.target.value)} placeholder="Name, Verwendungszweck, Betrag, Notiz, Gruppe …" style={{ ...ctlS, flex: 1, minWidth: 200, maxWidth: 420, width: 'auto' }} />
         {drop('Ansicht', artTab, setArtTab, [['alle', 'Alle · ' + (nRech + nBel)], ['belege', 'Ausgaben · ' + nBel], ['rechnungen', 'Einnahmen · ' + nRech]])}
         {drop('Gruppieren', groupBy, setGroupBy, [['monat', 'Monat'], ['name', 'Name'], ['konto', 'Konto'], ['gruppe', 'Gruppe'], ['keine', 'Keine']])}
         {drop('Sortieren', sortBy, setSortBy, [['datum', 'Datum'], ['name', 'Name'], ['betrag', 'Betrag (+ zuerst)']])}
@@ -818,6 +818,7 @@ export default function SevdeskImport(props) {
                   const ctl = { ...SS, height: 32, padding: '0 8px', fontSize: 12.5, width: '100%', boxSizing: 'border-box', textAlign: 'left', background: C.surf2, border: '1px solid ' + C.bdr, borderRadius: 8 };
                   const icoBtn = (on, onCol) => ({ width: 32, height: 32, borderRadius: '50%', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid ' + (on ? onCol : C.bdr), background: on ? onCol : C.surf2 });
                   const tdb = { ...td, borderBottom: showNote ? 'none' : td.borderBottom, height: 48, padding: '0 6px' };
+                  const bt = r.bankRow || (bankMatch && bankMatch.get ? bankMatch.get(key) : null); const bankTxt = bt ? [bt.name, bt.note].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · ') : '';
                   const shown = st.chips.slice(0, 1); const more = st.chips.length - shown.length; return (<React.Fragment key={key}>
                   <tr style={{ opacity: skipped ? 0.5 : 1, background: sel[key] ? hexA(C.pri, 0.08) : 'transparent' }}>
                     <td style={{ ...tdb, borderLeft: '3px solid ' + tint, paddingLeft: 10 }}><input type="checkbox" checked={!!sel[key]} onChange={ev => setSel(x => ({ ...x, [key]: ev.target.checked }))} /></td>
@@ -825,7 +826,7 @@ export default function SevdeskImport(props) {
                       ? <button onClick={() => openPreview(k, r)} title="Beleg ansehen" style={{ ...icoBtn(false), background: hexA(tint, 0.16), border: 'none' }}><Ic p={P.clip} sz={15} col={tint} /></button>
                       : <label title="Beleg hochladen" style={{ ...icoBtn(false), background: hexA(C.red, 0.12), border: 'none' }}><Ic p={P.upload} sz={14} col={C.red} /><input type="file" accept=".pdf,image/*" style={{ display: 'none' }} onChange={ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (f) { const src = { name: f.name, data: async () => new Uint8Array(await f.arrayBuffer()) }; setUpPdf(p => ({ ...p, [key]: src })); if (aiReadDoc) runOcr([[k, r, null, src]]); } }} /></label>}</td>
                     <td style={{ ...tdb, ...NUM, whiteSpace: 'nowrap', fontSize: 12.5 }}>{r.datum.split('-').reverse().join('.')}</td>
-                    <td style={tdb} title={r.nummer ? 'Nr. ' + r.nummer : undefined}><input value={e.name} onChange={ev => setO({ name: ev.target.value })} style={{ ...ctl, fontWeight: 600, background: 'transparent', border: '1px solid transparent', textDecoration: skipped ? 'line-through' : 'none', textOverflow: 'ellipsis' }} /></td>
+                    <td style={tdb} title={[r.nummer ? 'Nr. ' + r.nummer : '', bankTxt ? 'Kontoauszug: ' + bankTxt : ''].filter(Boolean).join('\n') || undefined}><input value={e.name} onChange={ev => setO({ name: ev.target.value })} style={{ ...ctl, height: bankTxt ? 26 : 32, fontWeight: 600, background: 'transparent', border: '1px solid transparent', textDecoration: skipped ? 'line-through' : 'none', textOverflow: 'ellipsis' }} />{bankTxt && <div style={{ fontSize: 11, color: C.mut, padding: '0 8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.3 }}>🏦 {bankTxt}</div>}</td>
                     <td style={tdb}><select value={e.kategorie || ''} onChange={ev => setO({ kategorie: ev.target.value })} style={ctl}>{[...new Set([e.kategorie, ...CATS].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}</select></td>
                     <td style={tdb}><select value={String(e.mwst)} onChange={ev => setO({ mwst: +ev.target.value })} style={ctl}>{[0, 7, 19].map(v => <option key={v} value={v}>{v} %</option>)}{![0, 7, 19].includes(+e.mwst) && <option value={e.mwst}>{e.mwst} %</option>}</select></td>
                     <td style={tdb}><select value={acctOf(k, r)} onChange={ev => changeKonto(k, r, ev.target.value)} style={ctl}>{accounts.map(a => <option key={a.key} value={a.key}>{a.label}</option>)}</select></td>
