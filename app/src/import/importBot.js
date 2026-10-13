@@ -36,7 +36,8 @@ export function matchFilter(u, f) {
   if (f.status && u.cls !== f.status) return false;
   if (f.ohneBeleg === true && u.hasFile) return false;
   if (f.quelle && u.src !== f.quelle) return false;
-  if (f.text && !norm(u.name + ' ' + (u.beschreibung || '') + ' ' + (u.notiz || '')).includes(norm(f.text))) return false;
+  if (f.text && !norm(u.name + ' ' + (u.beschreibung || '') + ' ' + (u.notiz || '') + ' ' + (u.gruppe || '')).includes(norm(f.text))) return false;
+  if (f.gruppe && !norm(u.gruppe || '').includes(norm(f.gruppe))) return false;
   return true;
 }
 
