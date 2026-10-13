@@ -22,7 +22,7 @@ const idbDel = async (k) => { const d = await idbOpen(); return new Promise((res
 const normN = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
 
 export default function SevdeskImport(props) {
-  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows, aiAsk, onRemember, taxFacts, noBelegRules, onNoBelegRule, payGroups, onSaveGroup, onUpdateGroup, onAddGroupDocs } = props;
+  const { ui, accounts, existing, defaultYear, onImport, isMobile, aiClassify, aiReadDoc, aiBankRows, aiAsk, onRemember, taxFacts, noBelegRules, onNoBelegRule, payGroups, onSaveGroup, onUpdateGroup, onAddGroupDocs, onDeleteAllGroups } = props;
   const { C, SC, SS, NUM, fmt, Ic, P, hexA, AI_GRADIENT, MONTHS } = ui;
   const [step, setStep] = useState(1);              // 1 Hochladen · 2 Abgleich · 3 Wiederkehrendes + Verbuchen
   const [belege, setBelege] = useState(null);      // {fileName, parsed, format, mapping, kind}
@@ -66,6 +66,8 @@ export default function SevdeskImport(props) {
   const [rowGroup, setRowGroup] = useState({});      // manuell zugeordnete Abbuchungsgruppen: Zeilen-Schlüssel → Gruppen-ID
   const [grpDismiss, setGrpDismiss] = useState({});  // abgelehnte Gruppen-Vorschläge
   const [sugOpen, setSugOpen] = useState(false);
+  const [grpPop, setGrpPop] = useState(false);        // Gruppen-Übersicht (Pop-up)
+  const [grpQ, setGrpQ] = useState(''); const [grpSel, setGrpSel] = useState(null); const [addQ, setAddQ] = useState(''); const [grpFilter, setGrpFilter] = useState(null); const [resetAsk, setResetAsk] = useState(false);
   const sugCache = React.useRef({ sig: null, list: [] });
   const [rereading, setRereading] = useState(null);   // Kontoauszüge neu lesen: {done,total}
   const [pdfIdx, setPdfIdx] = useState({});            // von der KI gelesene Beleg-PDFs aus den ZIPs: Dateiname → Beleg-Daten
@@ -611,6 +613,17 @@ export default function SevdeskImport(props) {
       setRowGroup(p => { const n = { ...p }; d.keys.forEach(k => { n[k] = id; }); return n; }); setSel({}); setGrpDlg(null);
       setBotMsgs(m => [...m, { role: 'ai', text: '✓ Gruppe „' + d.name + '“ · ' + d.keys.length + (d.keys.length === 1 ? ' Zeile' : ' Zeilen') }]);
     } catch (e) { setErr('Gruppe konnte nicht angelegt werden: ' + (e.message || e)); setGrpDlg(x => (x ? { ...x, busy: false } : x)); } };
+  // Wiederkehrende Gruppen erkennen (Vorschläge, ohne bereits zugeordnete Zeilen und ohne abgelehnte)
+  const getSugList = () => {
+    const sig = dispRows.length + '|' + (payGroups || []).length + '|' + Object.keys(rowGroup).length + '|' + Object.keys(skip).filter(k => skip[k]).length;
+    if (sugCache.current.sig !== sig) {
+      const rowsD = dispRows.filter(({ k, r }) => !skip[k + r.idx]).map(({ k, r }) => { const bm = bankMatch && bankMatch.get ? bankMatch.get(k + r.idx) : null; return { key: k + r.idx, name: r.name, text: [r.beschreibung, bm && bm.name, bm && bm.note].filter(Boolean).join(' '), kind: r.kind, datum: r.datum, brutto: r.brutto, grouped: !!grpOf(k, r) }; });
+      sugCache.current = { sig, list: detectGroups(rowsD.filter(x => !x.grouped), { catOf: (t) => mapCategory(t || '') }) };
+    }
+    return sugCache.current.list.filter(x => !grpDismiss[x.sid]);
+  };
+  // alle erkennbaren Gruppen unabhängig von bestehenden Zuordnungen (um sie nach „Alles rückgängig“ nicht wieder vorzuschlagen)
+  const detectAllSids = () => detectGroups(dispRows.filter(({ k, r }) => !skip[k + r.idx]).map(({ k, r }) => { const bm = bankMatch && bankMatch.get ? bankMatch.get(k + r.idx) : null; return { key: k + r.idx, name: r.name, text: [r.beschreibung, bm && bm.name, bm && bm.note].filter(Boolean).join(' '), kind: r.kind, datum: r.datum, brutto: r.brutto }; }), { catOf: (t) => mapCategory(t || '') }).map(x => x.sid);
   const acceptSug = async (sg) => {
     if (!onSaveGroup) return; const first = dispRows.find(x => x.k + x.r.idx === sg.keys[0]);
     const id = await onSaveGroup({ name: sg.name, account: first ? acctOf(first.k, first.r) : 'unter', category: sg.category, terms: sg.terms.join(', '), monthly: sg.monthly, yearly: '', note: '', noEinzel: true }, []);
@@ -675,6 +688,7 @@ export default function SevdeskImport(props) {
       const key = k + r.idx; const hasP = !!(r.file || upPdf[key]);
       if (filt === 'ignoriert') return !!skip[key];
       if (filt !== 'doppelt' && skip[key]) return false;
+      if (grpFilter && (grpOf(k, r) || {}).id !== grpFilter) return false;
       if (artTab === 'belege' && r.kind === 'ein') return false; if (artTab === 'rechnungen' && r.kind !== 'ein') return false;
       if (filt === 'pdf' && !hasP) return false; if (filt === 'nopdf' && (hasP || isNoBeleg(k, r))) return false; if (filt === 'todo' && !later[key]) return false;
       if (['passt', 'hinweis', 'fehlt'].includes(filt) && statusOf(k, r).cls !== filt) return false;
@@ -713,6 +727,7 @@ export default function SevdeskImport(props) {
           {pill('📎 Beleg ok', nPdf, C.grn, filt === 'pdf', () => setF('pdf'))}{pill('PDF fehlt', act.length - nPdf, act.length - nPdf ? C.red : C.sub, filt === 'nopdf', () => setF('nopdf'))}{pill('Ausgaben', nBel, undefined, artTab === 'belege' && filt === 'alle', () => { setFilt('alle'); setArtTab('belege'); })}{pill('Einnahmen', nRech, undefined, artTab === 'rechnungen' && filt === 'alle', () => { setFilt('alle'); setArtTab('rechnungen'); })}
           {pill('To-do', nTodo, undefined, filt === 'todo', () => setF('todo'))}{pill('🚫 Ignoriert', nIgn, undefined, filt === 'ignoriert', () => setF('ignoriert'))}{pill('Doppelt / schon da', dupList.length, dupList.length ? C.amb : C.sub, filt === 'doppelt', () => setF('doppelt'))}
         </div>
+        {onSaveGroup && <button onClick={() => { setGrpPop(true); setResetAsk(false); }} title="Alle Gruppen ansehen, suchen, Buchungen hinzufügen oder herausnehmen – oder die Gruppierung rückgängig machen" style={{ ...sm, whiteSpace: 'nowrap' }}>↻ Gruppen{(payGroups || []).length ? ' · ' + payGroups.length : ''}</button>}
         {aiBankRows && bank.some(b => b.kind === 'datei') && <button onClick={() => rereadBank()} disabled={!!rereading} title="Alle Kontoauszüge (PDF/Foto) von der KI komplett neu lesen – deine Entscheidungen bleiben erhalten" style={{ ...sm, whiteSpace: 'nowrap' }}>{rereading ? '⟳ ' + rereading.done + '/' + rereading.total : '⟳ Auszüge neu lesen'}</button>}
         {aiReadDoc && (zipB || zipR) && <button onClick={assignBelege} disabled={!!belegBusy} title="Belege und Rechnungen aus den ZIPs von der KI lesen und über Betrag, Datum und Name den Buchungen ohne PDF zuordnen" style={{ ...sm, whiteSpace: 'nowrap' }}>{belegBusy ? '📎 ' + belegBusy.done + '/' + belegBusy.total : '📎 Belege per KI zuordnen'}</button>}
         {aiAsk && <button onClick={() => setBotOpen(o => !o)} title="KI-Helfer öffnen/schließen" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: botOpen ? C.txt : AI_GRADIENT, color: botOpen ? C.bg : '#fff', border: 'none', borderRadius: 999, padding: '7px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}><Ic p={P.spark} sz={14} col={botOpen ? C.bg : '#fff'} /> KI-Helfer</button>}
@@ -720,12 +735,7 @@ export default function SevdeskImport(props) {
       </div>
       {belegMsg && <div style={{ fontSize: 12.5, color: C.txt, background: hexA(C.grn, 0.1), border: '1px solid ' + hexA(C.grn, 0.3), borderRadius: 10, padding: '6px 12px', marginBottom: 8, flexShrink: 0 }}>📎 {belegMsg} <button onClick={() => setBelegMsg('')} style={{ background: 'none', border: 'none', color: C.mut, cursor: 'pointer' }}>×</button></div>}
       {(() => {
-        const sig = dispRows.length + '|' + (payGroups || []).length + '|' + Object.keys(rowGroup).length + '|' + Object.keys(skip).filter(k => skip[k]).length;
-        if (sugCache.current.sig !== sig) {
-          const rowsD = dispRows.filter(({ k, r }) => !skip[k + r.idx]).map(({ k, r }) => { const bm = bankMatch && bankMatch.get ? bankMatch.get(k + r.idx) : null; return { key: k + r.idx, name: r.name, text: [r.beschreibung, bm && bm.name, bm && bm.note].filter(Boolean).join(' '), kind: r.kind, datum: r.datum, brutto: r.brutto, grouped: !!grpOf(k, r) }; });
-          sugCache.current = { sig, list: detectGroups(rowsD.filter(x => !x.grouped), { catOf: (t) => mapCategory(t || '') }) };
-        }
-        const sug = sugCache.current.list.filter(x => !grpDismiss[x.sid]); if (!sug.length || !onSaveGroup) return null;
+        const sug = getSugList(); if (!sug.length || !onSaveGroup) return null;
         return (<div style={{ background: hexA(C.pri, 0.08), border: '1px solid ' + hexA(C.pri, 0.3), borderRadius: 12, padding: '8px 12px', marginBottom: 8, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 13, fontWeight: 700 }}>↻ Die KI hat {sug.length} wiederkehrende Gruppe{sug.length === 1 ? '' : 'n'} erkannt</span>
@@ -742,6 +752,7 @@ export default function SevdeskImport(props) {
         {drop('Gruppieren', groupBy, setGroupBy, [['monat', 'Monat'], ['name', 'Name'], ['konto', 'Konto'], ['gruppe', 'Gruppe'], ['keine', 'Keine']])}
         {drop('Sortieren', sortBy, setSortBy, [['datum', 'Datum'], ['name', 'Name'], ['betrag', 'Betrag']])}
         <button onClick={() => setSel(x => { const n = { ...x }; list.forEach(({ k, r }) => { n[k + r.idx] = !allSel; }); return n; })} style={{ ...sm, height: 30, padding: '0 11px' }}>{allSel ? 'Auswahl aufheben' : 'Alle ' + list.length + ' auswählen'}</button>
+        {grpFilter && <button onClick={() => setGrpFilter(null)} style={{ ...sm, height: 30, padding: '0 11px', background: hexA(C.pri, 0.14), border: '1px solid ' + hexA(C.pri, 0.4) }}>↻ {((payGroups || []).find(g => g.id === grpFilter) || {}).name || 'Gruppe'} ✕</button>}
         <span style={{ fontSize: 12, color: C.mut }}>{list.length} Zeilen</span>
       </div>
       {selKeys.length > 0 && (
@@ -815,6 +826,64 @@ export default function SevdeskImport(props) {
             </tbody>
           </table>
         </div>)}
+      {grpPop && (() => {
+        const q = normN(grpQ);
+        const savedL = (payGroups || []).map(g => ({ id: g.id, name: g.name, g, rows: dispRows.filter(x => (grpOf(x.k, x.r) || {}).id === g.id) }));
+        const sugL = getSugList().map(sg => ({ id: 'sug:' + sg.sid, name: sg.name, sg, rows: sg.keys.map(key => dispRows.find(x => x.k + x.r.idx === key)).filter(Boolean) }));
+        const match = (x) => !q || normN(x.name + ' ' + (x.g ? x.g.terms : x.sg.terms.join(' '))).includes(q);
+        const sel = [...savedL, ...sugL].find(x => x.id === grpSel) || null;
+        const sumR = (rows) => rows.reduce((a, { r }) => a + (r.kind === 'ein' ? 1 : -1) * r.brutto, 0);
+        const rowLine = ({ k, r }, extra) => { const e = eff(k, r); const key = k + r.idx; return (<div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 4px', borderTop: '1px solid ' + C.sep, fontSize: 13 }}><span style={{ ...NUM, width: 82, color: C.sub, flexShrink: 0 }}>{r.datum.split('-').reverse().join('.')}</span><span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>{e.name}</span><span style={{ ...NUM, fontWeight: 700, color: r.kind === 'ein' ? C.grn : C.txt, flexShrink: 0 }}>{r.kind === 'ein' ? '+' : '−'}{fmt(r.brutto)}</span>{extra}</div>); };
+        const inSel = sel && sel.g ? new Set(sel.rows.map(x => x.k + x.r.idx)) : new Set();
+        const cands = sel && sel.g ? dispRows.filter(x => !inSel.has(x.k + x.r.idx) && !skip[x.k + x.r.idx] && (!addQ.trim() || normN(eff(x.k, x.r).name + ' ' + x.r.beschreibung).includes(normN(addQ)))).sort((a, b) => String(b.r.datum).localeCompare(String(a.r.datum))).slice(0, 40) : [];
+        const resetAssign = () => { const ks = dispRows.filter(x => grpOf(x.k, x.r)).map(x => x.k + x.r.idx); setRowGroup(p => { const n = { ...p }; ks.forEach(k => { n[k] = 'none'; }); return n; }); setGrpFilter(null); setResetAsk(false); setGrpSel(null); setBotMsgs(m => [...m, { role: 'ai', text: '✓ Zuordnungen zurückgesetzt · ' + ks.length + ' Zeilen' }]); };
+        const deleteAll = async () => { const sids = detectAllSids(); if (onDeleteAllGroups) await onDeleteAllGroups(); setRowGroup({}); setGrpFilter(null); setGrpSel(null); setGrpDismiss(p => { const n = { ...p }; sids.forEach(x => { n[x] = true; }); return n; }); setResetAsk(false); setBotMsgs(m => [...m, { role: 'ai', text: '✓ Alle Gruppen gelöscht' }]); };
+        return (
+        <div onClick={() => setGrpPop(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 176, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 18, width: 'min(1040px, 100%)', height: 'min(86vh, 800px)', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid ' + C.bdr }}>
+              <b style={{ fontSize: 16, flex: 1 }}>Abbuchungsgruppen</b>
+              <button onClick={() => setResetAsk(a => !a)} style={{ ...sm, color: C.red }}>Gruppierung rückgängig …</button>
+              <button onClick={() => setGrpPop(false)} style={{ ...sm, background: C.txt, color: C.bg, border: 'none' }}>Schließen</button>
+            </div>
+            {resetAsk && <div style={{ padding: '10px 16px', background: hexA(C.red, 0.07), borderBottom: '1px solid ' + C.bdr, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 13 }}>
+              <span style={{ flex: 1, minWidth: 220 }}>Was soll rückgängig gemacht werden?</span>
+              <button onClick={resetAssign} style={sm} title="Alle Buchungen im Abgleich aus ihren Gruppen nehmen; die Gruppen selbst bleiben gespeichert">Nur Zuordnungen im Abgleich</button>
+              <button onClick={deleteAll} style={{ ...sm, background: C.red, color: '#fff', border: 'none' }} title="Alle Gruppen samt Dokumenten löschen und die Gruppen-Markierung von allen Buchungen entfernen">Alles: Gruppen löschen</button>
+              <button onClick={() => setResetAsk(false)} style={{ ...sm, background: 'none', border: 'none', color: C.mut }}>Abbrechen</button>
+            </div>}
+            <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+              <div style={{ width: 320, flexShrink: 0, borderRight: '1px solid ' + C.bdr, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <div style={{ padding: 10 }}><input value={grpQ} onChange={e => setGrpQ(e.target.value)} placeholder="Gruppe suchen …" style={{ ...ctlS, width: '100%', boxSizing: 'border-box' }} /></div>
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px 10px' }}>
+                  {savedL.filter(match).length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: C.mut, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '4px 2px' }}>Meine Gruppen · {savedL.filter(match).length}</div>}
+                  {savedL.filter(match).map(x => <button key={x.id} onClick={() => { setGrpSel(x.id); setAddQ(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', background: grpSel === x.id ? hexA(C.pri, 0.14) : C.surf2, border: '1px solid ' + (grpSel === x.id ? C.pri : C.bdr), borderRadius: 10, padding: '8px 10px', marginBottom: 6, cursor: 'pointer', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 13.5, fontWeight: 700 }}>↻ {x.name}</div><div style={{ fontSize: 11.5, color: C.sub }}>{x.rows.length} Buchungen · {fmt(Math.abs(sumR(x.rows)))}{(x.g.docs || []).length ? ' · 📎 ' + x.g.docs.length : ''}</div></button>)}
+                  {sugL.filter(match).length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: C.mut, textTransform: 'uppercase', letterSpacing: '0.04em', margin: '10px 2px 4px' }}>Vorschläge der KI · {sugL.filter(match).length}</div>}
+                  {sugL.filter(match).map(x => <button key={x.id} onClick={() => setGrpSel(x.id)} style={{ display: 'block', width: '100%', textAlign: 'left', background: grpSel === x.id ? hexA(C.amb, 0.16) : C.surf2, border: '1px dashed ' + (grpSel === x.id ? C.amb : C.bdr), borderRadius: 10, padding: '8px 10px', marginBottom: 6, cursor: 'pointer', fontFamily: 'inherit', color: C.txt }}><div style={{ fontSize: 13.5, fontWeight: 700 }}>{x.name}</div><div style={{ fontSize: 11.5, color: C.sub }}>{x.rows.length} Buchungen · Vorschlag</div></button>)}
+                  {!savedL.filter(match).length && !sugL.filter(match).length && <div style={{ fontSize: 13, color: C.mut, padding: 8 }}>Keine Gruppe gefunden. Wähle Buchungen in der Liste aus und klicke „↻ Gruppe erstellen“.</div>}
+                </div>
+              </div>
+              <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '12px 16px' }}>
+                {!sel && <div style={{ color: C.mut, fontSize: 14, padding: '30px 0', textAlign: 'center' }}>Wähle links eine Gruppe, um alle Buchungen darin zu sehen.</div>}
+                {sel && (<>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 180 }}><div style={{ fontSize: 17, fontWeight: 800 }}>{sel.g ? '↻ ' : ''}{sel.name}</div><div style={{ fontSize: 12, color: C.sub }}>{sel.rows.length} Buchungen · Summe {fmt(Math.abs(sumR(sel.rows)))}{sel.g ? ' · Erkennung: ' + (sel.g.terms || '–') : ' · Erkennung: ' + sel.sg.terms.join(', ')}{sel.g && sel.g.monthly > 0 ? ' · erwartet ' + fmt(sel.g.monthly) + '/Monat' : ''}</div></div>
+                    {sel.g && <button onClick={() => { setGrpFilter(sel.g.id); setGrpPop(false); }} style={{ ...sm, background: C.act, color: C.actTxt, border: 'none' }}>Nur diese in der Liste zeigen</button>}
+                    {sel.sg && <><button onClick={async () => { await acceptSug(sel.sg); setGrpSel(null); }} style={{ ...sm, background: C.act, color: C.actTxt, border: 'none' }}>Übernehmen</button><button onClick={() => { setGrpDismiss(p => ({ ...p, [sel.sg.sid]: true })); setGrpSel(null); }} style={sm}>Verwerfen</button></>}
+                  </div>
+                  {sel.g && sel.g.note && <div style={{ fontSize: 12.5, color: C.txt, background: C.surf3, borderRadius: 8, padding: '6px 9px', marginTop: 8, whiteSpace: 'pre-wrap' }}>📝 {sel.g.note}</div>}
+                  {sel.g && (sel.g.docs || []).length > 0 && <div style={{ fontSize: 12.5, color: C.sub, marginTop: 6 }}>📎 {sel.g.docs.map(d => d.name).join(' · ')}</div>}
+                  <div style={{ marginTop: 10 }}>{sel.rows.length ? sel.rows.slice().sort((a, b) => String(b.r.datum).localeCompare(String(a.r.datum))).map(x => rowLine(x, sel.g ? <button onClick={() => setRowGroup(p => ({ ...p, [x.k + x.r.idx]: 'none' }))} title="Aus der Gruppe herausnehmen" style={{ ...sm, padding: '2px 9px', color: C.red }}>herausnehmen</button> : null)) : <div style={{ color: C.mut, fontSize: 13 }}>Keine Buchungen in der aktuellen Liste.</div>}</div>
+                  {sel.g && <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Weitere Buchungen zur Gruppe hinzufügen</div>
+                    <input value={addQ} onChange={e => setAddQ(e.target.value)} placeholder="Buchung suchen (Name, Verwendungszweck) …" style={{ ...ctlS, width: '100%', boxSizing: 'border-box', marginBottom: 6 }} />
+                    {cands.map(x => rowLine(x, <button onClick={() => setRowGroup(p => ({ ...p, [x.k + x.r.idx]: sel.g.id }))} title="Zur Gruppe hinzufügen" style={{ ...sm, padding: '2px 9px' }}>+ hinzufügen</button>))}
+                  </div>}
+                </>)}
+              </div>
+            </div>
+          </div>
+        </div>); })()}
       {grpDlg && (
         <div onClick={() => !grpDlg.busy && setGrpDlg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 175, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: C.surf, border: '1px solid ' + C.bdr, borderRadius: 18, padding: '20px 22px', maxWidth: 480, width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,0.3)' }}>
